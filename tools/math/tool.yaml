@@ -1,0 +1,27 @@
+name: math
+description: |
+  Mathematical computation tool.
+  
+  Available functions:
+  
+  - `math.calculate(expression: string): number`
+    Evaluate a mathematical expression.
+    Example: `console.log(math.calculate("2 + 2 * 3"))`
+  
+  - `math.factorial(n: number): number`
+    Calculate the factorial of a number.
+    Example: `console.log(math.factorial(5))`  // Output: 120
+  
+  - `math.isPrime(n: number): boolean`
+    Check if a number is prime.
+    Example: `console.log(math.isPrime(17))`  // Output: true
+  
+  - `math.fibonacci(n: number): number[]`
+    Generate Fibonacci sequence up to n terms.
+    Example: `console.log(math.fibonacci(10))`
+  
+  - `math.statistics(numbers: number[]): Stats`
+    Calculate statistics for an array of numbers.
+    Returns { mean, median, min, max, sum, count }
+
+module: index.ts

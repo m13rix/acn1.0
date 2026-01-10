@@ -1,0 +1,21 @@
+name: search
+description: |
+  Web search and research via Exa API.  
+
+  search.answer(query: string): { answer, citations[] }
+  - Quick factual answer with sources
+
+  search.search(query, options?): SearchResult[]
+  - options: { numResults?, type?, category?, content? }
+  - type: 'auto' | 'keyword' | 'neural'
+  - category: 'company' | 'research paper' | 'news' | 'pdf' | 'github' | 'tweet' | 'personal site' | 'people' | 'financial report'
+  - content: 'none' | 'snippet' | 'summary' | 'full' (default: 'snippet')
+
+  search.getContent(urls, options?): SearchResult[]
+  - options: { content? } - same as above, default: 'full'
+
+  search.research(topic, options?): { output, status, costDollars? }
+  - Deep research with exa-research-fast model
+  - options: { stream? } - streams progress (default: true)
+
+module: index.ts

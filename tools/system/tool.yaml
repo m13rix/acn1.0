@@ -1,0 +1,16 @@
+name: system
+description: |
+  Built-in system tool for knowledge base management.
+  Automatically available to all agents with a skillsTable configured.
+  
+  Available functions:
+  
+  - `system.add(content: string): Promise<{ success: boolean; id: string }>`
+    Add a new entry to the agent's knowledge base.
+    Example: `const result = await system.add("User prefers dark mode");`
+  
+  - `system.search(query: string): Promise<{ content: string; score: number } | null>`
+    Search the knowledge base. Always returns the top result.
+    Example: `const result = await system.search("user preferences");`
+
+module: index.ts

@@ -1,0 +1,18 @@
+name: test-agent
+description: A test agent for development and testing the framework
+
+model: deepseek/deepseek-v3.2
+provider: openrouter
+temperature: 1
+maxTokens: 4096
+
+systemPrompt: system.md
+
+tools:
+  - search
+
+loop: accumulator
+syntax: xml-tags
+
+# Skills table for knowledge base (LanceDB table name)
+skillsTable: test

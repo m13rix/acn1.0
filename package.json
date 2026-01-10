@@ -1,0 +1,52 @@
+{
+   "name": "acn",
+  "version": "1.0.0",
+  "description": "High-performance agentic AI framework",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "acn": "./dist/cli/chat.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/cli/chat.ts",
+    "start": "tsx src/cli/chat.ts --stream",
+    "typecheck": "tsc --noEmit",
+    "skills-viewer": "tsx src/skills-viewer/server/index.ts",
+    "skills-test": "tsx src/skills_system/test/server.ts"
+  },
+  "keywords": [
+    "ai",
+    "agents",
+    "llm",
+    "framework",
+    "agentic"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^20.11.0",
+    "@types/uuid": "^10.0.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.3"
+  },
+  "dependencies": {
+    "@google/genai": "^0.6.0",
+    "@lancedb/lancedb": "^0.23.0",
+    "@openrouter/sdk": "^0.3.11",
+    "chalk": "^5.3.0",
+    "compute-cosine-similarity": "^1.1.0",
+    "dotenv": "^16.4.5",
+    "exa-js": "^2.0.12",
+    "express": "^5.2.1",
+    "open": "^11.0.0",
+    "pptxgenjs": "^4.0.1",
+    "uuid": "^11.1.0",
+    "yaml": "^2.3.4"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
