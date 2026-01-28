@@ -1,0 +1,21 @@
+name: skills
+description: |
+  Built-in skills tool for knowledge base management using example-based semantic matching.
+  Automatically available to all agents with a skillsTable configured.
+  
+  Available functions:
+  
+  - `skills.add(content: string, examples: string[], scoreThreshold?: number): Promise<{ success: boolean; id: string }>`
+    Add a new entry to the agent's knowledge base. Requires examples that describe when this entry should be retrieved.
+    Examples should be queries or descriptions of user requests when this entry is relevant.
+    Example: `const result = await skills.add("Always be polite", ["Hello", "User greets me"], 0.8);`
+  
+  - `skills.search(query: string): Promise<{ content: string; score: number } | null>`
+    Search the knowledge base using direct content comparison. Always returns the top result.
+    Example: `const result = await skills.search("user preferences");`
+  
+  - `skills.viewFiles(filePaths: string[]): Promise<{ success: boolean; filesRead: number; errors?: string[] }>`
+    Read files from the sandbox directory and add them to context as file messages. Files are read as base64 and added to the conversation context. Supports images, PDFs, videos, and other file types that the model supports.
+    Example: `const result = await skills.viewFiles(["./document.pdf", "./image.jpg"]);`
+
+module: index.ts

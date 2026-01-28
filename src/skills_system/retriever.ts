@@ -1,24 +1,11 @@
 /**
  * Skill Retriever
  * 
- * The main retrieval algorithm that scores skill entries based on
- * weighted keyword similarity.
+ * Simple example-based semantic retrieval that compares user queries
+ * against example queries for each skill entry.
  */
 
-import { extractKeywords, ExtractionResult, ExtractedKeyword } from './extractor.js';
-import { computeWeights, ScoringParams, DEFAULT_PARAMS } from './scorer.js';
 import { cosineSimilarity, embed } from './embeddings.js';
-
-/**
- * A message in the conversation history
- */
-export interface MessageHistory {
-  id: string;
-  query: string;
-  queryVector: number[];
-  extraction: ExtractionResult;
-  timestamp: number;
-}
 
 /**
  * A skill entry from the database
@@ -26,219 +13,165 @@ export interface MessageHistory {
 export interface SkillEntry {
   id: string;
   content: string;
-  vector: number[];
+  examples: string[];  // Required array of example queries
+  exampleVectors: number[][];  // Pre-embedded vectors for each example
+  scoreThreshold?: number;  // Optional similarity threshold (default: 0.8)
+  updatedAt: number;
 }
 
 /**
- * Detailed scoring breakdown for a single keyword
+ * Detailed score for a single example comparison
  */
-export interface KeywordMatch {
-  keyword: string;
-  keywordRank: number;
-  keywordScore: number;     // Keyword's importance to query
-  weight: number;           // Weight from decay curve
-  similarity: number;       // Cosine similarity to entry
-  weightedScore: number;    // weight * similarity
+export interface ExampleScore {
+  example: string;
+  exampleIndex: number;
+  similarity: number;  // Cosine similarity (0-1)
 }
 
 /**
- * Full scoring result for a skill entry
+ * Scored entry result with detailed scoring information
  */
 export interface ScoredEntry {
   entry: SkillEntry;
-  totalScore: number;
-  normalizedScore: number;  // 0-1 range
-  matches: KeywordMatch[];
-  querySimilarity: number;  // Direct similarity between query and entry
-  querySimilarityScore: number;  // Weighted query similarity contribution
-  keywordScore: number;  // Score from keyword-based matching
+  score: number;  // Max similarity score (0-1) across all examples
+  threshold: number;  // Threshold used for this entry
+  matched: boolean;  // Whether this entry met the threshold
+  bestExampleIndex: number;  // Index of the example with highest similarity
+  bestExample: string;  // The example text that matched best
+  exampleScores: ExampleScore[];  // All example scores for debugging
 }
 
 /**
- * Full retrieval result with debug info
+ * Retrieval result
  */
 export interface RetrievalResult {
   query: string;
-  extraction: ExtractionResult;
-  weights: number[];
-  params: ScoringParams;
+  queryVector: number[];
   entries: ScoredEntry[];
   timing: {
-    extractionMs: number;
+    embeddingMs: number;
     scoringMs: number;
     totalMs: number;
   };
 }
 
 /**
- * Score a single entry against extracted keywords, full query, and message history
+ * Default score threshold
  */
-function scoreEntry(
-  entry: SkillEntry,
-  keywords: ExtractedKeyword[],
-  weights: number[],
-  queryVector: number[],
-  querySimilarityWeight: number,
-  messageHistory: MessageHistory[],
-  historyDecay: number
-): ScoredEntry {
-  const matches: KeywordMatch[] = [];
-  let keywordScore = 0;
-  let maxPossibleKeywordScore = 0;
-  
-  // Score based on keyword similarities (current query)
-  for (let i = 0; i < keywords.length; i++) {
-    const kw = keywords[i];
-    const weight = weights[i] || 0;
-    
-    // Compute similarity between entry and keyword
-    const similarity = cosineSimilarity(entry.vector, kw.vector);
-    const weightedScore = weight * similarity;
-    
-    matches.push({
-      keyword: kw.word,
-      keywordRank: kw.rank,
-      keywordScore: kw.score,
-      weight,
-      similarity,
-      weightedScore,
-    });
-    
-    keywordScore += weightedScore;
-    maxPossibleKeywordScore += weight; // Max similarity is 1.0
-  }
-  
-  // Add scores from message history with decay
-  let historyKeywordScore = 0;
-  let historyQuerySimilarityScore = 0;
-  let maxHistoryScore = 0;
-  
-  for (let i = 0; i < messageHistory.length; i++) {
-    const message = messageHistory[i];
-    const decayFactor = Math.pow(historyDecay, i + 1); // Previous message = decay^1, one before = decay^2, etc.
-    
-    // Score keywords from history message
-    const historyWeights = computeWeights(message.extraction.keywords.length, { baseWeight: 1.0 });
-    for (let j = 0; j < message.extraction.keywords.length; j++) {
-      const kw = message.extraction.keywords[j];
-      const weight = historyWeights[j] || 0;
-      const similarity = cosineSimilarity(entry.vector, kw.vector);
-      const weightedScore = weight * similarity * decayFactor;
-      historyKeywordScore += weightedScore;
-      maxHistoryScore += weight * decayFactor;
-    }
-    
-    // Score query similarity from history message
-    const historyQuerySimilarity = cosineSimilarity(message.queryVector, entry.vector);
-    const weightedHistoryQuerySimilarity = querySimilarityWeight * historyQuerySimilarity * decayFactor;
-    historyQuerySimilarityScore += weightedHistoryQuerySimilarity;
-    maxHistoryScore += querySimilarityWeight * decayFactor;
-  }
-  
-  // Compute direct query-to-entry similarity (current query)
-  const querySimilarity = cosineSimilarity(queryVector, entry.vector);
-  const querySimilarityScore = querySimilarityWeight * querySimilarity;
-  
-  // Combine all scores: current keyword score + current query similarity + history scores
-  const totalScore = keywordScore + querySimilarityScore + historyKeywordScore + historyQuerySimilarityScore;
-  
-  // Normalize to 0-1 range
-  // Max possible score = max keyword score + query similarity weight + history scores
-  const maxPossibleScore = maxPossibleKeywordScore + querySimilarityWeight + maxHistoryScore;
-  const normalizedScore = maxPossibleScore > 0 
-    ? totalScore / maxPossibleScore 
-    : 0;
-  
-  return {
-    entry,
-    totalScore,
-    normalizedScore,
-    matches,
-    querySimilarity,
-    querySimilarityScore,
-    keywordScore,
-  };
-}
+export const DEFAULT_SCORE_THRESHOLD = 0.8;
 
 /**
- * Retrieve and score skill entries
+ * Retrieve skill entries using example-based semantic matching
+ * Returns ALL entries with detailed scoring (including those below threshold)
  * 
  * @param query - User's query
  * @param entries - Skill entries to search
- * @param params - Scoring parameters
- * @param limit - Max entries to return (0 = all)
- * @param messageHistory - Previous messages in the conversation (optional)
- * @param historyDecay - Decay factor for message history (default: 0.7)
+ * @param minThreshold - Minimum similarity threshold (default: 0.8)
+ * @param includeAll - If true, include all entries even below threshold (default: true for debugging)
+ * @returns Retrieval result with all entries and detailed scoring
  */
 export async function retrieve(
   query: string,
   entries: SkillEntry[],
-  params: Partial<ScoringParams> = {},
-  limit: number = 0,
-  messageHistory: MessageHistory[] = [],
-  historyDecay: number = 0.7
+  minThreshold: number = DEFAULT_SCORE_THRESHOLD,
+  includeAll: boolean = true
 ): Promise<RetrievalResult> {
   const startTime = performance.now();
   
-  // Extract keywords and embed query
-  const extractionStart = performance.now();
-  const [extraction, queryVector] = await Promise.all([
-    extractKeywords(query),
-    embed(query)
-  ]);
-  const extractionMs = performance.now() - extractionStart;
+  // Embed user query once
+  const embeddingStart = performance.now();
+  const queryVector = await embed(query);
+  const embeddingMs = performance.now() - embeddingStart;
   
-  // Compute weights
-  const fullParams = { ...DEFAULT_PARAMS, ...params };
-  const weights = computeWeights(extraction.keywords.length, fullParams);
-  
-  // Score all entries (including message history)
+  // Score all entries against query
   const scoringStart = performance.now();
-  const scoredEntries = entries.map(entry => 
-    scoreEntry(
-      entry, 
-      extraction.keywords, 
-      weights, 
-      queryVector, 
-      fullParams.querySimilarityWeight,
-      messageHistory,
-      historyDecay
-    )
-  );
+  const scoredEntries: ScoredEntry[] = [];
   
-  // Sort by score descending
-  scoredEntries.sort((a, b) => b.totalScore - a.totalScore);
+  for (const entry of entries) {
+    // Compare query against all examples for this entry
+    const exampleScores: ExampleScore[] = [];
+    let maxSimilarity = 0;
+    let bestExampleIndex = -1;
+    let bestExample = '';
+    
+    for (let i = 0; i < entry.exampleVectors.length; i++) {
+      const exampleVector = entry.exampleVectors[i];
+      const similarity = cosineSimilarity(queryVector, exampleVector);
+      
+      exampleScores.push({
+        example: entry.examples[i],
+        exampleIndex: i,
+        similarity
+      });
+      
+      if (similarity > maxSimilarity) {
+        maxSimilarity = similarity;
+        bestExampleIndex = i;
+        bestExample = entry.examples[i];
+      }
+    }
+    
+    // Sort example scores by similarity descending
+    exampleScores.sort((a, b) => b.similarity - a.similarity);
+    
+    // Use entry's custom threshold if provided, otherwise use default
+    const threshold = entry.scoreThreshold ?? minThreshold;
+    const matched = maxSimilarity >= threshold;
+    
+    // Include entry if matched OR if includeAll is true (for debugging)
+    if (matched || includeAll) {
+      scoredEntries.push({
+        entry,
+        score: maxSimilarity,
+        threshold,
+        matched,
+        bestExampleIndex,
+        bestExample,
+        exampleScores
+      });
+    }
+  }
   
-  // Apply limit
-  const limitedEntries = limit > 0 
-    ? scoredEntries.slice(0, limit) 
-    : scoredEntries;
+  // Sort by score descending (matched entries first, then by score)
+  scoredEntries.sort((a, b) => {
+    if (a.matched !== b.matched) {
+      return a.matched ? -1 : 1;  // Matched entries first
+    }
+    return b.score - a.score;
+  });
   
   const scoringMs = performance.now() - scoringStart;
   const totalMs = performance.now() - startTime;
   
   return {
     query,
-    extraction,
-    weights,
-    params: fullParams,
-    entries: limitedEntries,
+    queryVector,
+    entries: scoredEntries,
     timing: {
-      extractionMs,
+      embeddingMs,
       scoringMs,
-      totalMs,
-    },
+      totalMs
+    }
   };
 }
 
 /**
  * Quick similarity check between query and single entry
- * Uses direct cosine similarity without keyword extraction
+ * Uses the max similarity across all examples
  */
 export async function quickMatch(
   query: string,
   entry: SkillEntry
 ): Promise<number> {
   const queryVector = await embed(query);
-  return cosineSimilarity(queryVector, entry.vector);
+  let maxSimilarity = 0;
+  
+  for (const exampleVector of entry.exampleVectors) {
+    const similarity = cosineSimilarity(queryVector, exampleVector);
+    if (similarity > maxSimilarity) {
+      maxSimilarity = similarity;
+    }
+  }
+  
+  return maxSimilarity;
 }

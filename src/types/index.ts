@@ -6,11 +6,12 @@
 // Message Types
 // ============================================================================
 
-export type MessageRole = 'system' | 'user' | 'assistant';
+export type MessageRole = 'system' | 'user' | 'assistant' | 'file';
 
 export interface Message {
   role: MessageRole;
   content: string;
+  filename?: string; // Optional filename for file role messages
 }
 
 // ============================================================================
@@ -50,7 +51,7 @@ export interface ProviderConfig {
 /**
  * Streaming event types following industry standards (OpenRouter/OpenAI patterns)
  */
-export type StreamEventType = 
+export type StreamEventType =
   | 'reasoning.delta'
   | 'reasoning.done'
   | 'text.delta'
@@ -76,6 +77,7 @@ export interface ProviderStreamChunk {
 
 export interface ProviderResponse {
   content: string;
+  reasoning?: string;
   finishReason: 'stop' | 'length' | 'content_filter' | 'stop_sequence' | 'other';
   usage?: {
     promptTokens: number;
@@ -118,6 +120,7 @@ export interface AgentConfig {
   loop: string;          // loop type name
   syntax: string;        // syntax type name
   skillsTable?: string;  // Optional: LanceDB table name for this agent's skills
+  sandbox?: string;      // Sandbox type: 'local' (default) or 'browser'
 }
 
 export interface LoadedAgent {
@@ -148,25 +151,26 @@ export interface LoadedTool {
 
 export interface SyntaxType {
   name: string;
-  
+
   // Extraction methods (handle incomplete/cut-off tags)
   getThinking(text: string): string | null;
   getAction(text: string): string | null;
   getObservation(text: string): string | null;
   getCli(text: string): string | null;
   getSkills(text: string): string | null;
-  
+
   // Check if tag exists (even incomplete)
   hasAction(text: string): boolean;
   hasCli(text: string): boolean;
-  
+
   // Wrapping methods
   wrapThinking(content: string): string;
   wrapAction(content: string): string;
   wrapObservation(content: string): string;
   wrapCli(content: string): string;
   wrapSkills(content: string): string;
-  
+  wrapSkillsMultiple?(contents: string[]): string;  // Optional: wrap multiple skill entries
+
   // Documentation for system prompt
   getDescription(): string;
 }
@@ -190,19 +194,28 @@ export interface LoopType {
    * on the base class.
    */
   stopSequences?: string[];
-  
+
   // Process model output and determine if there's an action to execute
   processResponse(response: string, syntax: SyntaxType): ProcessedResponse;
-  
+
   // Build continuation messages after action execution
   buildContinuationMessages(
     currentAssistantContent: string,
     observation: string,
-    syntax: SyntaxType
+    syntax: SyntaxType,
+    filename?: string, // Filename of the executed file (for code executions only)
+    originalUserRequest?: string
   ): { updatedAssistantContent: string; continuationUserMessage: string };
-  
+
   // Documentation for system prompt
   getDescription(): string;
+
+  /**
+   * Whether to commit assistant messages to history after each action execution.
+   * If true, the assistant message is committed and observation is added as a user message.
+   * If false, messages accumulate in currentAssistantContent until completion (default).
+   */
+  shouldCommitMessagesAfterAction?(): boolean;
 }
 
 // ============================================================================
@@ -218,4 +231,5 @@ export interface ExecutionResult {
   success: boolean;
   output: string;
   error?: string;
+  filename?: string; // Filename of the executed file (for code executions only)
 }

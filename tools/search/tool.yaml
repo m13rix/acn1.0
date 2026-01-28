@@ -1,6 +1,6 @@
 name: search
 description: |
-  Web search and research via Exa API.  
+  Web search and research via Exa API, plus Google Image Search.  
 
   search.answer(query: string): { answer, citations[] }
   - Quick factual answer with sources
@@ -13,6 +13,11 @@ description: |
 
   search.getContent(urls, options?): SearchResult[]
   - options: { content? } - same as above, default: 'full'
+
+  search.imageSearch(query, options?): ImageSearchResult[] - the only way to SEARCH FOR IMAGES
+  - Search for images using Google Image Search
+  - options: { limit? } - maximum number of images to return (default: 5)
+  - Returns: [{ id, title, url, originalUrl, height, width }, ...]
 
   search.research(topic, options?): { output, status, costDollars? }
   - Deep research with exa-research-fast model

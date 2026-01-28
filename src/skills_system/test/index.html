@@ -364,79 +364,62 @@
         <!-- Query Input -->
         <div class="panel">
           <h2>Query</h2>
+          
+          <div style="margin-bottom: 16px;">
+            <label style="display: block; font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 6px; font-weight: 600;">
+              Skills Table:
+            </label>
+            <select class="input" id="tableSelect" style="width: 100%;">
+              <option value="test">Loading tables...</option>
+            </select>
+            <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 4px;">
+              Select which skills table to test against
+            </div>
+          </div>
+          
           <textarea class="textarea" id="queryInput" placeholder="Enter your query...">How do I create a PowerPoint presentation?</textarea>
+          
+          <div style="margin-top: 16px;">
+            <label style="display: block; font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 6px;">
+              Score Threshold (0-1):
+            </label>
+            <input type="number" class="input" id="thresholdInput" 
+                   min="0" max="1" step="0.05" value="0.8"
+                   placeholder="0.8" style="width: 100%;">
+            <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 4px;">
+              Entries with similarity ≥ threshold will be marked as MATCHED
+            </div>
+          </div>
+          
           <div class="flex gap-2 mt-4">
             <button class="btn" id="runBtn">Run Retrieval</button>
-            <button class="btn btn-secondary" id="extractBtn">Extract Only</button>
+            <button class="btn btn-secondary" id="extractBtn" disabled>Extract Only (Deprecated)</button>
           </div>
         </div>
         
-        <!-- Parameters -->
+        <!-- Info Panel -->
         <div class="panel">
-          <h2>Decay Curve Parameters</h2>
-          
-          <div class="slider-group">
-            <div class="slider-label">
-              <span>Decay Power</span>
-              <span id="decayPowerValue">2.5</span>
-            </div>
-            <input type="range" id="decayPower" min="0.5" max="5" step="0.1" value="2.5">
-          </div>
-          
-          <div class="slider-group">
-            <div class="slider-label">
-              <span>Top Percentage (full weight)</span>
-              <span id="topPercentageValue">8%</span>
-            </div>
-            <input type="range" id="topPercentage" min="0" max="50" step="1" value="8">
-          </div>
-          
-          <div class="slider-group">
-            <div class="slider-label">
-              <span>Base Weight</span>
-              <span id="baseWeightValue">1.0</span>
-            </div>
-            <input type="range" id="baseWeight" min="0.1" max="2" step="0.1" value="1">
-          </div>
-          
-          <div class="slider-group">
-            <div class="slider-label">
-              <span>Min Weight</span>
-              <span id="minWeightValue">0</span>
-            </div>
-            <input type="range" id="minWeight" min="0" max="0.5" step="0.01" value="0">
-          </div>
-          
-          <div class="slider-group">
-            <div class="slider-label">
-              <span>Query Similarity Weight</span>
-              <span id="querySimilarityWeightValue">0.5</span>
-            </div>
-            <input type="range" id="querySimilarityWeight" min="0" max="5" step="0.1" value="0.5">
-          </div>
-          
-          <div class="slider-group">
-            <div class="slider-label">
-              <span>History Decay</span>
-              <span id="historyDecayValue">0.05</span>
-            </div>
-            <input type="range" id="historyDecay" min="0" max="1" step="0.05" value="0.05">
-          </div>
-          
-          <div class="curve-container">
-            <h3>Weight Distribution (10 keywords)</h3>
-            <canvas id="curveCanvas"></canvas>
+          <h2>System Info</h2>
+          <div style="font-size: 0.875rem; color: var(--text-secondary); line-height: 1.6;">
+            <p style="margin-bottom: 12px;">
+              <strong>Example-Based Matching:</strong> The system compares your query against all examples for each entry using semantic similarity.
+            </p>
+            <p style="margin-bottom: 12px;">
+              <strong>Threshold:</strong> Entries where ANY example has similarity ≥ threshold are marked as MATCHED.
+            </p>
+            <p style="margin-bottom: 12px;">
+              <strong>All Results Shown:</strong> Both matched and below-threshold entries are displayed for debugging.
+            </p>
           </div>
         </div>
         
-        <!-- Message History -->
-        <div class="panel">
+        <!-- Message History (Deprecated) -->
+        <div class="panel" style="opacity: 0.5;">
           <div class="flex justify-between items-center mb-2">
-            <h2 style="margin:0">Message History</h2>
-            <button class="btn btn-sm btn-secondary" id="clearHistoryBtn">Clear All</button>
+            <h2 style="margin:0">Message History (Deprecated)</h2>
           </div>
           <div id="messageHistoryContainer">
-            <div class="empty">No messages yet. Run a query to start history.</div>
+            <div class="empty">Message history is deprecated in the example-based system.</div>
           </div>
         </div>
         
@@ -486,11 +469,13 @@
     const resultsContainer = document.getElementById('resultsContainer');
     const timingContainer = document.getElementById('timingContainer');
     const messageHistoryContainer = document.getElementById('messageHistoryContainer');
+    const tableSelect = document.getElementById('tableSelect');
     
     // Session ID for message history (stored on server)
     const sessionId = 'test-session-' + Date.now();
     
     // Sliders
+    // Deprecated sliders (kept for backward compatibility but not used)
     const sliders = {
       decayPower: document.getElementById('decayPower'),
       topPercentage: document.getElementById('topPercentage'),
@@ -501,7 +486,7 @@
     };
     
     const canvas = document.getElementById('curveCanvas');
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas ? canvas.getContext('2d') : null;
     
     // Get current params
     function getParams() {
@@ -514,46 +499,33 @@
       };
     }
     
-    // Update slider displays
+    // Update slider displays (DEPRECATED - kept for backward compatibility)
     function updateSliderDisplays() {
-      document.getElementById('decayPowerValue').textContent = sliders.decayPower.value;
-      document.getElementById('topPercentageValue').textContent = sliders.topPercentage.value + '%';
-      document.getElementById('baseWeightValue').textContent = sliders.baseWeight.value;
-      document.getElementById('minWeightValue').textContent = sliders.minWeight.value;
-      document.getElementById('querySimilarityWeightValue').textContent = sliders.querySimilarityWeight.value;
-      document.getElementById('historyDecayValue').textContent = sliders.historyDecay.value;
+      // Only update if elements exist (deprecated panels may not exist)
+      if (document.getElementById('decayPowerValue') && sliders.decayPower) {
+        document.getElementById('decayPowerValue').textContent = sliders.decayPower.value;
+      }
+      if (document.getElementById('topPercentageValue') && sliders.topPercentage) {
+        document.getElementById('topPercentageValue').textContent = sliders.topPercentage.value + '%';
+      }
+      if (document.getElementById('baseWeightValue') && sliders.baseWeight) {
+        document.getElementById('baseWeightValue').textContent = sliders.baseWeight.value;
+      }
+      if (document.getElementById('minWeightValue') && sliders.minWeight) {
+        document.getElementById('minWeightValue').textContent = sliders.minWeight.value;
+      }
+      if (document.getElementById('querySimilarityWeightValue') && sliders.querySimilarityWeight) {
+        document.getElementById('querySimilarityWeightValue').textContent = sliders.querySimilarityWeight.value;
+      }
+      if (document.getElementById('historyDecayValue') && sliders.historyDecay) {
+        document.getElementById('historyDecayValue').textContent = sliders.historyDecay.value;
+      }
     }
     
     // Load and render message history from server
     async function loadMessageHistory() {
-      try {
-        const response = await fetch(`/api/history/${sessionId}`);
-        const data = await response.json();
-        const messages = data.messages || [];
-        
-        if (messages.length === 0) {
-          messageHistoryContainer.innerHTML = '<div class="empty">No messages yet. Run a query to start history.</div>';
-          return;
-        }
-        
-        messageHistoryContainer.innerHTML = messages.map((msg) => {
-          const time = new Date(msg.timestamp).toLocaleTimeString();
-          return `
-            <div class="message-item">
-              <div class="message-content">
-                <strong>${msg.query}</strong>
-                <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 4px;">${time} • ${msg.keywordCount} keywords</div>
-              </div>
-              <div class="message-actions">
-                <button class="btn btn-sm btn-icon" onclick="deleteMessage('${msg.id}')">Delete</button>
-              </div>
-            </div>
-          `;
-        }).join('');
-      } catch (error) {
-        console.error('Error loading message history:', error);
-        messageHistoryContainer.innerHTML = '<div class="empty">Error loading history</div>';
-      }
+      // Message history is deprecated in the example-based system
+      messageHistoryContainer.innerHTML = '<div class="empty">Message history is deprecated. The example-based system no longer uses message history.</div>';
     }
     
     // Delete a message from history
@@ -570,36 +542,32 @@
       }
     };
     
-    // Clear all message history
-    clearHistoryBtn.addEventListener('click', async () => {
-      try {
-        const response = await fetch(`/api/history/${sessionId}`, {
-          method: 'DELETE',
-        });
-        if (response.ok) {
-          await loadMessageHistory();
-        }
-      } catch (error) {
-        console.error('Error clearing history:', error);
-      }
-    });
-    
-    // Draw curve
-    async function drawCurve() {
-      const params = getParams();
-      const response = await fetch('/api/weights', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ count: 10, params }),
+    // Clear all message history (deprecated)
+    if (clearHistoryBtn) {
+      clearHistoryBtn.addEventListener('click', async () => {
+        await loadMessageHistory(); // Just reload (history is deprecated)
       });
+    }
+    
+    // Draw curve (DEPRECATED - kept for backward compatibility)
+    async function drawCurve() {
+      if (!canvas || !ctx) return; // Skip if canvas doesn't exist
       
-      const { weights } = await response.json();
-      
-      // Set canvas size
-      const rect = canvas.getBoundingClientRect();
-      canvas.width = rect.width * window.devicePixelRatio;
-      canvas.height = rect.height * window.devicePixelRatio;
-      ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+      try {
+        const params = getParams();
+        const response = await fetch('/api/weights', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ count: 10, params }),
+        });
+        
+        const { weights } = await response.json();
+        
+        // Set canvas size
+        const rect = canvas.getBoundingClientRect();
+        canvas.width = rect.width * window.devicePixelRatio;
+        canvas.height = rect.height * window.devicePixelRatio;
+        ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
       
       const w = rect.width;
       const h = rect.height;
@@ -661,22 +629,78 @@
       ctx.textAlign = 'right';
       ctx.fillText('1.0', padding - 5, padding + 3);
       ctx.fillText('0.0', padding - 5, h - padding + 3);
+      } catch (error) {
+        // API endpoint is deprecated, skip drawing
+        console.log('Weight curve drawing is deprecated');
+      }
     }
     
-    // Load entries
+    // Get currently selected table
+    function getSelectedTable() {
+      return tableSelect ? tableSelect.value || 'test' : 'test';
+    }
+    
+    // Load tables and populate dropdown
+    async function loadTables() {
+      try {
+        const response = await fetch('/api/tables');
+        const { tables } = await response.json();
+        
+        if (!tableSelect) return;
+        
+        // Clear existing options
+        tableSelect.innerHTML = '';
+        
+        if (tables.length === 0) {
+          tableSelect.innerHTML = '<option value="test">No tables found</option>';
+          // Ensure test table exists
+          await fetch('/api/entries?table=test');
+          await loadTables(); // Reload after creating
+          return;
+        }
+        
+        // Populate dropdown
+        tables.forEach(table => {
+          const option = document.createElement('option');
+          option.value = table.name;
+          option.textContent = `${table.name} (${table.count} entries)`;
+          tableSelect.appendChild(option);
+        });
+        
+        // Select 'test' table by default if it exists, otherwise select first
+        const testTable = tables.find(t => t.name === 'test');
+        tableSelect.value = testTable ? 'test' : tables[0]?.name || 'test';
+        
+        // Load entries for selected table
+        loadEntries();
+      } catch (error) {
+        console.error('Error loading tables:', error);
+        if (tableSelect) {
+          tableSelect.innerHTML = '<option value="test">Error loading tables</option>';
+        }
+      }
+    }
+    
+    // Load entries from selected table
     async function loadEntries() {
       try {
-        const response = await fetch('/api/entries');
+        const tableName = getSelectedTable();
+        const response = await fetch(`/api/entries?table=${encodeURIComponent(tableName)}`);
         const { entries } = await response.json();
         
         if (entries.length === 0) {
-          entriesList.innerHTML = '<div class="empty">No entries. Add some!</div>';
+          entriesList.innerHTML = `<div class="empty">No entries in table "${tableName}". Add some!</div>`;
           return;
         }
         
         entriesList.innerHTML = entries.map(e => `
           <div class="entry-item">
             <div class="entry-content" title="${e.content.replace(/"/g, '&quot;')}">${e.content}</div>
+            ${e.examples && e.examples.length > 0 ? `
+              <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 4px;">
+                Examples: ${e.examples.slice(0, 2).join(', ')}${e.examples.length > 2 ? '...' : ''}
+              </div>
+            ` : ''}
             <button class="btn btn-sm btn-danger" onclick="deleteEntry('${e.id}')">×</button>
           </div>
         `).join('');
@@ -690,13 +714,35 @@
       const content = prompt('Enter skill content:');
       if (!content) return;
       
+      const examplesText = prompt('Enter examples (one per line, when this entry should be retrieved):\n\nExample:\nHello, how are you?\nUser greets me\nConversational interaction');
+      if (!examplesText) return;
+      
+      const examples = examplesText.split('\n')
+        .map(line => line.trim())
+        .filter(line => line.length > 0);
+      
+      if (examples.length === 0) {
+        alert('At least one example is required');
+        return;
+      }
+      
+      const thresholdText = prompt('Score threshold (optional, default: 0.8, press Cancel for default):');
+      const scoreThreshold = thresholdText ? parseFloat(thresholdText) : undefined;
+      
+      if (scoreThreshold !== undefined && (isNaN(scoreThreshold) || scoreThreshold < 0 || scoreThreshold > 1)) {
+        alert('Score threshold must be between 0 and 1');
+        return;
+      }
+      
       try {
+        const tableName = getSelectedTable();
         await fetch('/api/entries', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ content }),
+          body: JSON.stringify({ content, examples, scoreThreshold, table: tableName }),
         });
         loadEntries();
+        loadTables(); // Reload tables to update count
       } catch (error) {
         alert('Error: ' + error.message);
       }
@@ -707,56 +753,24 @@
       if (!confirm('Delete this entry?')) return;
       
       try {
-        await fetch(`/api/entries/${id}`, { method: 'DELETE' });
+        const tableName = getSelectedTable();
+        await fetch(`/api/entries/${id}?table=${encodeURIComponent(tableName)}`, { method: 'DELETE' });
         loadEntries();
+        loadTables(); // Reload tables to update count
       } catch (error) {
         alert('Error: ' + error.message);
       }
     }
     window.deleteEntry = deleteEntry;
     
-    // Extract keywords
+    // Extract keywords (DEPRECATED - kept for backward compatibility)
     async function extractKeywords() {
-      const query = queryInput.value.trim();
-      if (!query) return;
-      
-      extractBtn.disabled = true;
-      keywordsContainer.innerHTML = '<div class="loading">Extracting...</div>';
-      
-      try {
-        const response = await fetch('/api/extract', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ query }),
-        });
-        
-        const { keywords } = await response.json();
-        renderKeywords(keywords);
-      } catch (error) {
-        keywordsContainer.innerHTML = `<div class="empty">Error: ${error.message}</div>`;
-      } finally {
-        extractBtn.disabled = false;
-      }
+      keywordsContainer.innerHTML = '<div class="empty">Keyword extraction is deprecated. The system now uses example-based matching.</div>';
     }
     
-    // Render keywords
+    // Render keywords (DEPRECATED)
     function renderKeywords(keywords) {
-      if (!keywords || keywords.length === 0) {
-        keywordsContainer.innerHTML = '<div class="empty">No keywords extracted</div>';
-        return;
-      }
-      
-      keywordsContainer.innerHTML = `
-        <div class="keyword-list">
-          ${keywords.map(k => `
-            <div class="keyword">
-              <span class="keyword-rank">#${(k.rank ?? 0) + 1}</span>
-              <span>${k.word || '?'}</span>
-              <span class="keyword-score">${(k.score ?? 0).toFixed(3)}</span>
-            </div>
-          `).join('')}
-        </div>
-      `;
+      keywordsContainer.innerHTML = '<div class="empty">Keyword extraction is deprecated. The system now uses example-based matching.</div>';
     }
     
     // Run retrieval
@@ -765,33 +779,38 @@
       if (!query) return;
       
       runBtn.disabled = true;
-      keywordsContainer.innerHTML = '<div class="loading">Processing...</div>';
+      keywordsContainer.innerHTML = '<div class="empty">Example-based system: comparing query against all examples</div>';
       resultsContainer.innerHTML = '<div class="loading">Processing...</div>';
       
       try {
-        const historyDecay = parseFloat(sliders.historyDecay.value);
+        // Get threshold from input or use default
+        const thresholdInput = document.getElementById('thresholdInput');
+        const minThreshold = thresholdInput ? parseFloat(thresholdInput.value) || 0.8 : 0.8;
+        
+        if (isNaN(minThreshold) || minThreshold < 0 || minThreshold > 1) {
+          alert('Threshold must be between 0 and 1');
+          return;
+        }
+        
+        const tableName = getSelectedTable();
+        
         const response = await fetch('/api/retrieve', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ 
-            query, 
-            params: getParams(),
-            sessionId: sessionId, // Send session ID instead of full history
-            historyDecay: historyDecay,
+            query,
+            minThreshold,
+            table: tableName
           }),
         });
         
         const result = await response.json();
         
-        // Reload message history from server (server saves it automatically)
-        await loadMessageHistory();
-        
-        renderKeywords(result.extraction.keywords);
         renderResults(result);
         
         timingContainer.style.display = 'flex';
         timingContainer.innerHTML = `
-          Extraction: <span>${(result.timing?.extractionMs ?? 0).toFixed(1)}ms</span>
+          Embedding: <span>${(result.timing?.embeddingMs ?? 0).toFixed(1)}ms</span>
           Scoring: <span>${(result.timing?.scoringMs ?? 0).toFixed(1)}ms</span>
           Total: <span>${(result.timing?.totalMs ?? 0).toFixed(1)}ms</span>
         `;
@@ -802,56 +821,180 @@
       }
     }
     
-    // Render results
+    // Render results with full debug information
     function renderResults(result) {
-      if (!result.entries || result.entries.length === 0) {
-        resultsContainer.innerHTML = '<div class="empty">No entries to score</div>';
+      if (!result || !result.entries) {
+        resultsContainer.innerHTML = '<div class="empty">No data returned</div>';
         return;
       }
       
-      resultsContainer.innerHTML = result.entries.map((e, i) => `
-        <div class="result-card">
-          <div class="result-header">
-            <span>#${i + 1}</span>
-            <span class="result-score">${((e.normalizedScore ?? 0) * 100).toFixed(1)}%</span>
-          </div>
-          <div class="result-content">${e.entry?.content || '(no content)'}</div>
-          <div class="result-matches">
-            <div class="match-row">
-              <div class="match-header">Keyword</div>
-              <div class="match-header">Weight</div>
-              <div class="match-header">Similarity</div>
-              <div class="match-header">Weighted</div>
-              <div class="match-header">Contrib %</div>
+      const totalEntries = result.totalEntries || 0;
+      const matchedEntries = result.matchedEntries || 0;
+      const minThreshold = result.minThreshold || 0.8;
+      const tableName = result.table || getSelectedTable();
+      
+      let html = `
+        <div style="margin-bottom: 20px; padding: 16px; background: var(--bg-elevated); border-radius: 8px; border: 1px solid var(--border);">
+          <div style="display: flex; gap: 24px; flex-wrap: wrap; font-size: 0.875rem;">
+            <div>
+              <span style="color: var(--text-muted);">Table:</span>
+              <span style="color: var(--accent); font-weight: 600; margin-left: 8px;">${escapeHtml(tableName)}</span>
             </div>
-            ${(e.matches || []).map(m => `
-              <div class="match-row">
-                <div class="match-value">${m.keyword || '?'}</div>
-                <div class="match-value">${(m.weight ?? 0).toFixed(3)}</div>
-                <div class="match-value">${(m.similarity ?? 0).toFixed(3)}</div>
-                <div class="match-value">${(m.weightedScore ?? 0).toFixed(3)}</div>
-                <div class="match-value">${(e.totalScore ?? 0) > 0 ? (((m.weightedScore ?? 0) / e.totalScore) * 100).toFixed(1) : 0}%</div>
+            <div>
+              <span style="color: var(--text-muted);">Total Entries:</span>
+              <span style="color: var(--text); font-weight: 600; margin-left: 8px;">${totalEntries}</span>
+            </div>
+            <div>
+              <span style="color: var(--text-muted);">Matched (≥${(minThreshold * 100).toFixed(0)}%):</span>
+              <span style="color: ${matchedEntries > 0 ? 'var(--success)' : 'var(--text-muted)'}; font-weight: 600; margin-left: 8px;">${matchedEntries}</span>
+            </div>
+            <div>
+              <span style="color: var(--text-muted);">Below Threshold:</span>
+              <span style="color: var(--text-muted); font-weight: 600; margin-left: 8px;">${totalEntries - matchedEntries}</span>
+            </div>
+            ${result.timing ? `
+              <div>
+                <span style="color: var(--text-muted);">Query Embedding:</span>
+                <span style="color: var(--text); font-weight: 600; margin-left: 8px;">${result.timing.embeddingMs?.toFixed(1)}ms</span>
               </div>
-            `).join('')}
+              <div>
+                <span style="color: var(--text-muted);">Scoring:</span>
+                <span style="color: var(--text); font-weight: 600; margin-left: 8px;">${result.timing.scoringMs?.toFixed(1)}ms</span>
+              </div>
+              <div>
+                <span style="color: var(--text-muted);">Total:</span>
+                <span style="color: var(--text); font-weight: 600; margin-left: 8px;">${result.timing.totalMs?.toFixed(1)}ms</span>
+              </div>
+            ` : ''}
           </div>
         </div>
-      `).join('');
+      `;
+      
+      if (result.entries.length === 0) {
+        html += '<div class="empty">No entries found in database</div>';
+        resultsContainer.innerHTML = html;
+        return;
+      }
+      
+      html += result.entries.map((e, i) => {
+        const isMatched = e.matched === true;
+        const borderColor = isMatched ? 'var(--success)' : 'var(--border)';
+        const bgColor = isMatched ? 'rgba(34, 197, 94, 0.05)' : 'var(--bg-elevated)';
+        const score = e.score || 0;
+        const threshold = e.threshold || minThreshold;
+        
+        return `
+          <div class="result-card" style="border: 2px solid ${borderColor}; background: ${bgColor}; border-radius: 8px; padding: 16px; margin-bottom: 16px;">
+            <div class="result-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--border);">
+              <div style="display: flex; align-items: center; gap: 12px;">
+                <span style="font-weight: 600; color: var(--text);">#${i + 1}</span>
+                ${isMatched 
+                  ? '<span style="background: var(--success); color: white; padding: 4px 10px; border-radius: 4px; font-size: 0.75rem; font-weight: 600;">✓ MATCHED</span>' 
+                  : '<span style="background: var(--text-muted); color: white; padding: 4px 10px; border-radius: 4px; font-size: 0.75rem; font-weight: 600;">✗ BELOW THRESHOLD</span>'}
+              </div>
+              <div style="display: flex; align-items: center; gap: 12px;">
+                <span class="result-score" style="font-family: var(--font-mono); font-weight: 600; font-size: 1.25rem; color: ${isMatched ? 'var(--success)' : 'var(--text-muted)'};">
+                  ${(score * 100).toFixed(2)}%
+                </span>
+                <span style="font-size: 0.75rem; color: var(--text-muted);">
+                  (threshold: ${(threshold * 100).toFixed(0)}%)
+                </span>
+              </div>
+            </div>
+            
+            <div style="margin-bottom: 16px; padding: 12px; background: var(--bg); border-radius: 6px; border: 1px solid var(--border);">
+              <div style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 6px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">Content:</div>
+              <div style="font-size: 0.9rem; color: var(--text); line-height: 1.6;">${escapeHtml(e.entry?.content || '(no content)')}</div>
+            </div>
+            
+            ${e.bestExample ? `
+              <div style="margin-bottom: 16px; padding: 12px; background: rgba(99, 102, 241, 0.1); border-radius: 6px; border: 1px solid var(--accent);">
+                <div style="font-size: 0.75rem; color: var(--accent); margin-bottom: 6px; font-weight: 600;">
+                  🎯 Best Matching Example #${(e.bestExampleIndex ?? 0) + 1} - ${(score * 100).toFixed(2)}% similarity:
+                </div>
+                <div style="font-size: 0.875rem; color: var(--text); font-style: italic; padding: 8px; background: rgba(99, 102, 241, 0.15); border-radius: 4px; border-left: 3px solid var(--accent);">
+                  "${escapeHtml(e.bestExample)}"
+                </div>
+              </div>
+            ` : ''}
+            
+            ${e.exampleScores && e.exampleScores.length > 0 ? `
+              <div style="margin-bottom: 16px; padding: 12px; background: var(--bg); border-radius: 6px; border: 1px solid var(--border);">
+                <div style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">
+                  📊 All Example Scores (${e.exampleScores.length} examples) - Sorted by similarity:
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 8px;">
+                  ${e.exampleScores.map((es, idx) => {
+                    const isBest = idx === 0; // Already sorted by similarity descending
+                    const esSimilarity = es.similarity || 0;
+                    const entryThreshold = e.threshold || minThreshold;
+                    const esThreshold = esSimilarity >= entryThreshold;
+                    const scoreColor = esThreshold ? 'var(--success)' : (esSimilarity >= entryThreshold * 0.8) ? 'var(--accent)' : 'var(--text-muted)';
+                    const bgColor = isBest ? 'rgba(99, 102, 241, 0.15)' : (esThreshold ? 'rgba(34, 197, 94, 0.1)' : 'transparent');
+                    const borderLeft = isBest ? '3px solid var(--accent)' : (esThreshold ? '3px solid var(--success)' : '3px solid transparent');
+                    const similarityValue = es.similarityPercent || (esSimilarity * 100).toFixed(2);
+                    
+                    return `
+                      <div style="display: flex; align-items: center; gap: 12px; padding: 10px; background: ${bgColor}; border-radius: 4px; border-left: ${borderLeft};">
+                        <div style="flex: 0 0 50px; text-align: center; font-size: 0.7rem; color: var(--text-muted); font-weight: 600;">
+                          #${(es.exampleIndex ?? idx) + 1}
+                          ${isBest ? '<br/><span style="color: var(--accent); font-size: 0.9rem;">★</span>' : ''}
+                        </div>
+                        <div style="flex: 1; font-size: 0.875rem; color: var(--text-secondary); line-height: 1.5;">
+                          ${escapeHtml(es.example || '(no example)')}
+                        </div>
+                        <div style="flex: 0 0 90px; text-align: right;">
+                          <span style="font-size: 0.875rem; font-weight: 600; color: ${scoreColor}; font-family: var(--font-mono);">
+                            ${similarityValue}%
+                          </span>
+                          ${esThreshold ? '<div style="font-size: 0.65rem; color: var(--success); margin-top: 2px;">≥ threshold</div>' : ''}
+                        </div>
+                      </div>
+                    `;
+                  }).join('')}
+                </div>
+              </div>
+            ` : ''}
+            
+            ${e.entry?.scoreThreshold !== undefined && e.entry.scoreThreshold !== minThreshold ? `
+              <div style="margin-top: 12px; padding: 8px; background: var(--bg); border-radius: 4px; font-size: 0.75rem; color: var(--text-muted); border: 1px solid var(--border);">
+                <strong>Entry-specific threshold:</strong> ${(e.entry.scoreThreshold * 100).toFixed(0)}% (default: ${(minThreshold * 100).toFixed(0)}%)
+              </div>
+            ` : ''}
+          </div>
+        `;
+      }).join('');
+      
+      resultsContainer.innerHTML = html;
     }
     
-    // Event listeners
+    // Helper function to escape HTML
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+    
+    // Event listeners (only attach if elements exist)
     Object.values(sliders).forEach(slider => {
-      slider.addEventListener('input', () => {
-        updateSliderDisplays();
-        drawCurve();
-      });
+      if (slider) {
+        slider.addEventListener('input', () => {
+          updateSliderDisplays();
+          drawCurve();
+        });
+      }
     });
     
-    // Initialize message history display
+    // Initialize message history display (deprecated but harmless)
     loadMessageHistory();
     
     runBtn.addEventListener('click', runRetrieval);
-    extractBtn.addEventListener('click', extractKeywords);
-    addEntryBtn.addEventListener('click', addEntry);
+    if (extractBtn) {
+      extractBtn.addEventListener('click', extractKeywords);
+    }
+    if (addEntryBtn) {
+      addEntryBtn.addEventListener('click', addEntry);
+    }
     
     // Keyboard shortcut
     queryInput.addEventListener('keydown', (e) => {
@@ -860,10 +1003,19 @@
       }
     });
     
-    // Initialize
+    // Table selector change handler
+    if (tableSelect) {
+      tableSelect.addEventListener('change', () => {
+        loadEntries();
+        // Clear results when table changes
+        resultsContainer.innerHTML = '<div class="empty">Select a table and run a query to see results</div>';
+      });
+    }
+    
+    // Initialize (skip deprecated functions if elements don't exist)
     updateSliderDisplays();
     drawCurve();
-    loadEntries();
+    loadTables(); // Load tables first, then entries will load automatically
   </script>
 </body>
 </html>

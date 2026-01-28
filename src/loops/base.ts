@@ -15,19 +15,29 @@ import type { LoopType, ProcessedResponse, SyntaxType } from '../types/index.js'
 export abstract class BaseLoop implements LoopType {
   abstract name: string;
   stopSequences?: string[];
-  
+
   // Process model response and extract action if present
   abstract processResponse(response: string, syntax: SyntaxType): ProcessedResponse;
-  
+
   // Build messages for continuation after action execution
   abstract buildContinuationMessages(
     currentAssistantContent: string,
     observation: string,
-    syntax: SyntaxType
+    syntax: SyntaxType,
+    filename?: string, // Filename of the executed file (for code executions only)
+    originalUserRequest?: string
   ): { updatedAssistantContent: string; continuationUserMessage: string };
-  
+
   // Documentation for system prompt
   abstract getDescription(): string;
+
+  /**
+   * Default implementation: don't commit messages after each action
+   * Messages accumulate until completion
+   */
+  shouldCommitMessagesAfterAction(): boolean {
+    return false;
+  }
 }
 
 /**

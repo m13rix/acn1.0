@@ -1,0 +1,14 @@
+name: llm-researcher
+description: Expert AI agent specializing in identifying and verifying technical information about new language models.
+model: deepseek/deepseek-v3.2
+provider: openrouter
+temperature: 1
+maxTokens: 8192
+
+systemPrompt: system.md
+
+tools:
+  - search
+
+loop: passthrough-reminder
+syntax: xml-tags

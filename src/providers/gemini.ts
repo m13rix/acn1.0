@@ -1,12 +1,14 @@
 /**
  * Gemini Provider
- * 
+ *
  * Maps universal OpenAI-style parameters to Google's GenAI SDK format.
  */
 
 import { GoogleGenAI } from '@google/genai';
 import { BaseProvider, registerProvider } from './base.js';
 import type { Message, ProviderConfig, ProviderResponse, ProviderStreamChunk, ProviderStreamEvent } from '../types/index.js';
+// @ts-ignore - mime-types doesn't have perfect TypeScript types
+import { lookup } from 'mime-types';
 
 /**
  * Role mapping from OpenAI format to Gemini format
@@ -19,27 +21,27 @@ const ROLE_MAP: Record<string, string> = {
 export class GeminiProvider extends BaseProvider {
   name = 'gemini';
   private ai: GoogleGenAI;
-  
+
   constructor(apiKey?: string) {
     super();
-    const key = apiKey || process.env['GEMINI_API_KEY'];
+    const key = apiKey || process.env['GEMINI_KEY'];
     if (!key) {
-      throw new Error('GEMINI_API_KEY is required. Set it in environment or pass to constructor.');
+      throw new Error('GEMINI_KEY is required. Set it in environment or pass to constructor.');
     }
     this.ai = new GoogleGenAI({ apiKey: key });
   }
-  
+
   /**
    * Build the actual GenAI request object (public for debugging)
    */
   override buildRequest(messages: Message[], config: ProviderConfig): any {
     this.validateConfig(config);
     const cfg = this.withDefaults(config);
-    
+
     // Extract system message if present
     const systemMessage = messages.find(m => m.role === 'system');
     const chatMessages = messages.filter(m => m.role !== 'system');
-    
+
     return this.buildGenAIRequest(chatMessages, systemMessage?.content, {
       ...cfg,
       ...config,
@@ -51,11 +53,11 @@ export class GeminiProvider extends BaseProvider {
   override async complete(messages: Message[], config: ProviderConfig): Promise<ProviderResponse> {
     this.validateConfig(config);
     const cfg = this.withDefaults(config);
-    
+
     // Extract system message if present
     const systemMessage = messages.find(m => m.role === 'system');
     const chatMessages = messages.filter(m => m.role !== 'system');
-    
+
     const req = this.buildGenAIRequest(chatMessages, systemMessage?.content, {
       ...cfg,
       ...config,
@@ -65,10 +67,12 @@ export class GeminiProvider extends BaseProvider {
 
     const response: any = await this.ai.models.generateContent(req);
     const text = this.extractText(response);
+    const reasoning = this.extractReasoning(response);
     const finishReason = this.mapFinishReason(response?.candidates?.[0]?.finishReason);
-    
+
     return {
       content: text,
+      reasoning,
       finishReason,
     };
   }
@@ -111,11 +115,11 @@ export class GeminiProvider extends BaseProvider {
 
     // GenAI streaming API
     const stream: AsyncGenerator<any> = await this.ai.models.generateContentStream(req);
-    
+
     let prevThought = '';
     let prevText = '';
     let hadReasoning = false;
-    
+
     for await (const chunk of stream) {
       // Extract parts from chunk
       const parts = chunk?.candidates?.[0]?.content?.parts;
@@ -123,16 +127,16 @@ export class GeminiProvider extends BaseProvider {
 
       for (const part of parts) {
         if (!part?.text) continue;
-        
+
         if (part.thought) {
           // This is reasoning content
           hadReasoning = true;
           const fullThought = part.text;
-          const delta = fullThought.startsWith(prevThought) 
-            ? fullThought.slice(prevThought.length) 
+          const delta = fullThought.startsWith(prevThought)
+            ? fullThought.slice(prevThought.length)
             : fullThought;
           prevThought = fullThought;
-          
+
           if (delta) {
             yield { type: 'reasoning.delta', delta };
           }
@@ -143,20 +147,20 @@ export class GeminiProvider extends BaseProvider {
             yield { type: 'reasoning.done' };
             hadReasoning = false;
           }
-          
+
           const fullText = part.text;
           const delta = fullText.startsWith(prevText)
             ? fullText.slice(prevText.length)
             : fullText;
           prevText = fullText;
-          
+
           if (delta) {
             yield { type: 'text.delta', delta };
           }
         }
       }
     }
-    
+
     // Emit final events
     if (hadReasoning) {
       yield { type: 'reasoning.done' };
@@ -164,7 +168,7 @@ export class GeminiProvider extends BaseProvider {
     yield { type: 'text.done' };
     yield { type: 'done' };
   }
-  
+
   /**
    * Build a GenAI request object (kept as `any` to allow SDK evolution without forcing
    * the whole framework to chase types).
@@ -174,10 +178,47 @@ export class GeminiProvider extends BaseProvider {
     systemPrompt: string | undefined,
     config: ProviderConfig
   ): any {
-    const contents = messages.map(m => ({
-      role: ROLE_MAP[m.role] || 'user',
-      parts: [{ text: m.content }],
-    }));
+    // Convert messages to Gemini format, handling file messages
+    const contents: any[] = [];
+
+    for (let i = 0; i < messages.length; i++) {
+      const m = messages[i];
+      if (!m) continue;
+
+      if (m.role === 'file') {
+        // File messages need to be attached to the previous user message's parts
+        // or converted to a user message with inlineData parts
+        // Find the last user message to attach to, or create a new one
+        let lastUserIndex = -1;
+        for (let j = contents.length - 1; j >= 0; j--) {
+          if (contents[j]?.role === 'user') {
+            lastUserIndex = j;
+            break;
+          }
+        }
+
+        if (lastUserIndex >= 0) {
+          // Attach to existing user message's parts
+          const userContent = contents[lastUserIndex];
+          if (userContent.parts) {
+            userContent.parts.push(this.convertFileToGemini(m));
+          }
+        } else {
+          // Create new user message with file
+          contents.push({
+            role: 'user',
+            parts: [this.convertFileToGemini(m)],
+          });
+        }
+      } else if (m.role !== 'system') {
+        // Regular message (user/assistant) - convert as-is
+        // System messages are handled separately
+        contents.push({
+          role: ROLE_MAP[m.role] || 'user',
+          parts: [{ text: m.content }],
+        });
+      }
+    }
 
     const genaiConfig: any = {
       temperature: config.temperature,
@@ -213,6 +254,29 @@ export class GeminiProvider extends BaseProvider {
     };
 
     return req;
+  }
+
+  /**
+   * Convert a file message to Gemini inlineData format
+   */
+  private convertFileToGemini(message: Message): any {
+    if (message.role !== 'file' || !message.filename) {
+      return { text: '' };
+    }
+
+    const filename = message.filename;
+    const base64Content = message.content;
+
+    // Detect MIME type from filename
+    const mimeType = lookup(filename) || 'application/octet-stream';
+
+    // Gemini uses inlineData format
+    return {
+      inlineData: {
+        mimeType: mimeType,
+        data: base64Content, // Raw base64 (no data URI prefix for Gemini)
+      },
+    };
   }
 
   private mapReasoning(model: string, reasoning: NonNullable<ProviderConfig['reasoning']>): any {
@@ -272,16 +336,35 @@ export class GeminiProvider extends BaseProvider {
       if (!responseOrChunk) return '';
       if (typeof responseOrChunk.text === 'function') return String(responseOrChunk.text() ?? '');
       if (typeof responseOrChunk.text === 'string') return responseOrChunk.text;
-      if (typeof responseOrChunk.text === 'undefined' && typeof responseOrChunk?.text !== 'undefined') {
-        // defensive
-      }
+
       // Common candidate-based shapes
       const parts = responseOrChunk.candidates?.[0]?.content?.parts;
       if (Array.isArray(parts)) {
-        return parts.map((p: any) => p?.text ?? '').join('');
+        // Only return text from non-thought parts
+        return parts
+          .filter((p: any) => !p?.thought)
+          .map((p: any) => p?.text ?? '')
+          .join('');
       }
       const out = responseOrChunk.outputText;
       if (typeof out === 'string') return out;
+      return '';
+    } catch {
+      return '';
+    }
+  }
+
+  private extractReasoning(responseOrChunk: any): string {
+    try {
+      if (!responseOrChunk) return '';
+      const parts = responseOrChunk.candidates?.[0]?.content?.parts;
+      if (Array.isArray(parts)) {
+        // Return text only from thought parts
+        return parts
+          .filter((p: any) => p?.thought)
+          .map((p: any) => p?.text ?? '')
+          .join('');
+      }
       return '';
     } catch {
       return '';

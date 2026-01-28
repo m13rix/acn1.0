@@ -10,11 +10,8 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import open from 'open';
 
-import { retrieve, RetrievalResult, MessageHistory } from '../retriever.js';
-import { embed, embedBatch } from '../embeddings.js';
-import { extractKeywords } from '../extractor.js';
-import { computeWeights, ScoringParams, DEFAULT_PARAMS } from '../scorer.js';
-import { clearCache, getCacheStats } from '../embeddings.js';
+import { retrieve, RetrievalResult, DEFAULT_SCORE_THRESHOLD } from '../retriever.js';
+import { embed, embedBatch, clearCache, getCacheStats } from '../embeddings.js';
 
 // Import LanceDB service from skills-viewer
 import * as lance from '../../skills-viewer/server/lance.js';
@@ -22,10 +19,6 @@ import * as lance from '../../skills-viewer/server/lance.js';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = 3248;
 const TEST_TABLE = 'test';
-
-// In-memory storage for message history (keyed by session ID)
-// In production, you might want to use Redis or a database
-const messageHistoryStore = new Map<string, MessageHistory[]>();
 
 async function main() {
   console.log('Connecting to LanceDB...');
@@ -51,14 +44,41 @@ async function main() {
   // ============================================================================
   
   /**
-   * GET /api/entries
-   * Get all entries from the test table
+   * GET /api/tables
+   * Get all available tables with entry counts
    */
-  app.get('/api/entries', async (_req, res) => {
+  app.get('/api/tables', async (_req, res) => {
     try {
-      const entries = await lance.getEntries(TEST_TABLE);
-      const sanitized = entries.map(({ vector, ...rest }) => rest);
-      res.json({ entries: sanitized });
+      const tables = await lance.listTables();
+      // Get entry count for each table
+      const tablesWithInfo = await Promise.all(
+        tables.map(async (name) => {
+          try {
+            const info = await lance.getTableInfo(name);
+            return { name: info.name, count: info.count };
+          } catch {
+            return { name, count: 0 };
+          }
+        })
+      );
+      res.json({ tables: tablesWithInfo });
+    } catch (error) {
+      console.error('Error getting tables:', error);
+      res.status(500).json({ error: 'Failed to get tables' });
+    }
+  });
+  
+  /**
+   * GET /api/entries
+   * Get all entries from the specified table (defaults to 'test' table)
+   */
+  app.get('/api/entries', async (req, res) => {
+    try {
+      const tableName = (req.query.table as string) || TEST_TABLE;
+      const entries = await lance.getEntries(tableName);
+      // Don't send vectors to frontend (too large)
+      const sanitized = entries.map(({ exampleVectors, exampleVectorsJson, ...rest }) => rest);
+      res.json({ entries: sanitized, table: tableName });
     } catch (error) {
       console.error('Error getting entries:', error);
       res.status(500).json({ error: 'Failed to get entries' });
@@ -67,32 +87,53 @@ async function main() {
   
   /**
    * POST /api/entries
-   * Add a new entry to the test table
+   * Add a new entry to the specified table (defaults to 'test' table)
    */
   app.post('/api/entries', async (req, res) => {
     try {
-      const { content } = req.body;
-      if (!content) {
+      const { content, examples, scoreThreshold, table } = req.body;
+      const tableName = table || TEST_TABLE;
+      
+      if (!content || typeof content !== 'string') {
         return res.status(400).json({ error: 'Content is required' });
       }
       
-      const entry = await lance.addEntry(TEST_TABLE, content);
-      const { vector, ...sanitized } = entry;
-      res.status(201).json({ entry: sanitized });
-    } catch (error) {
+      if (!examples || !Array.isArray(examples) || examples.length === 0) {
+        return res.status(400).json({ error: 'At least one example is required' });
+      }
+      
+      // Validate all examples are strings
+      for (const example of examples) {
+        if (typeof example !== 'string' || !example.trim()) {
+          return res.status(400).json({ error: 'All examples must be non-empty strings' });
+        }
+      }
+      
+      // Ensure table exists
+      const tables = await lance.listTables();
+      if (!tables.includes(tableName)) {
+        await lance.createTable(tableName);
+      }
+      
+      const entry = await lance.addEntry(tableName, content, examples, scoreThreshold);
+      // Don't send vectors back
+      const { exampleVectors, exampleVectorsJson, ...sanitized } = entry;
+      res.status(201).json({ entry: sanitized, table: tableName });
+    } catch (error: any) {
       console.error('Error adding entry:', error);
-      res.status(500).json({ error: 'Failed to add entry' });
+      res.status(500).json({ error: error.message || 'Failed to add entry' });
     }
   });
   
   /**
    * DELETE /api/entries/:id
-   * Delete an entry
+   * Delete an entry from the specified table (defaults to 'test' table)
    */
   app.delete('/api/entries/:id', async (req, res) => {
     try {
-      await lance.deleteEntry(TEST_TABLE, req.params.id);
-      res.json({ success: true });
+      const tableName = (req.query.table as string) || TEST_TABLE;
+      await lance.deleteEntry(tableName, req.params.id);
+      res.json({ success: true, table: tableName });
     } catch (error) {
       console.error('Error deleting entry:', error);
       res.status(500).json({ error: 'Failed to delete entry' });
@@ -101,124 +142,84 @@ async function main() {
   
   /**
    * POST /api/extract
-   * Extract keywords from a query (for debugging)
+   * Extract keywords from a query (DEPRECATED - no longer used in example-based system)
    */
-  app.post('/api/extract', async (req, res) => {
-    try {
-      const { query, dedupeThreshold = 0.95 } = req.body;
-      if (!query) {
-        return res.status(400).json({ error: 'Query is required' });
-      }
-      
-      const result = await extractKeywords(query, dedupeThreshold);
-      
-      // Don't send vectors to frontend
-      const keywords = result.keywords.map(({ vector, ...rest }) => rest);
-      
-      res.json({ 
-        query: result.query,
-        keywords,
-      });
-    } catch (error) {
-      console.error('Error extracting keywords:', error);
-      res.status(500).json({ error: 'Failed to extract keywords' });
-    }
+  app.post('/api/extract', async (_req, res) => {
+    res.status(410).json({ error: 'Keyword extraction is deprecated. The system now uses example-based matching.' });
   });
-  
+
   /**
    * POST /api/weights
-   * Compute weight distribution for given params
+   * Compute weight distribution (DEPRECATED - no longer used in example-based system)
    */
-  app.post('/api/weights', async (req, res) => {
-    try {
-      const { count, params = {} } = req.body;
-      if (!count || count < 1) {
-        return res.status(400).json({ error: 'Count is required' });
-      }
-      
-      const weights = computeWeights(count, params);
-      const fullParams = { ...DEFAULT_PARAMS, ...params };
-      
-      res.json({ weights, params: fullParams });
-    } catch (error) {
-      console.error('Error computing weights:', error);
-      res.status(500).json({ error: 'Failed to compute weights' });
-    }
+  app.post('/api/weights', async (_req, res) => {
+    res.status(410).json({ error: 'Weight computation is deprecated. The system now uses simple semantic similarity.' });
   });
   
   /**
    * POST /api/retrieve
-   * Full retrieval with detailed scoring
-   * Message history is stored on the server, identified by sessionId
+   * Example-based retrieval with semantic similarity matching
    */
   app.post('/api/retrieve', async (req, res) => {
     try {
-      const { query, params = {}, limit = 0, sessionId = 'default', historyDecay = 0.7 } = req.body;
-      if (!query) {
+      const { query, minThreshold = DEFAULT_SCORE_THRESHOLD, table } = req.body;
+      if (!query || typeof query !== 'string') {
         return res.status(400).json({ error: 'Query is required' });
       }
       
-      // Get message history from server storage
-      const messageHistory = messageHistoryStore.get(sessionId) || [];
+      const tableName = table || TEST_TABLE;
       
-      // Get all entries with vectors
-      const entries = await lance.getEntries(TEST_TABLE);
+      // Get all entries from the specified table
+      const entries = await lance.getEntries(tableName);
       
       if (entries.length === 0) {
-        const queryVector = await embed(query);
-        const extraction = await extractKeywords(query);
-        
-        // Save to history
-        const newMessage: MessageHistory = {
-          id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
-          query,
-          queryVector,
-          extraction,
-          timestamp: Date.now(),
-        };
-        messageHistoryStore.set(sessionId, [newMessage]);
-        
         return res.json({
           query,
-          extraction: {
-            query: extraction.query,
-            keywords: extraction.keywords.map(({ vector, ...rest }) => rest),
-          },
-          weights: [],
-          params: { ...DEFAULT_PARAMS, ...params },
+          queryVector: [],
+          table: tableName,
+          minThreshold: minThreshold,
+          totalEntries: 0,
+          matchedEntries: 0,
           entries: [],
-          timing: { extractionMs: 0, scoringMs: 0, totalMs: 0 },
+          timing: {
+            embeddingMs: 0,
+            scoringMs: 0,
+            totalMs: 0
+          }
         });
       }
       
-      // Process retrieval with history
-      const result = await retrieve(query, entries, params, limit, messageHistory, historyDecay);
+      // Use example-based retrieval (include all entries for debugging)
+      const result = await retrieve(query, entries, minThreshold, true);
       
-      // Save new message to history
-      const newMessage: MessageHistory = {
-        id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
-        query,
-        queryVector: result.extraction.queryVector,
-        extraction: result.extraction,
-        timestamp: Date.now(),
-      };
-      messageHistory.push(newMessage);
-      messageHistoryStore.set(sessionId, messageHistory);
-      
-      // Sanitize: remove vectors from response
+      // Sanitize: remove vectors from response but keep all debug info
       const sanitized = {
-        ...result,
-        extraction: {
-          query: result.extraction.query,
-          keywords: result.extraction.keywords.map(({ vector, ...rest }) => rest),
-        },
+        query: result.query,
+        queryVector: [],  // Don't send vector to frontend
+        table: tableName,
+        minThreshold: minThreshold,
+        totalEntries: entries.length,
+        matchedEntries: result.entries.filter(e => e.matched).length,
         entries: result.entries.map(e => ({
-          ...e,
           entry: {
             id: e.entry.id,
             content: e.entry.content,
+            examples: e.entry.examples,
+            scoreThreshold: e.entry.scoreThreshold ?? minThreshold
           },
+          score: e.score,
+          threshold: e.threshold,
+          matched: e.matched,
+          bestExampleIndex: e.bestExampleIndex,
+          bestExample: e.bestExample,
+          exampleScores: e.exampleScores.map(es => ({
+            example: es.example,
+            exampleIndex: es.exampleIndex,
+            similarity: es.similarity,
+            similarityPercent: (es.similarity * 100).toFixed(2)
+          }))
         })),
+        timing: result.timing
       };
       
       res.json(sanitized);
@@ -230,44 +231,25 @@ async function main() {
   
   /**
    * GET /api/history/:sessionId
-   * Get message history for a session (without vectors)
+   * Message history (DEPRECATED - no longer used in example-based system)
    */
-  app.get('/api/history/:sessionId', (req, res) => {
-    const { sessionId } = req.params;
-    const history = messageHistoryStore.get(sessionId) || [];
-    
-    // Return history without vectors
-    const sanitized = history.map(msg => ({
-      id: msg.id,
-      query: msg.query,
-      timestamp: msg.timestamp,
-      keywordCount: msg.extraction.keywords.length,
-    }));
-    
-    res.json({ messages: sanitized });
+  app.get('/api/history/:sessionId', (_req, res) => {
+    res.json({ messages: [] });  // Always return empty (history removed)
   });
-  
+
   /**
    * DELETE /api/history/:sessionId/:messageId
-   * Delete a specific message from history
+   * Delete message history (DEPRECATED - no longer used)
    */
-  app.delete('/api/history/:sessionId/:messageId', (req, res) => {
-    const { sessionId, messageId } = req.params;
-    const history = messageHistoryStore.get(sessionId) || [];
-    
-    const filtered = history.filter(msg => msg.id !== messageId);
-    messageHistoryStore.set(sessionId, filtered);
-    
-    res.json({ success: true, remaining: filtered.length });
+  app.delete('/api/history/:sessionId/:messageId', (_req, res) => {
+    res.json({ success: true, remaining: 0 });
   });
-  
+
   /**
    * DELETE /api/history/:sessionId
-   * Clear all message history for a session
+   * Clear message history (DEPRECATED - no longer used)
    */
-  app.delete('/api/history/:sessionId', (req, res) => {
-    const { sessionId } = req.params;
-    messageHistoryStore.delete(sessionId);
+  app.delete('/api/history/:sessionId', (_req, res) => {
     res.json({ success: true });
   });
   
@@ -290,10 +272,13 @@ async function main() {
   
   /**
    * GET /api/params
-   * Get default parameters
+   * Get default parameters (simplified for example-based system)
    */
   app.get('/api/params', (_req, res) => {
-    res.json(DEFAULT_PARAMS);
+    res.json({
+      defaultScoreThreshold: DEFAULT_SCORE_THRESHOLD,
+      note: 'Example-based system uses simple semantic similarity matching'
+    });
   });
   
   // Start server

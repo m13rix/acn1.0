@@ -1,0 +1,8 @@
+name: browser-test
+model: xiaomi/mimo-v2-flash:free
+provider: openrouter
+systemPrompt: system.md
+tools: []
+syntax: xml-tags
+sandbox: browser
+loop: message-passthrough

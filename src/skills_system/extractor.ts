@@ -1,6 +1,9 @@
 /**
  * Keyword Extractor
  * 
+ * @deprecated This module is deprecated. The skills system now uses example-based semantic matching instead of keyword extraction.
+ * This file is kept for backward compatibility but should not be used in new code.
+ * 
  * Extracts semantically important keywords from user queries.
  * Keywords are ranked by their similarity to the overall query meaning.
  */

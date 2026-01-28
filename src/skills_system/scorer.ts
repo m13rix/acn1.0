@@ -1,6 +1,9 @@
 /**
  * Scoring Functions
  * 
+ * @deprecated This module is deprecated. The skills system now uses simple semantic similarity matching instead of weighted scoring.
+ * This file is kept for backward compatibility but should not be used in new code.
+ * 
  * Provides decay curve functions for weighting keyword importance.
  * The curve controls how quickly the weight drops for lower-ranked keywords.
  */

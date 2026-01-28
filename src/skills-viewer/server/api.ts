@@ -89,7 +89,7 @@ router.get('/tables/:name/entries', async (req: Request, res: Response) => {
     const entries = await lance.getEntries(name);
     
     // Don't send vectors to frontend (too large)
-    const sanitized = entries.map(({ vector, ...rest }) => rest);
+    const sanitized = entries.map(({ exampleVectors, exampleVectorsJson, ...rest }) => rest);
     
     res.json({ entries: sanitized });
   } catch (error) {
@@ -105,21 +105,32 @@ router.get('/tables/:name/entries', async (req: Request, res: Response) => {
 router.post('/tables/:name/entries', async (req: Request, res: Response) => {
   try {
     const { name } = req.params;
-    const { content } = req.body;
+    const { content, examples, scoreThreshold } = req.body;
     
     if (!content || typeof content !== 'string') {
       return res.status(400).json({ error: 'Content is required' });
     }
     
-    const entry = await lance.addEntry(name, content);
+    if (!examples || !Array.isArray(examples) || examples.length === 0) {
+      return res.status(400).json({ error: 'At least one example is required' });
+    }
     
-    // Don't send vector back
-    const { vector, ...sanitized } = entry;
+    // Validate all examples are strings
+    for (const example of examples) {
+      if (typeof example !== 'string' || !example.trim()) {
+        return res.status(400).json({ error: 'All examples must be non-empty strings' });
+      }
+    }
+    
+    const entry = await lance.addEntry(name, content, examples, scoreThreshold);
+    
+    // Don't send vectors back
+    const { exampleVectors, exampleVectorsJson, ...sanitized } = entry;
     
     res.status(201).json({ entry: sanitized });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error adding entry:', error);
-    res.status(500).json({ error: 'Failed to add entry' });
+    res.status(500).json({ error: error.message || 'Failed to add entry' });
   }
 });
 
@@ -130,21 +141,32 @@ router.post('/tables/:name/entries', async (req: Request, res: Response) => {
 router.put('/tables/:name/entries/:id', async (req: Request, res: Response) => {
   try {
     const { name, id } = req.params;
-    const { content } = req.body;
+    const { content, examples, scoreThreshold } = req.body;
     
     if (!content || typeof content !== 'string') {
       return res.status(400).json({ error: 'Content is required' });
     }
     
-    const entry = await lance.updateEntry(name, id, content);
+    if (!examples || !Array.isArray(examples) || examples.length === 0) {
+      return res.status(400).json({ error: 'At least one example is required' });
+    }
     
-    // Don't send vector back
-    const { vector, ...sanitized } = entry;
+    // Validate all examples are strings
+    for (const example of examples) {
+      if (typeof example !== 'string' || !example.trim()) {
+        return res.status(400).json({ error: 'All examples must be non-empty strings' });
+      }
+    }
+    
+    const entry = await lance.updateEntry(name, id, content, examples, scoreThreshold);
+    
+    // Don't send vectors back
+    const { exampleVectors, exampleVectorsJson, ...sanitized } = entry;
     
     res.status(200).json({ entry: sanitized });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error updating entry:', error);
-    res.status(500).json({ error: 'Failed to update entry' });
+    res.status(500).json({ error: error.message || 'Failed to update entry' });
   }
 });
 
@@ -165,7 +187,7 @@ router.delete('/tables/:name/entries/:id', async (req: Request, res: Response) =
 
 /**
  * POST /api/tables/:name/search
- * Semantic search in a table
+ * Semantic search in a table (manual search - compares against content directly)
  */
 router.post('/tables/:name/search', async (req: Request, res: Response) => {
   try {
@@ -179,7 +201,7 @@ router.post('/tables/:name/search', async (req: Request, res: Response) => {
     const results = await lance.search(name, query, limit);
     
     // Don't send vectors back
-    const sanitized = results.map(({ vector, ...rest }) => rest);
+    const sanitized = results.map(({ exampleVectors, exampleVectorsJson, ...rest }) => rest);
     
     res.json({ results: sanitized });
   } catch (error) {

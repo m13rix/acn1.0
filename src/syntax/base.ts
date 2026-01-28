@@ -31,6 +31,11 @@ export abstract class BaseSyntax implements SyntaxType {
   abstract wrapCli(content: string): string;
   abstract wrapSkills(content: string): string;
   
+  // Optional: wrap multiple skill entries (default implementation wraps each separately)
+  wrapSkillsMultiple(contents: string[]): string {
+    return contents.map(content => this.wrapSkills(content)).join('\n');
+  }
+  
   // Documentation for system prompt
   abstract getDescription(): string;
 }

@@ -11,7 +11,7 @@ systemPrompt: system.md
 tools:
   - search
 
-loop: accumulator
+loop: message-passthrough
 syntax: xml-tags
 
 # Skills table for knowledge base (LanceDB table name)

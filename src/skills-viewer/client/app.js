@@ -46,20 +46,20 @@ const api = {
     return data.entries;
   },
 
-  async addEntry(tableName, content) {
+  async addEntry(tableName, content, examples, scoreThreshold) {
     const data = await this.request(`/tables/${encodeURIComponent(tableName)}/entries`, {
       method: 'POST',
-      body: JSON.stringify({ content }),
+      body: JSON.stringify({ content, examples, scoreThreshold }),
     });
     return data.entry;
   },
 
-  async updateEntry(tableName, id, content) {
+  async updateEntry(tableName, id, content, examples, scoreThreshold) {
     const data = await this.request(
       `/tables/${encodeURIComponent(tableName)}/entries/${encodeURIComponent(id)}`,
       {
         method: 'PUT',
-        body: JSON.stringify({ content }),
+        body: JSON.stringify({ content, examples, scoreThreshold }),
       }
     );
     return data.entry;
@@ -408,21 +408,63 @@ const pages = {
             <textarea class="input textarea" id="entry-content-input" 
                       placeholder="Enter skill documentation, instructions, or knowledge..."></textarea>
           </div>
+          <div class="input-group" style="margin-top: 16px;">
+            <label class="input-label">Examples (one per line)</label>
+            <p style="font-size: 0.875rem; color: var(--color-text-muted); margin-bottom: 8px;">
+              Describe when this entry should be retrieved (e.g., "User asks about X", "Hello, how are you?")
+            </p>
+            <textarea class="input textarea" id="entry-examples-input" 
+                      placeholder="Hello, how are you?&#10;User greets me&#10;Conversational interaction"
+                      rows="4"></textarea>
+          </div>
+          <div class="input-group" style="margin-top: 16px;">
+            <label class="input-label">Score Threshold (optional, default: 0.8)</label>
+            <input type="number" class="input" id="entry-threshold-input" 
+                   min="0" max="1" step="0.05" value="0.8"
+                   placeholder="0.8">
+            <p style="font-size: 0.75rem; color: var(--color-text-muted); margin-top: 4px;">
+              Not recommended to change. Minimum similarity score (0-1) to retrieve this entry.
+            </p>
+          </div>
         `,
         submitText: 'Add Entry',
         onSubmit: (modal) => {
           const content = modal.querySelector('#entry-content-input').value.trim();
+          const examplesText = modal.querySelector('#entry-examples-input').value.trim();
+          const thresholdValue = modal.querySelector('#entry-threshold-input').value;
+          
           if (!content) {
             toast.error('Please enter some content');
             return false;
           }
-          return content;
+          
+          if (!examplesText) {
+            toast.error('Please enter at least one example');
+            return false;
+          }
+          
+          const examples = examplesText.split('\n')
+            .map(line => line.trim())
+            .filter(line => line.length > 0);
+          
+          if (examples.length === 0) {
+            toast.error('Please enter at least one example');
+            return false;
+          }
+          
+          const scoreThreshold = thresholdValue ? parseFloat(thresholdValue) : undefined;
+          if (scoreThreshold !== undefined && (isNaN(scoreThreshold) || scoreThreshold < 0 || scoreThreshold > 1)) {
+            toast.error('Score threshold must be between 0 and 1');
+            return false;
+          }
+          
+          return { content, examples, scoreThreshold };
         },
       });
       
       if (result) {
         try {
-          await api.addEntry(tableName, result);
+          await api.addEntry(tableName, result.content, result.examples, result.scoreThreshold);
           toast.success('Entry added');
           loadEntries();
         } catch (err) {
@@ -506,6 +548,7 @@ const pages = {
           <div class="entry-card-header">
             <div class="entry-card-meta">
               ${hasDistance ? `<span class="entry-score">${similarity}% match</span>` : ''}
+              ${entry.scoreThreshold !== undefined ? `<span class="entry-score" style="margin-left: 8px;">Threshold: ${(entry.scoreThreshold * 100).toFixed(0)}%</span>` : ''}
               <span>Updated ${formatDate(entry.updatedAt)}</span>
             </div>
             <div class="entry-card-actions">
@@ -514,6 +557,16 @@ const pages = {
             </div>
           </div>
           <div class="entry-content">${escapeHtml(entry.content)}</div>
+          ${entry.examples && entry.examples.length > 0 ? `
+            <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--color-border);">
+              <div style="font-size: 0.75rem; color: var(--color-text-muted); margin-bottom: 8px; font-weight: 600;">
+                Examples (${entry.examples.length}):
+              </div>
+              <ul style="margin: 0; padding-left: 20px; font-size: 0.875rem; color: var(--color-text-secondary);">
+                ${entry.examples.map(ex => `<li>${escapeHtml(ex)}</li>`).join('')}
+              </ul>
+            </div>
+          ` : ''}
           ${entry.content.length > 300 ? '<button class="btn btn-ghost entry-expand-btn">Show more</button>' : ''}
         `;
         
@@ -536,21 +589,57 @@ const pages = {
                 <label class="input-label">Content</label>
                 <textarea class="input textarea" id="entry-content-input">${escapeHtml(entry.content)}</textarea>
               </div>
+              <div class="input-group" style="margin-top: 16px;">
+                <label class="input-label">Examples (one per line)</label>
+                <textarea class="input textarea" id="entry-examples-input" 
+                          rows="4">${entry.examples ? entry.examples.join('\n') : ''}</textarea>
+              </div>
+              <div class="input-group" style="margin-top: 16px;">
+                <label class="input-label">Score Threshold (optional, default: 0.8)</label>
+                <input type="number" class="input" id="entry-threshold-input" 
+                       min="0" max="1" step="0.05" 
+                       value="${entry.scoreThreshold !== undefined ? entry.scoreThreshold : '0.8'}"
+                       placeholder="0.8">
+              </div>
             `,
             submitText: 'Save Changes',
             onSubmit: (modal) => {
               const content = modal.querySelector('#entry-content-input').value.trim();
+              const examplesText = modal.querySelector('#entry-examples-input').value.trim();
+              const thresholdValue = modal.querySelector('#entry-threshold-input').value;
+              
               if (!content) {
                 toast.error('Content cannot be empty');
                 return false;
               }
-              return content;
+              
+              if (!examplesText) {
+                toast.error('Please enter at least one example');
+                return false;
+              }
+              
+              const examples = examplesText.split('\n')
+                .map(line => line.trim())
+                .filter(line => line.length > 0);
+              
+              if (examples.length === 0) {
+                toast.error('Please enter at least one example');
+                return false;
+              }
+              
+              const scoreThreshold = thresholdValue ? parseFloat(thresholdValue) : undefined;
+              if (scoreThreshold !== undefined && (isNaN(scoreThreshold) || scoreThreshold < 0 || scoreThreshold > 1)) {
+                toast.error('Score threshold must be between 0 and 1');
+                return false;
+              }
+              
+              return { content, examples, scoreThreshold };
             },
           });
           
           if (result) {
             try {
-              await api.updateEntry(tableName, entry.id, result);
+              await api.updateEntry(tableName, entry.id, result.content, result.examples, result.scoreThreshold);
               toast.success('Entry updated');
               loadEntries();
             } catch (err) {

@@ -1,14 +1,11 @@
 /**
  * Skills Service
  * 
- * Central service for managing agent skills retrieval.
- * Handles real-time embedding, message history, and skill search.
+ * Central service for managing agent skills retrieval using example-based semantic matching.
  */
 
-import { embed } from './embeddings.js';
-import { retrieve, MessageHistory, SkillEntry, RetrievalResult, ScoredEntry } from './retriever.js';
-import { extractKeywords, ExtractionResult } from './extractor.js';
-import { ScoringParams } from './scorer.js';
+import { embed, embedBatch } from './embeddings.js';
+import { retrieve, SkillEntry, ScoredEntry, DEFAULT_SCORE_THRESHOLD } from './retriever.js';
 import * as lancedb from '@lancedb/lancedb';
 import { v4 as uuidv4 } from 'uuid';
 import { join, dirname } from 'path';
@@ -18,38 +15,27 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = join(__dirname, '..', '..', 'data', 'skills');
 
 /**
- * Default scoring parameters from the test UI
+ * Default score threshold for automated skill retrieval (80%)
  */
-export const SKILLS_PARAMS: ScoringParams = {
-  decayPower: 2.5,
-  topPercentage: 0.08,      // 8%
-  baseWeight: 1,
-  minWeight: 0,
-  querySimilarityWeight: 0.5,
-};
+export const SCORE_THRESHOLD = 0.8;
 
 /**
- * Default history decay factor
- */
-export const DEFAULT_HISTORY_DECAY = 0.05;
-
-/**
- * Maximum number of messages to keep in history
- */
-export const MAX_HISTORY_LENGTH = 3;
-
-/**
- * Minimum score threshold for automated skill retrieval (80%)
- */
-export const SCORE_THRESHOLD = 0.7;
-
-/**
- * Result from a skills search
+ * Result from automatic skills search (returns multiple entries)
  */
 export interface SkillsSearchResult {
+  entries: Array<{
+    content: string;
+    score: number;
+    entry: SkillEntry;
+  }>;
+}
+
+/**
+ * Result from manual skills search (single entry with score)
+ */
+export interface ManualSearchResult {
   content: string;
   score: number;
-  normalizedScore: number;
   entry: SkillEntry;
 }
 
@@ -59,8 +45,6 @@ export interface SkillsSearchResult {
 export class SkillsService {
   private tableName: string;
   private db: lancedb.Connection | null = null;
-  private messageHistory: MessageHistory[] = [];
-  private preEmbeddedWords: Set<string> = new Set();
   private initialized = false;
 
   constructor(tableName: string) {
@@ -78,40 +62,8 @@ export class SkillsService {
   }
 
   /**
-   * Pre-embed a word as the user types (for faster search)
-   * This populates the embedding cache without blocking
-   */
-  async embedWordRealtime(word: string): Promise<void> {
-    const normalized = word.toLowerCase().trim();
-    if (!normalized || normalized.length < 2 || this.preEmbeddedWords.has(normalized)) {
-      return;
-    }
-    
-    this.preEmbeddedWords.add(normalized);
-    
-    // Fire and forget - don't await
-    embed(normalized).catch(() => {
-      // Silently ignore errors for pre-embedding
-    });
-  }
-
-  /**
-   * Pre-embed multiple words (e.g., from a paste)
-   */
-  async embedWordsRealtime(words: string[]): Promise<void> {
-    const uniqueWords = [...new Set(words.map(w => w.toLowerCase().trim()))];
-    await Promise.all(uniqueWords.map(w => this.embedWordRealtime(w)));
-  }
-
-  /**
-   * Clear the pre-embedded words set (e.g., after sending a message)
-   */
-  clearPreEmbeddedWords(): void {
-    this.preEmbeddedWords.clear();
-  }
-
-  /**
    * Get all entries from the skills table
+   * Filters out entries without examples (backward incompatible)
    */
   private async getEntries(): Promise<SkillEntry[]> {
     if (!this.db) {
@@ -122,18 +74,73 @@ export class SkillsService {
       const table = await this.db.openTable(this.tableName);
       const results = await table.query().toArray();
       
-      return results.map(row => {
-        const vector = row.vector;
-        const vectorArray = Array.isArray(vector) 
-          ? vector 
-          : Array.from(vector as ArrayLike<number>);
+      const mapped: (SkillEntry | null)[] = results.map(row => {
+        // Parse exampleVectors from JSON string
+        let exampleVectors: number[][] = [];
+        try {
+          const vectorsJson = row.exampleVectorsJson as string | undefined;
+          if (vectorsJson) {
+            exampleVectors = JSON.parse(vectorsJson);
+          }
+        } catch (e) {
+          // Invalid JSON or missing field - skip this entry (backward incompatible)
+          return null;
+        }
+        
+        // Parse examples array - handle LanceDB/Arrow arrays
+        let examples: string[] = [];
+        try {
+          if (row.examples) {
+            if (Array.isArray(row.examples)) {
+              examples = row.examples as string[];
+            } else if (typeof row.examples === 'string') {
+              examples = JSON.parse(row.examples);
+            } else if (typeof row.examples === 'object' && row.examples !== null) {
+              // Handle LanceDB/Arrow arrays - they're array-like objects that need conversion
+              // LanceDB returns Arrow arrays which are not native JS arrays but are iterable
+              try {
+                examples = Array.from(row.examples as any) as string[];
+              } catch (conversionError) {
+                // If Array.from() fails, try other methods
+                if ('toArray' in row.examples && typeof (row.examples as any).toArray === 'function') {
+                  examples = (row.examples as any).toArray() as string[];
+                } else {
+                  // Last resort: try spreading (may fail if not iterable)
+                  try {
+                    examples = [...(row.examples as any)] as string[];
+                  } catch (spreadError) {
+                    // Cannot convert - will be filtered out below
+                  }
+                }
+              }
+            }
+          }
+        } catch (e) {
+          // Invalid examples - skip this entry (backward incompatible)
+          return null;
+        }
+        
+        // Filter out entries without examples (backward incompatible)
+        if (!examples || examples.length === 0 || !exampleVectors || exampleVectors.length === 0) {
+          return null;
+        }
+        
+        // Ensure exampleVectors and examples arrays match in length
+        if (exampleVectors.length !== examples.length) {
+          return null;
+        }
         
         return {
           id: row.id as string,
           content: row.content as string,
-          vector: vectorArray,
+          examples,
+          exampleVectors,
+          scoreThreshold: row.scoreThreshold as number | undefined,
+          updatedAt: row.updatedAt as number
         };
       });
+      
+      return mapped.filter((entry): entry is SkillEntry => entry !== null);
     } catch (error) {
       // Table might not exist yet
       return [];
@@ -141,8 +148,8 @@ export class SkillsService {
   }
 
   /**
-   * Search for skills (automated retrieval)
-   * Returns the top result only if score >= 80%
+   * Search for skills (automated retrieval using example-based matching)
+   * Returns ALL entries where ANY example >= threshold
    */
   async search(query: string): Promise<SkillsSearchResult | null> {
     if (!this.initialized) {
@@ -154,43 +161,33 @@ export class SkillsService {
       return null;
     }
 
-    const result = await retrieve(
-      query,
-      entries,
-      SKILLS_PARAMS,
-      1, // Only get top result
-      this.messageHistory,
-      DEFAULT_HISTORY_DECAY
-    );
+    // Use example-based retrieval (only include matched entries for production)
+    const result = await retrieve(query, entries, SCORE_THRESHOLD, false);
+    
+    // Filter entries by minimum threshold
+    const matchingEntries = result.entries
+      .filter(scored => scored.matched && scored.score >= SCORE_THRESHOLD)
+      .map(scored => ({
+        content: scored.entry.content,
+        score: scored.score,
+        entry: scored.entry
+      }));
 
-    // Save to message history (after search)
-    await this.addToHistory(query, result);
-
-    const topEntry = result.entries[0];
-    if (!topEntry) {
+    if (matchingEntries.length === 0) {
       return null;
     }
 
-    console.log(topEntry.normalizedScore)
-    
-    // Only return if score meets threshold
-    if (topEntry.normalizedScore >= SCORE_THRESHOLD) {
-      return {
-        content: topEntry.entry.content,
-        score: topEntry.totalScore,
-        normalizedScore: topEntry.normalizedScore,
-        entry: topEntry.entry,
-      };
-    }
-
-    return null;
+    return {
+      entries: matchingEntries
+    };
   }
 
   /**
    * Manual search (for system.search tool)
-   * Always returns the top result, regardless of score
+   * Uses direct content comparison - embeds content and compares to query
+   * Returns top result regardless of score
    */
-  async manualSearch(query: string): Promise<SkillsSearchResult | null> {
+  async manualSearch(query: string): Promise<ManualSearchResult | null> {
     if (!this.initialized) {
       await this.initialize();
     }
@@ -200,35 +197,54 @@ export class SkillsService {
       return null;
     }
 
-    const result = await retrieve(
-      query,
-      entries,
-      SKILLS_PARAMS,
-      1,
-      this.messageHistory,
-      DEFAULT_HISTORY_DECAY
-    );
-
-    // Save to message history
-    await this.addToHistory(query, result);
-
-    const topEntry = result.entries[0];
-    if (!topEntry) {
+    // For manual search, compare query against the first example of each entry
+    // (as a simple approximation of content comparison)
+    const { cosineSimilarity } = await import('./embeddings.js');
+    const queryVector = await embed(query);
+    
+    const scored: Array<{ entry: SkillEntry; score: number }> = [];
+    
+    for (const entry of entries) {
+      if (entry.exampleVectors.length === 0) continue;
+      
+      // Use first example vector as proxy for content (simple approach)
+      const firstVector = entry.exampleVectors[0];
+      if (!firstVector) continue;
+      
+      const similarity = cosineSimilarity(queryVector, firstVector);
+      scored.push({ entry, score: similarity });
+    }
+    
+    if (scored.length === 0) {
+      return null;
+    }
+    
+    // Sort by score descending and return top result
+    scored.sort((a, b) => b.score - a.score);
+    const topResult = scored[0];
+    
+    if (!topResult) {
       return null;
     }
     
     return {
-      content: topEntry.entry.content,
-      score: topEntry.totalScore,
-      normalizedScore: topEntry.normalizedScore,
-      entry: topEntry.entry,
+      content: topResult.entry.content,
+      score: topResult.score,
+      entry: topResult.entry
     };
   }
 
   /**
    * Add a new entry to the knowledge base
+   * @param content - The skill/knowledge content
+   * @param examples - Array of example queries/requests when this entry should be retrieved (required)
+   * @param scoreThreshold - Optional similarity threshold (default: 0.8)
    */
-  async addEntry(content: string): Promise<{ success: boolean; id: string }> {
+  async addEntry(
+    content: string, 
+    examples: string[], 
+    scoreThreshold?: number
+  ): Promise<{ success: boolean; id: string }> {
     if (!this.initialized) {
       await this.initialize();
     }
@@ -237,13 +253,26 @@ export class SkillsService {
       throw new Error('SkillsService not initialized');
     }
 
-    const vector = await embed(content);
+    // Validate examples
+    if (!examples || examples.length === 0) {
+      throw new Error('At least one example is required');
+    }
+
+    // Embed all examples
+    const exampleVectors = await embedBatch(examples);
+    
+    if (exampleVectors.length !== examples.length) {
+      throw new Error('Failed to embed all examples');
+    }
+
     const id = uuidv4();
     
     const entry = {
       id,
       content,
-      vector,
+      examples: examples,  // Store as array
+      exampleVectorsJson: JSON.stringify(exampleVectors),  // Store vectors as JSON string
+      scoreThreshold: scoreThreshold ?? DEFAULT_SCORE_THRESHOLD,
       updatedAt: Date.now(),
     };
 
@@ -259,39 +288,24 @@ export class SkillsService {
   }
 
   /**
-   * Add query to message history (max 3 messages)
-   */
-  private async addToHistory(query: string, result: RetrievalResult): Promise<void> {
-    const queryVector = await embed(query);
-    
-    const message: MessageHistory = {
-      id: uuidv4(),
-      query,
-      queryVector,
-      extraction: result.extraction,
-      timestamp: Date.now(),
-    };
-
-    this.messageHistory.unshift(message);
-    
-    // Keep only last MAX_HISTORY_LENGTH messages
-    if (this.messageHistory.length > MAX_HISTORY_LENGTH) {
-      this.messageHistory = this.messageHistory.slice(0, MAX_HISTORY_LENGTH);
-    }
-  }
-
-  /**
-   * Clear message history
+   * Clear message history (deprecated - no longer used)
    */
   clearHistory(): void {
-    this.messageHistory = [];
+    // No-op: message history removed in new system
   }
 
   /**
-   * Get current message history length
+   * Get current message history length (deprecated - always returns 0)
    */
   getHistoryLength(): number {
-    return this.messageHistory.length;
+    return 0;  // Message history removed in new system
+  }
+
+  /**
+   * Clear pre-embedded words (deprecated - no longer used)
+   */
+  clearPreEmbeddedWords(): void {
+    // No-op: pre-embedding removed in new system
   }
 
   /**

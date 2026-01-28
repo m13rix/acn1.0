@@ -14,6 +14,8 @@ export interface TableInfo {
 export interface SkillEntry {
   id: string;
   content: string;
+  examples: string[];
+  scoreThreshold?: number;
   updatedAt: number;
   _distance?: number;
 }
@@ -65,12 +67,17 @@ export async function getEntries(tableName: string): Promise<SkillEntry[]> {
   return data.entries;
 }
 
-export async function addEntry(tableName: string, content: string): Promise<SkillEntry> {
+export async function addEntry(
+  tableName: string, 
+  content: string, 
+  examples: string[], 
+  scoreThreshold?: number
+): Promise<SkillEntry> {
   const data = await request<{ entry: SkillEntry }>(
     `/tables/${encodeURIComponent(tableName)}/entries`,
     {
       method: 'POST',
-      body: JSON.stringify({ content }),
+      body: JSON.stringify({ content, examples, scoreThreshold }),
     }
   );
   return data.entry;
@@ -79,13 +86,15 @@ export async function addEntry(tableName: string, content: string): Promise<Skil
 export async function updateEntry(
   tableName: string, 
   id: string, 
-  content: string
+  content: string,
+  examples: string[],
+  scoreThreshold?: number
 ): Promise<SkillEntry> {
   const data = await request<{ entry: SkillEntry }>(
     `/tables/${encodeURIComponent(tableName)}/entries/${encodeURIComponent(id)}`,
     {
       method: 'PUT',
-      body: JSON.stringify({ content }),
+      body: JSON.stringify({ content, examples, scoreThreshold }),
     }
   );
   return data.entry;
