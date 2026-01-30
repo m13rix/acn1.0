@@ -14,8 +14,5 @@ description: |
     Search the knowledge base using direct content comparison. Always returns the top result.
     Example: `const result = await skills.search("user preferences");`
   
-  - `skills.viewFiles(filePaths: string[]): Promise<{ success: boolean; filesRead: number; errors?: string[] }>`
-    Read files from the sandbox directory and add them to context as file messages. Files are read as base64 and added to the conversation context. Supports images, PDFs, videos, and other file types that the model supports.
-    Example: `const result = await skills.viewFiles(["./document.pdf", "./image.jpg"]);`
 
 module: index.ts

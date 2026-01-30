@@ -1,0 +1,77 @@
+# Пример конфигурации агента с кастомными API ключами и параметрами модели
+
+name: CustomAgent
+planner:
+  provider: gemini
+  model: models/gemini-flash-latest
+  system_prompt_file: planner_system.txt
+  temperature: 0.8
+  # Кастомный API ключ для этого агента (опционально)
+  apiKey: "your-custom-gemini-api-key-here"
+  # Дополнительные параметры для Gemini API
+  customParams:
+    maxOutputTokens: 8192
+    topP: 0.95
+    topK: 40
+    candidateCount: 1
+    safetySettings:
+      - category: "HARM_CATEGORY_HARASSMENT"
+        threshold: "BLOCK_MEDIUM_AND_ABOVE"
+      - category: "HARM_CATEGORY_HATE_SPEECH"
+        threshold: "BLOCK_MEDIUM_AND_ABOVE"
+
+executor:
+  provider: openrouter
+  model: anthropic/claude-3.5-sonnet
+  system_prompt_file: executor_system.txt
+  temperature: 0.7
+  # Кастомный API ключ для OpenRouter (опционально)
+  apiKey: "your-custom-openrouter-api-key-here"
+  # Дополнительные параметры для OpenRouter API
+  customParams:
+    max_tokens: 4096
+    top_p: 0.9
+    frequency_penalty: 0.1
+    presence_penalty: 0.1
+    # Дополнительные параметры для конкретной модели
+    extra_body:
+      transforms: ["middle-out"]
+      route: "fallback"
+
+# Пример конфигурации с Cerebras провайдером:
+# executor:
+#   provider: cerebras
+#   model: cerebras/llama-3.1-70b-instruct  # или другая модель Cerebras
+#   system_prompt_file: executor_system.txt
+#   temperature: 0.7
+#   apiKey: "your-cerebras-api-key-here"
+#   customParams:
+#     max_tokens: 4096
+#     top_p: 0.9
+#     frequency_penalty: 0.1
+#     presence_penalty: 0.1
+
+tools:
+  - memory
+  - search
+  - calendar
+
+# Задержка между вызовами агентов (в секундах)
+inter_agent_delay_seconds: 5
+
+# Список агентов, которых может вызывать этот агент
+callableAgents:
+  - "ExternalDataAnalyzer"
+  - "Analyzer"
+
+# === ЭКСПЕРИМЕНТАЛЬНЫЕ ФУНКЦИИ ===
+# Эти функции находятся в стадии разработки и могут измениться
+
+experimental:
+  # Gemini File Search - загрузка больших документов для RAG
+  # Работает ТОЛЬКО с провайдером gemini
+  # Файлы загружаются из папки ./context при инициализации агента
+  gemini_file_search:
+    enabled: false  # Включить/выключить функцию
+    # context_path: "./context"  # Путь к папке с документами (по умолчанию ./context)
+    # store_name: "my-documents"  # Кастомное имя для File Search Store

@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Контактная информация Telos Spark." />
+    <title>Контакты — Telos Spark</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="./css/style.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Перейти к содержимому</a>
+
+    <div class="bg" aria-hidden="true">
+      <div class="bg__orb bg__orb--top"></div>
+      <div class="bg__orb bg__orb--bottom"></div>
+      <div class="bg__radial"></div>
+      <div class="bg__grid"></div>
+    </div>
+
+    <header class="header">
+      <div class="container header__inner">
+        <a class="brand" href="./index.html" aria-label="Telos Spark — главная">
+          <span class="brand__mark" aria-hidden="true"></span>
+          <span class="brand__text">Telos Spark</span>
+        </a>
+
+        <button class="nav-toggle" type="button" data-nav-toggle aria-controls="site-nav" aria-expanded="false">
+          <span class="nav-toggle__icon" aria-hidden="true"></span>
+          <span class="sr-only">Открыть меню</span>
+        </button>
+
+        <nav id="site-nav" class="nav" aria-label="Основная навигация" data-nav>
+          <a class="nav__link" href="./index.html">Главная</a>
+          <a class="nav__link" href="./about.html">О сервисе</a>
+          <a class="nav__link" href="./offer.html">Оферта</a>
+          <a class="nav__link is-active" href="./contacts.html">Контакты</a>
+        </nav>
+      </div>
+    </header>
+
+    <main id="main">
+      <section class="section">
+        <div class="container">
+          <div class="section__head" data-reveal>
+            <h1 class="h1 h1--compact">Контактная информация</h1>
+            <p class="muted">Ниже указаны реквизиты и каналы связи, необходимые для требований платёжного сервиса.</p>
+          </div>
+
+          <div class="grid grid--2">
+            <div class="card" data-reveal>
+              <div class="card__title">Исполнитель</div>
+              <div class="kv">
+                <div class="kv__row">
+                  <div class="kv__k">ФИО</div>
+                  <div class="kv__v">Гильгенберг Максим Сергеевич</div>
+                </div>
+                <div class="kv__row">
+                  <div class="kv__k">Статус</div>
+                  <div class="kv__v">Самозанятый</div>
+                </div>
+                <div class="kv__row">
+                  <div class="kv__k">ИНН</div>
+                  <div class="kv__v">231010749846</div>
+                </div>
+                <div class="kv__row">
+                  <div class="kv__k">Email</div>
+                  <div class="kv__v"><a class="link" href="mailto:maximusgilgenberg@gmail.com">maximusgilgenberg@gmail.com</a></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="card" data-reveal data-reveal-delay="80">
+              <div class="card__title">Сервис</div>
+              <div class="kv">
+                <div class="kv__row">
+                  <div class="kv__k">Сервис</div>
+                  <div class="kv__v">Telos Spark</div>
+                </div>
+                <div class="kv__row">
+                  <div class="kv__k">Домен</div>
+                  <div class="kv__v">telos-ai.ru</div>
+                </div>
+                <div class="kv__row">
+                  <div class="kv__k">Документы</div>
+                  <div class="kv__v"><a class="link" href="./offer.html">Публичная оферта</a></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <div class="container footer__inner">
+        <div class="footer__left">
+          <div class="footer__brand">Telos Spark</div>
+          <div class="footer__muted">telos-ai.ru</div>
+        </div>
+        <div class="footer__right">
+          <a class="footer__link" href="./offer.html">Оферта</a>
+          <a class="footer__link" href="./contacts.html">Контакты</a>
+          <a class="footer__link" href="./about.html">О сервисе</a>
+        </div>
+      </div>
+    </footer>
+
+    <script src="./js/main.js"></script>
+  </body>
+</html>
+
+

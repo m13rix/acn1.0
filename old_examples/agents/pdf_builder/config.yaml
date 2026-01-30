@@ -1,0 +1,19 @@
+name: PdfBuilderAgent
+planner:
+  provider: openrouter
+  model: deepseek/deepseek-v3.2
+  system_prompt_file: planner_system.txt
+  temperature: 1
+executor:
+  provider: gemini
+  model: models/gemini-flash-latest
+  system_prompt_file: executor_system.txt
+  temperature: 1
+  model_switching:
+    mode: whitelist
+    whitelist: [ "google/gemini-2.5-flash", "openai/gpt-oss-120b", "deepseek/deepseek-v3.2", "google/gemini-2.5-pro", "google/gemini-3-pro-preview"]
+    selector:
+      provider: cerebras
+      model: gpt-oss-120b
+tools:
+  - pdfGen

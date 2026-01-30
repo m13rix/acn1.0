@@ -1,0 +1,19 @@
+name: ExternalDataAnalyzer
+planner:
+  provider: gemini
+  model: models/gemini-flash-latest
+  apiKey: "AIzaSyDZ8iPCHWpT7q9bg0i47NvhkrNgUSDGO4Y"
+  system_prompt_file: planner_system.txt
+  temperature: 1
+executor:
+  provider: gemini
+  model: models/gemini-flash-latest
+  system_prompt_file: executor_system.txt
+  temperature: 1
+  apiKey: "AIzaSyDZ8iPCHWpT7q9bg0i47NvhkrNgUSDGO4Y"
+tools:
+  - conversations
+  - calendar
+  - messenger
+  - notes
+inter_agent_delay_seconds: 60

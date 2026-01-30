@@ -121,11 +121,60 @@ export interface AgentConfig {
   syntax: string;        // syntax type name
   skillsTable?: string;  // Optional: LanceDB table name for this agent's skills
   sandbox?: string;      // Sandbox type: 'local' (default) or 'browser'
+
+  // Planner/Executor Architecture
+  planner?: PlannerConfig;
+  executor?: ExecutorConfig;
+}
+
+export interface PlannerConfig {
+  model: string;
+  provider?: string;
+  systemPrompt: string;
+  temperature?: number;
+  maxTokens?: number;
+  reasoning?: 'off' | 'low' | 'medium' | 'high';
+  toolsWhitelist?: string[]; // Optional: restrict tools available to planner
+  skillsTable?: string;      // Optional: enable skills for planner
+}
+
+export interface ExecutorConfig {
+  model: string;
+  provider?: string;
+  systemPrompt: string;      // Base system prompt (minimal)
+  temperature?: number;
+  maxTokens?: number;
+  reasoning?: 'off' | 'low' | 'medium' | 'high';
+  modelSwitching?: ModelSwitchingConfig; // Smart model switching config
+}
+
+export interface ModelSwitchingConfig {
+  registryPath: string;            // Path to models.json
+  embeddingIndexPath?: string;     // Path to embeddings.json
+  mode?: 'whitelist' | 'allow_all' | 'blacklist';
+  whitelist?: string[];
+  blacklist?: string[];
+  topK?: number;
+  overrides?: Record<string, any>;
+  defaultModelId?: string;         // Default model to start with
+  selector?: {
+    provider: string;
+    model: string;
+    temperature?: number;
+    systemPrompt?: string;
+    apiKey?: string;
+  };
+  embedding?: {
+    model?: string;
+    apiKey?: string;
+  };
 }
 
 export interface LoadedAgent {
   config: AgentConfig;
   systemPromptContent: string;
+  plannerSystemPromptContent?: string;
+  executorSystemPromptContent?: string;
   directory: string;
 }
 
@@ -162,6 +211,10 @@ export interface SyntaxType {
   // Check if tag exists (even incomplete)
   hasAction(text: string): boolean;
   hasCli(text: string): boolean;
+
+  // Check if tag is fully closed
+  isActionClosed(text: string): boolean;
+  isCliClosed(text: string): boolean;
 
   // Wrapping methods
   wrapThinking(content: string): string;

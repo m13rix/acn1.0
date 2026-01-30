@@ -1,0 +1,15 @@
+name: ValuesCheck
+planner:
+  provider: gemini
+  model: models/gemini-flash-latest
+  system_prompt_file: planner_system.txt
+  temperature: 1
+executor:
+  provider: gemini
+  model: models/gemini-flash-latest
+  system_prompt_file: executor_system.txt
+  temperature: 1
+tools:
+  - search
+  - memory
+inter_agent_delay_seconds: 60

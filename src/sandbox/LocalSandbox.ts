@@ -18,6 +18,8 @@ const PROJECT_ROOT = join(__dirname, '..', '..');
 
 // Path to the built-in skills tool
 const SKILLS_TOOL_PATH = join(PROJECT_ROOT, 'tools', 'skills', 'index.ts');
+// Path to the built-in files tool
+const FILES_TOOL_PATH = join(PROJECT_ROOT, 'tools', 'files', 'index.ts');
 
 export class LocalSandbox implements ISandbox {
     public readonly id: string;
@@ -214,7 +216,11 @@ The content of cli tags are shell commands executed in the sandbox directory.
     private generateExecutionFile(code: string): string {
         const importStatements: string[] = [];
 
-        // Always import the skills tool first (if skills are configured)
+        // Always import the files tool (built-in system tool)
+        const filesToolRelativePath = this.getRelativePath(FILES_TOOL_PATH);
+        importStatements.push(`import * as files from '${filesToolRelativePath}';`);
+
+        // Import the skills tool if configured
         if (this.skillsTable) {
             const skillsToolRelativePath = this.getRelativePath(SKILLS_TOOL_PATH);
             importStatements.push(`import * as skills from '${skillsToolRelativePath}';`);
@@ -222,8 +228,8 @@ The content of cli tags are shell commands executed in the sandbox directory.
 
         // Add user-configured tools
         for (const tool of this.tools) {
-            // Skip skills tool if it was explicitly added (we handle it above)
-            if (tool.config.name === 'skills') continue;
+            // Skip built-in tools if they were explicitly added in config
+            if (tool.config.name === 'skills' || tool.config.name === 'files') continue;
 
             const relativePath = this.getRelativePath(tool.absolutePath);
             importStatements.push(`import * as ${tool.config.name} from '${relativePath}';`);

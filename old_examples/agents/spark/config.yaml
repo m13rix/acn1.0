@@ -1,0 +1,29 @@
+name: Spark
+planner:
+  provider: openrouter
+  model: xiaomi/mimo-v2-flash:free
+  system_prompt_file: planner_system.txt
+  temperature: 0.6
+executor:
+  provider: openrouter
+  model: xiaomi/mimo-v2-flash
+  system_prompt_file: executor_system.txt
+  temperature: 0.6
+  model_switching:
+    mode: whitelist
+    whitelist: ["xiaomi/mimo-v2-flash", "x-ai/grok-4.1-fast", "z-ai/glm-4.6v"]
+    selector:
+      provider: openrouter
+      model: xiaomi/mimo-v2-flash
+tools:
+  - search
+agents:
+  - ResearchAgent
+inter_agent_delay_seconds: 60
+
+# === ЭКСПЕРИМЕНТАЛЬНЫЕ ФУНКЦИИ ===
+experimental:
+  # Gemini File Search - загрузка документов из ./context для RAG
+  # Модели gemini автоматически получат доступ к этим документам
+  gemini_file_search:
+    enabled: false  # Установите true для включения

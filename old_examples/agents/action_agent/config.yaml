@@ -1,0 +1,17 @@
+name: ActionAgent
+planner:
+  provider: cerebras
+  model: qwen-3-235b-a22b-instruct-2507
+  system_prompt_file: planner_system.txt
+  temperature: 1
+executor:
+  provider: cerebras
+  model: qwen-3-235b-a22b-instruct-2507
+  system_prompt_file: executor_system.txt
+  temperature: 1
+tools:
+  - calendar
+  - search
+  - os
+  - notes
+  - ui

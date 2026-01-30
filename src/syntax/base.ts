@@ -1,9 +1,9 @@
-  /**
- * Base syntax type interface and utilities
- * 
- * Syntax types define how agents express thinking, actions, and observations.
- * Each syntax type provides extraction, wrapping, and documentation.
- */
+/**
+* Base syntax type interface and utilities
+* 
+* Syntax types define how agents express thinking, actions, and observations.
+* Each syntax type provides extraction, wrapping, and documentation.
+*/
 
 import type { SyntaxType } from '../types/index.js';
 
@@ -12,30 +12,34 @@ import type { SyntaxType } from '../types/index.js';
  */
 export abstract class BaseSyntax implements SyntaxType {
   abstract name: string;
-  
+
   // Extraction methods - must handle incomplete/cut-off tags
   abstract getThinking(text: string): string | null;
   abstract getAction(text: string): string | null;
   abstract getObservation(text: string): string | null;
   abstract getCli(text: string): string | null;
   abstract getSkills(text: string): string | null;
-  
+
   // Check if tag exists
   abstract hasAction(text: string): boolean;
   abstract hasCli(text: string): boolean;
-  
+
+  // Check if tag is fully closed
+  abstract isActionClosed(text: string): boolean;
+  abstract isCliClosed(text: string): boolean;
+
   // Wrapping methods
   abstract wrapThinking(content: string): string;
   abstract wrapAction(content: string): string;
   abstract wrapObservation(content: string): string;
   abstract wrapCli(content: string): string;
   abstract wrapSkills(content: string): string;
-  
+
   // Optional: wrap multiple skill entries (default implementation wraps each separately)
   wrapSkillsMultiple(contents: string[]): string {
     return contents.map(content => this.wrapSkills(content)).join('\n');
   }
-  
+
   // Documentation for system prompt
   abstract getDescription(): string;
 }

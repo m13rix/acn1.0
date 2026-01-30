@@ -13,18 +13,33 @@ export class XMLTagsSyntax extends BaseSyntax {
   name = 'xml-tags';
 
   /**
+   * Remove thought blocks from text to avoid extracting tags from reasoning.
+   * Handles both closed <think>...</think> and unclosed <think>... at the end.
+   */
+  private stripThoughts(text: string): string {
+    // 1. Remove closed thought blocks
+    let cleaned = text.replace(/<(think|thought)>[\s\S]*?<\/(think|thought)>/gi, '');
+    // 2. Remove unclosed thought block if it's at the end (for streaming/cut-off responses)
+    cleaned = cleaned.replace(/<(think|thought)>[\s\S]*$/gi, '');
+    return cleaned;
+  }
+
+  /**
    * Extract content from a tag, handling incomplete/cut-off tags
    * @param text - The text to search
    * @param tagName - The tag name (without brackets)
    * @returns The content inside the tag, or null if not found
    */
   private extractTag(text: string, tagName: string): string | null {
+    const isThinkingTag = tagName === 'think' || tagName === 'thought';
+    const textToSearch = isThinkingTag ? text : this.stripThoughts(text);
+
     const openTag = `<${tagName}>`;
     const closeTag = `</${tagName}>`;
 
     // Pattern 1: Find all complete tags <tag>content</tag>
     const completePattern = new RegExp(`<${tagName}>([\\s\\S]*?)</${tagName}>`, 'gi');
-    const matches = Array.from(text.matchAll(completePattern));
+    const matches = Array.from(textToSearch.matchAll(completePattern));
 
     if (matches.length > 0) {
       // Return the content of the LAST complete tag
@@ -36,10 +51,10 @@ export class XMLTagsSyntax extends BaseSyntax {
 
     // Pattern 2: Incomplete tag (cut off by stop sequence) <tag>content
     // Search for the LAST occurrence of the opening tag
-    const lastOpenIndex = text.toLowerCase().lastIndexOf(openTag.toLowerCase());
+    const lastOpenIndex = textToSearch.toLowerCase().lastIndexOf(openTag.toLowerCase());
     if (lastOpenIndex !== -1) {
       // Ensure we don't return code if it was actually closed (should be handled by Pattern 1)
-      const contentAfterOpen = text.slice(lastOpenIndex + openTag.length);
+      const contentAfterOpen = textToSearch.slice(lastOpenIndex + openTag.length);
       const closeTagIndex = contentAfterOpen.toLowerCase().indexOf(closeTag.toLowerCase());
 
       if (closeTagIndex === -1) {
@@ -54,8 +69,28 @@ export class XMLTagsSyntax extends BaseSyntax {
    * Check if a tag opening exists in the text
    */
   private hasTag(text: string, tagName: string): boolean {
+    const isThinkingTag = tagName === 'think' || tagName === 'thought';
+    const textToSearch = isThinkingTag ? text : this.stripThoughts(text);
+
     const pattern = new RegExp(`<${tagName}>`, 'i');
-    return pattern.test(text);
+    return pattern.test(textToSearch);
+  }
+
+  /**
+   * Check if a tag is fully closed
+   */
+  private isTagClosed(text: string, tagName: string): boolean {
+    const isThinkingTag = tagName === 'think' || tagName === 'thought';
+    const textToSearch = isThinkingTag ? text : this.stripThoughts(text);
+
+    const openTag = `<${tagName}>`;
+    const closeTag = `</${tagName}>`;
+
+    const lastOpenIndex = textToSearch.toLowerCase().lastIndexOf(openTag.toLowerCase());
+    if (lastOpenIndex === -1) return false;
+
+    const lastCloseIndex = textToSearch.toLowerCase().lastIndexOf(closeTag.toLowerCase());
+    return lastCloseIndex > lastOpenIndex;
   }
 
   getThinking(text: string): string | null {
@@ -84,6 +119,14 @@ export class XMLTagsSyntax extends BaseSyntax {
 
   hasCli(text: string): boolean {
     return this.hasTag(text, 'cli');
+  }
+
+  isActionClosed(text: string): boolean {
+    return this.isTagClosed(text, 'action');
+  }
+
+  isCliClosed(text: string): boolean {
+    return this.isTagClosed(text, 'cli');
   }
 
   wrapThinking(content: string): string {

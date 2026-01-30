@@ -1,0 +1,780 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 2%;
+    --foreground: 0 0% 100%;
+
+    /* Safe Area Insets for Mobile */
+    --sab: env(safe-area-inset-bottom);
+    --sat: env(safe-area-inset-top);
+    --sal: env(safe-area-inset-left);
+    --sar: env(safe-area-inset-right);
+  }
+
+  @layer base {
+    * {
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    body {
+      @apply bg-background text-foreground antialiased;
+      font-feature-settings: "rlig" 1, "calt" 1;
+      overscroll-behavior-y: none; /* Prevent pull-to-refresh on mobile if needed */
+    }
+  }
+
+  @layer utilities {
+    .pb-safe {
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+
+    .pt-safe {
+      padding-top: env(safe-area-inset-top);
+    }
+
+    .min-h-screen-safe {
+      min-height: calc(100vh - env(safe-area-inset-bottom) - env(safe-area-inset-top));
+    }
+
+    .touch-none {
+      touch-action: none;
+    }
+
+    .touch-pan-y {
+      touch-action: pan-y;
+    }
+  }
+
+  /* Reduced Motion Optimization */
+  @media (prefers-reduced-motion: reduce) {
+    *, ::before, ::after {
+      animation-delay: -1ms !important;
+      animation-duration: 1ms !important;
+      animation-iteration-count: 1 !important;
+      background-attachment: initial !important;
+      scroll-behavior: auto !important;
+      transition-duration: 0s !important;
+      transition-delay: 0s !important;
+    }
+  }
+
+  /* Custom scrollbar */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: #333;
+    border-radius: 3px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: #555;
+  }
+
+  .glass-panel {
+    background: rgba(10, 10, 10, 0.7);
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  /* ===============================================
+     MARKDOWN PROSE STYLES - Premium Dark Theme
+     =============================================== */
+  .markdown-prose {
+    font-size: 0.9375rem;
+    line-height: 1.75;
+    color: #d4d4d8;
+  }
+
+  /* Remove whitespace preservation that causes issues (except for code and KaTeX) */
+  .markdown-prose > *:not(pre):not(.katex-display),
+  .markdown-prose p,
+  .markdown-prose li,
+  .markdown-prose blockquote {
+    white-space: normal;
+  }
+
+  /* === HEADINGS === */
+  .markdown-prose h1 {
+    font-size: 1.75rem;
+    font-weight: 700;
+    color: #fff;
+    margin-top: 1.5rem;
+    margin-bottom: 0.75rem;
+    letter-spacing: -0.025em;
+    line-height: 1.3;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    padding-bottom: 0.5rem;
+  }
+
+  .markdown-prose h2 {
+    font-size: 1.35rem;
+    font-weight: 600;
+    color: #fff;
+    margin-top: 1.5rem;
+    margin-bottom: 0.625rem;
+    letter-spacing: -0.02em;
+    line-height: 1.35;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .markdown-prose h2::before {
+    content: '';
+    display: inline-block;
+    width: 3px;
+    height: 1.25rem;
+    background: linear-gradient(180deg, #60a5fa, #a78bfa);
+    border-radius: 2px;
+  }
+
+  .markdown-prose h3 {
+    font-size: 1.125rem;
+    font-weight: 600;
+    color: #fafafa;
+    margin-top: 1.25rem;
+    margin-bottom: 0.5rem;
+    letter-spacing: -0.01em;
+  }
+
+  .markdown-prose h4,
+  .markdown-prose h5,
+  .markdown-prose h6 {
+    font-size: 1rem;
+    font-weight: 600;
+    color: #e4e4e7;
+    margin-top: 1rem;
+    margin-bottom: 0.375rem;
+  }
+
+  /* First heading shouldn't have top margin */
+  .markdown-prose > h1:first-child,
+  .markdown-prose > h2:first-child,
+  .markdown-prose > h3:first-child {
+    margin-top: 0;
+  }
+
+  /* === PARAGRAPHS === */
+  .markdown-prose p {
+    margin-top: 0;
+    margin-bottom: 0.875rem;
+    word-wrap: break-word;
+  }
+
+  .markdown-prose p:last-child {
+    margin-bottom: 0;
+  }
+
+  /* === LINKS === */
+  .markdown-prose a {
+    color: #60a5fa;
+    text-decoration: none;
+    font-weight: 500;
+    transition: all 0.15s ease;
+    border-bottom: 1px solid transparent;
+  }
+
+  .markdown-prose a:hover {
+    color: #93c5fd;
+    border-bottom-color: #60a5fa;
+  }
+
+  /* === BOLD & ITALIC === */
+  .markdown-prose strong {
+    color: #fff;
+    font-weight: 600;
+  }
+
+  .markdown-prose em {
+    color: #a1a1aa;
+    font-style: italic;
+  }
+
+  /* === LISTS === */
+  .markdown-prose ul,
+  .markdown-prose ol {
+    margin-top: 0.5rem;
+    margin-bottom: 0.875rem;
+    padding-left: 1.25rem;
+  }
+
+  .markdown-prose li {
+    margin-bottom: 0.375rem;
+    padding-left: 0.25rem;
+  }
+
+  .markdown-prose li::marker {
+    color: #71717a;
+  }
+
+  .markdown-prose ul li::marker {
+    content: '▸ ';
+    color: #52525b;
+  }
+
+  .markdown-prose ol li::marker {
+    font-weight: 500;
+    color: #a1a1aa;
+  }
+
+  .markdown-prose li > p {
+    margin-bottom: 0.25rem;
+  }
+
+  /* Nested lists */
+  .markdown-prose li > ul,
+  .markdown-prose li > ol {
+    margin-top: 0.375rem;
+    margin-bottom: 0.375rem;
+  }
+
+  /* === BLOCKQUOTES === */
+  .markdown-prose blockquote {
+    margin: 1rem 0;
+    padding: 0.875rem 1.25rem;
+    border-left: 3px solid;
+    border-image: linear-gradient(180deg, #60a5fa, #a78bfa) 1;
+    background: linear-gradient(90deg, rgba(96, 165, 250, 0.08), transparent);
+    border-radius: 0 0.5rem 0.5rem 0;
+    color: #a1a1aa;
+    font-style: italic;
+  }
+
+  .markdown-prose blockquote p {
+    margin: 0;
+  }
+
+  .markdown-prose blockquote p:not(:last-child) {
+    margin-bottom: 0.5rem;
+  }
+
+  /* === INLINE CODE === */
+  .markdown-prose code:not(pre code) {
+    background: rgba(167, 139, 250, 0.12);
+    color: #e879f9;
+    padding: 0.15rem 0.4rem;
+    border-radius: 0.375rem;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 0.85em;
+    font-weight: 500;
+    border: 1px solid rgba(167, 139, 250, 0.15);
+  }
+
+  /* === CODE BLOCKS === */
+  .markdown-prose pre {
+    margin: 1rem 0;
+    padding: 1rem 1.25rem;
+    background: #0a0a0a;
+    border-radius: 0.75rem;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    overflow-x: auto;
+    position: relative;
+  }
+
+  .markdown-prose pre::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, #60a5fa, #a78bfa, #f472b6);
+    border-radius: 0.75rem 0.75rem 0 0;
+    opacity: 0.6;
+  }
+
+  .markdown-prose pre code {
+    background: transparent;
+    padding: 0;
+    border: none;
+    color: #d4d4d8;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 0.8125rem;
+    line-height: 1.7;
+    white-space: pre;
+    display: block;
+  }
+
+  /* === HORIZONTAL RULES === */
+  .markdown-prose hr {
+    margin: 1.5rem 0;
+    border: none;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.1), transparent);
+  }
+
+  /* === TABLES === */
+  .markdown-prose table {
+    width: 100%;
+    margin: 1rem 0;
+    border-collapse: collapse;
+    font-size: 0.875rem;
+    border-radius: 0.5rem;
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  .markdown-prose th {
+    background: rgba(255, 255, 255, 0.05);
+    color: #fff;
+    font-weight: 600;
+    text-align: left;
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  .markdown-prose td {
+    padding: 0.625rem 1rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  }
+
+  .markdown-prose tr:last-child td {
+    border-bottom: none;
+  }
+
+  .markdown-prose tr:hover td {
+    background: rgba(255, 255, 255, 0.02);
+  }
+
+  /* === IMAGES === */
+  .markdown-prose img {
+    max-width: 100%;
+    height: auto;
+    border-radius: 0.75rem;
+    margin: 1rem 0;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  /* === TASK LISTS (GFM) === */
+  .markdown-prose input[type="checkbox"] {
+    appearance: none;
+    width: 1rem;
+    height: 1rem;
+    border: 1.5px solid #52525b;
+    border-radius: 0.25rem;
+    margin-right: 0.5rem;
+    vertical-align: middle;
+    position: relative;
+    top: -1px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .markdown-prose input[type="checkbox"]:checked {
+    background: linear-gradient(135deg, #60a5fa, #a78bfa);
+    border-color: transparent;
+  }
+
+  .markdown-prose input[type="checkbox"]:checked::after {
+    content: '✓';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    color: #fff;
+    font-size: 0.625rem;
+    font-weight: bold;
+  }
+
+  /* === STRIKETHROUGH === */
+  .markdown-prose del {
+    color: #71717a;
+    text-decoration: line-through;
+    text-decoration-color: #52525b;
+  }
+
+  /* === FOOTNOTES === */
+  .markdown-prose sup {
+    font-size: 0.75em;
+    color: #60a5fa;
+  }
+
+  /* === DEFINITION LISTS === */
+  .markdown-prose dl {
+    margin: 1rem 0;
+  }
+
+  .markdown-prose dt {
+    font-weight: 600;
+    color: #fff;
+    margin-top: 0.75rem;
+  }
+
+  .markdown-prose dd {
+    margin-left: 1.5rem;
+    color: #a1a1aa;
+  }
+
+  /* === KEYBOARD SHORTCUTS === */
+  .markdown-prose kbd {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 0.375rem;
+    padding: 0.125rem 0.5rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.8em;
+    color: #e4e4e7;
+    box-shadow: 0 2px 0 rgba(0, 0, 0, 0.3);
+  }
+
+  /* === ABBR === */
+  .markdown-prose abbr {
+    text-decoration: underline dotted;
+    cursor: help;
+  }
+
+  /* === SMOOTH ANIMATIONS (exclude KaTeX for performance) === */
+  .markdown-prose > *:not(.katex-display),
+  .markdown-prose p,
+  .markdown-prose li,
+  .markdown-prose a,
+  .markdown-prose code:not(.katex *),
+  .markdown-prose blockquote {
+    transition: color 0.15s ease, background-color 0.15s ease;
+  }
+
+  /* ===============================================
+     KATEX MATH STYLES - Premium Dark Theme
+     =============================================== */
+  /* CRITICAL: Reset all layout-affecting properties for KaTeX elements.
+     Inheritance of line-height and white-space breaks the internal layout of formulas. */
+  .markdown-prose .katex,
+  .markdown-prose .katex * {
+    white-space: nowrap !important;
+    line-height: normal !important;
+    text-indent: 0 !important;
+    transition: none !important;
+    border-color: currentColor; /* Restore border for fraction lines */
+  }
+
+  /* Inline math - $...$ */
+  .markdown-prose .katex {
+    color: #f0abfc;
+    font-size: 1.05em;
+  }
+
+  /* Math display block - $$...$$ */
+  .markdown-prose .katex-display {
+    margin: 1.25rem 0;
+    padding: 1.25rem 1.5rem;
+    background: linear-gradient(135deg, rgba(168, 85, 247, 0.08), rgba(96, 165, 250, 0.08));
+    border-radius: 0.75rem;
+    border: 1px solid rgba(168, 85, 247, 0.15);
+    overflow-x: auto;
+    position: relative;
+    /* Allow container to scroll but keep internals safe */
+    white-space: normal !important;
+    text-align: center;
+  }
+
+  /* Ensure the internal math container inside display block is reset */
+  .markdown-prose .katex-display > .katex {
+    white-space: nowrap !important;
+    text-align: initial;
+  }
+
+  /* Gradient accent line on top */
+  .markdown-prose .katex-display::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, #a855f7, #60a5fa, #f472b6);
+    border-radius: 0.75rem 0.75rem 0 0;
+    opacity: 0.7;
+  }
+
+  .markdown-prose .katex-display > .katex {
+    color: #e9d5ff;
+    font-size: 1.1em;
+  }
+
+  /* KaTeX specific color overrides for dark theme */
+  .markdown-prose .katex .mord,
+  .markdown-prose .katex .minner,
+  .markdown-prose .katex .mopen,
+  .markdown-prose .katex .mclose,
+  .markdown-prose .katex .mpunct,
+  .markdown-prose .katex .mrel,
+  .markdown-prose .katex .mbin,
+  .markdown-prose .katex .mop {
+    color: inherit;
+  }
+
+  /* Fractions */
+  .markdown-prose .katex .frac-line {
+    border-bottom-color: #c4b5fd;
+  }
+
+  /* Sqrt line */
+  .markdown-prose .katex .sqrt-line {
+    border-bottom-color: #c4b5fd;
+  }
+
+  /* Accents */
+  .markdown-prose .katex .accent > .vlist > span > span {
+    color: #f0abfc;
+  }
+
+  /* Matrix brackets */
+  .markdown-prose .katex .mopen.delimcenter,
+  .markdown-prose .katex .mclose.delimcenter {
+    color: #a78bfa;
+  }
+
+  /* Large delimiters */
+  .markdown-prose .katex .delimsizing {
+    color: #a78bfa;
+  }
+
+  /* Operator styling */
+  .markdown-prose .katex .mop {
+    color: #93c5fd;
+  }
+
+  /* Greek letters emphasis */
+  .markdown-prose .katex .mathnormal {
+    color: #f0abfc;
+  }
+
+  /* Numbers in math */
+  .markdown-prose .katex .mord.text {
+    color: #fde68a;
+  }
+
+  /* Scrollbar for overflow math */
+  .markdown-prose .katex-display::-webkit-scrollbar {
+    height: 4px;
+  }
+
+  .markdown-prose .katex-display::-webkit-scrollbar-track {
+    background: rgba(168, 85, 247, 0.1);
+    border-radius: 2px;
+  }
+
+  .markdown-prose .katex-display::-webkit-scrollbar-thumb {
+    background: rgba(168, 85, 247, 0.3);
+    border-radius: 2px;
+  }
+
+  .markdown-prose .katex-display::-webkit-scrollbar-thumb:hover {
+    background: rgba(168, 85, 247, 0.5);
+  }
+
+  /* Error styling */
+  .markdown-prose .katex-error {
+    color: #f87171;
+    background: rgba(248, 113, 113, 0.1);
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.25rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.85em;
+  }
+
+  /* ===============================================
+     CHAIN-OF-THOUGHT REASONING STYLES
+     =============================================== */
+  /* Custom scrollbar for reasoning panel */
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background: rgba(113, 113, 122, 0.2);
+    border-radius: 2px;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: rgba(113, 113, 122, 0.4);
+  }
+
+  /* 3D Drum scroll effect - perspective and transform */
+  .reasoning-drum-scroll {
+    scroll-behavior: smooth;
+  }
+
+  /* Reasoning content styles */
+  .reasoning-content {
+    position: relative;
+  }
+
+  /* Removed text shadow for cleaner look */
+  /* Animated streaming cursor */
+  @keyframes blink {
+    0%, 50% {
+      opacity: 1;
+    }
+    51%, 100% {
+      opacity: 0;
+    }
+  }
+
+  .reasoning-content .streaming-cursor {
+    animation: blink 1s infinite;
+  }
+
+  /* Removed glow effect for cleaner look */
+  /* ===============================================
+     TOOL CUSTOM UI STYLES
+     =============================================== */
+  /* Tool UI Container */
+  .tool-ui-container {
+    position: relative;
+    border-radius: 12px;
+    overflow: hidden;
+    background: rgba(6, 182, 212, 0.02);
+    border: 1px solid rgba(6, 182, 212, 0.1);
+  }
+
+  /* Tool UI iframe */
+  .tool-ui-container iframe {
+    display: block;
+    border: none;
+    background: transparent;
+  }
+
+  /* Navigation arrows for multiple UIs */
+  .tool-ui-nav-arrow {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(24, 24, 27, 0.9);
+    backdrop-filter: blur(8px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: white;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    z-index: 20;
+  }
+
+  .tool-ui-nav-arrow:hover:not(:disabled) {
+    background: rgba(39, 39, 42, 0.95);
+    border-color: rgba(255, 255, 255, 0.2);
+    transform: translateY(-50%) scale(1.05);
+  }
+
+  .tool-ui-nav-arrow:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+  }
+
+  .tool-ui-nav-arrow.left {
+    left: 8px;
+  }
+
+  .tool-ui-nav-arrow.right {
+    right: 8px;
+  }
+
+  /* Dot indicators */
+  .tool-ui-dots {
+    position: absolute;
+    bottom: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 6px;
+    z-index: 20;
+  }
+
+  .tool-ui-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: rgba(113, 113, 122, 0.5);
+    transition: all 0.2s ease;
+    cursor: pointer;
+  }
+
+  .tool-ui-dot:hover {
+    background: rgba(113, 113, 122, 0.8);
+  }
+
+  .tool-ui-dot.active {
+    width: 16px;
+    border-radius: 3px;
+    background: #06b6d4;
+  }
+
+  /* Tool UI Gradient accent line */
+  .tool-ui-accent-line {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, #06b6d4, #22d3ee, #67e8f9);
+    opacity: 0.7;
+    border-radius: 12px 12px 0 0;
+  }
+
+  /* Tool UI Loading state */
+  .tool-ui-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100px;
+    color: #71717a;
+    font-size: 13px;
+  }
+
+  .tool-ui-loading .spinner {
+    width: 16px;
+    height: 16px;
+    border: 2px solid rgba(6, 182, 212, 0.2);
+    border-top-color: #06b6d4;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin-right: 10px;
+  }
+
+  /* Pulse animation for active indicators */
+  @keyframes pulse {
+    0%, 100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.5;
+    }
+  }
+
+  @keyframes gradient {
+    0% {
+      background-position: 0% 50%;
+    }
+    50% {
+      background-position: 100% 50%;
+    }
+    100% {
+      background-position: 0% 50%;
+    }
+  }
+
+  .animate-gradient {
+    background-size: 200% auto;
+    animation: gradient 4s linear infinite;
+  }
+}

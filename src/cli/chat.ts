@@ -4,16 +4,17 @@
  */
 
 // Load .env file first, before any other imports
-import {config} from 'dotenv';
+import { config } from 'dotenv';
 import * as readline from 'node:readline';
 import chalk from 'chalk';
-import {AgentLoader} from '../loaders/AgentLoader.js';
-import {ToolLoader} from '../loaders/ToolLoader.js';
-import {Session} from '../core/Session.js';
-import {Executor} from '../core/Executor.js';
-import {getProvider} from '../providers/base.js';
-import {getSyntax} from '../syntax/base.js';
-import {getLoop} from '../loops/base.js';
+import { AgentLoader } from '../loaders/AgentLoader.js';
+import { ToolLoader } from '../loaders/ToolLoader.js';
+import { Session } from '../core/Session.js';
+import { Executor } from '../core/Executor.js';
+import { PlannerExecutor } from '../core/PlannerExecutor.js';
+import { getProvider } from '../providers/base.js';
+import { getSyntax } from '../syntax/base.js';
+import { getLoop } from '../loops/base.js';
 
 // Import to register all modules
 import '../providers/index.js';
@@ -100,17 +101,45 @@ async function selectAgent(): Promise<string> {
 async function createSession(agentName: string): Promise<Session> {
   console.log(COLORS.muted(`Loading agent "${agentName}"...`));
 
-  const agent = await agentLoader.loadByName(agentName);
-  if (!agent) {
+  const originalAgent = await agentLoader.loadByName(agentName);
+  if (!originalAgent) {
     throw new Error(`Agent "${agentName}" not found`);
   }
 
+  // Handle Dual-Layer Agent Prompt Swapping
+  // If this is a planner agent, the main session should use the Planner's system prompt
+  let agent = originalAgent;
+  if (originalAgent.config.planner && originalAgent.plannerSystemPromptContent) {
+    // Clone and swap prompt
+    agent = {
+      ...originalAgent,
+      systemPromptContent: originalAgent.plannerSystemPromptContent
+    };
+    // Provide planner specific model if needed
+    // agent.config.model is used by Session for provider config.
+    // If planner has its own model, we should update it here or Session will use base model.
+    if (originalAgent.config.planner.model) {
+      agent.config = { ...agent.config, model: originalAgent.config.planner.model };
+    }
+  }
+
   // Load components
-  const providerName = agent.config.provider || 'gemini';
+  const providerName = agent.config.provider || (agent.config.planner ? agent.config.planner.provider : undefined) || 'gemini';
   const provider = getProvider(providerName);
   const syntax = getSyntax(agent.config.syntax);
   const loop = getLoop(agent.config.loop);
-  const tools = await toolLoader.loadByNames(agent.config.tools);
+  const toolNames = [...(agent.config.tools || [])];
+  // Always include system tools
+  if (!toolNames.includes('files')) toolNames.push('files');
+  // Include planner tool if this is a planner agent
+  if (agent.config.planner && !toolNames.includes('plan')) {
+    toolNames.push('plan');
+  }
+  if (agent.config.skillsTable && !toolNames.includes('skills')) {
+    toolNames.push('skills');
+  }
+
+  const tools = await toolLoader.loadByNames(toolNames);
 
   console.log(COLORS.muted(`Provider: ${providerName} | Tools: ${tools.map(t => t.config.name).join(', ') || 'none'}`));
 
@@ -218,12 +247,12 @@ async function runChat(session: Session): Promise<void> {
   let currentWord = '';
   let embeddedWordCount = 0;
 
-  const executor = new Executor(session, {
+  const executorOptions = {
     maxIterations: 10,
     stream: enableStreaming,
     callbacks: {
       // Streaming callbacks
-      onReasoningDelta: (delta) => {
+      onReasoningDelta: (delta: string) => {
         if (!enableStreaming) return;
         display.startReasoning();
         display.writeReasoning(delta);
@@ -232,7 +261,7 @@ async function runChat(session: Session): Promise<void> {
         if (!enableStreaming) return;
         display.endReasoning();
       },
-      onTextDelta: (delta) => {
+      onTextDelta: (delta: string) => {
         if (!enableStreaming) return;
         display.startText();
         display.writeText(delta);
@@ -243,32 +272,32 @@ async function runChat(session: Session): Promise<void> {
       },
 
       // Skills callbacks
-      onSkillsRetrieved: (content, score) => {
+      onSkillsRetrieved: (content: string, score: number) => {
         console.log(COLORS.skills(`\n${SYMBOLS.skills} Skills retrieved (${(score * 100).toFixed(0)}% match)`));
         const preview = content.length > 80 ? content.slice(0, 80) + '...' : content;
         console.log(COLORS.muted(`  ${preview}`));
       },
-      onSkillsSearched: (topScore) => {
+      onSkillsSearched: (topScore: number | null) => {
         if (debugMode && topScore !== null) {
           console.log(COLORS.muted(`\n  Skills: top score ${(topScore * 100).toFixed(0)}% (below 80% threshold)`));
         }
       },
 
       // Executor lifecycle callbacks
-      onThinking: (content) => {
+      onThinking: (content: string) => {
         // Only used in non-streaming mode
         if (!enableStreaming) {
           console.log(COLORS.reasoning(`\n${SYMBOLS.thinking} Thinking...`));
           console.log(COLORS.muted(content));
         }
       },
-      onAction: (code) => {
+      onAction: (code: string) => {
         display.showAction(code);
       },
-      onObservation: (output) => {
+      onObservation: (output: string) => {
         display.showObservation(output);
       },
-      onBeforeProviderCall: (messages, config, actualRequest) => {
+      onBeforeProviderCall: (messages: any[], config: any, actualRequest: any) => {
         if (debugMode) {
           console.log(COLORS.muted('\n─── DEBUG ───────────────────────────────────'));
           if (actualRequest) {
@@ -282,7 +311,15 @@ async function runChat(session: Session): Promise<void> {
         display.reset();
       },
     },
-  });
+  };
+
+  let executor: Executor | PlannerExecutor;
+  if (session.agent.config.planner) {
+    executor = new PlannerExecutor(session, executorOptions);
+    console.log(COLORS.secondary('Using Planner/Executor Architecture'));
+  } else {
+    executor = new Executor(session, executorOptions);
+  }
 
   /**
    * Pre-embed a word in real-time (DEPRECATED - no longer used in example-based system)
