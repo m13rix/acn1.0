@@ -1,0 +1,22 @@
+name: scriptwriter
+description: Creates high-quality video scripts for educational documentaries (Remotion-based). Outputs structured shot-by-shot scenarios.
+
+model: moonshotai/kimi-k2.5
+provider: openrouter
+
+systemPrompt: prompts/system.md
+
+modelSwitching:
+  whitelist:
+    - x-ai/grok-4.1-fast
+    - deepseek/deepseek-v3.2
+  selector:
+    model: openai/gpt-oss-20b
+    provider: openrouter
+
+tools:
+  - search
+
+loop: message-passthrough
+syntax: markdown
+skillsTable: scriptwriter

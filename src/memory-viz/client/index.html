@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ACN Core Memory</title>
+    <link rel="stylesheet" href="styles/main.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+</head>
+<body>
+    <div id="universe"></div>
+    
+    <div class="hud">
+        <header>
+            <h1>ACN MEMORY CORE</h1>
+            <div class="stats">
+                <span id="fact-count">0 FACTS</span>
+                <span class="separator">|</span>
+                <span id="link-count">0 LINKS</span>
+            </div>
+        </header>
+
+        <div class="controls">
+            <div class="control-group">
+                <label>Search</label>
+                <input type="text" id="search-input" placeholder="Query memory...">
+            </div>
+            <div class="control-group">
+                <label>Simulation</label>
+                <button id="toggle-sim">Pause</button>
+            </div>
+             <div class="control-group">
+                <label>Visuals</label>
+                <label class="toggle">
+                    <input type="checkbox" id="show-labels" checked>
+                    <span>Labels</span>
+                </label>
+            </div>
+        </div>
+    </div>
+
+    <div id="tooltip" class="tooltip hidden"></div>
+
+    <script type="module" src="app.js"></script>
+</body>
+</html>

@@ -24,6 +24,9 @@ export class PassthroughReminderLoop extends BaseLoop {
                 actionCode: null,
                 hasCli: false,
                 cliCommand: null,
+                filesToWrite: [],
+                diffs: [],
+                edits: [],
                 fullResponse: response,
             };
         }
@@ -37,6 +40,9 @@ export class PassthroughReminderLoop extends BaseLoop {
             actionCode,
             hasCli,
             cliCommand,
+            filesToWrite: [],
+            diffs: [],
+            edits: [],
             fullResponse: response,
         };
     }

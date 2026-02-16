@@ -38,6 +38,22 @@ export abstract class BaseLoop implements LoopType {
   shouldCommitMessagesAfterAction(): boolean {
     return false;
   }
+
+  /**
+   * Default implementation: syntax-aware loops.
+   * provider-native loops can override and return false.
+   */
+  usesSyntax(): boolean {
+    return true;
+  }
+
+  /**
+   * Default implementation: loop does not own provider round-trips.
+   * Executor will use legacy syntax-driven path.
+   */
+  async run(_context: any): Promise<string | null> {
+    return null;
+  }
 }
 
 /**

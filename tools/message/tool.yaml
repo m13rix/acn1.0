@@ -1,0 +1,24 @@
+name: message
+description: |
+  Messaging tool to interact with the user via Telegram.
+  
+  Available functions:
+  
+  - `message.ask(question: string): Promise<string>`
+    Sends a question to the user (bot owner) and waits for a text or voice response.
+    Voice responses are automatically transcribed.
+    Example: `const answer = await message.ask("What is your plan for today?");`
+
+  - `message.sendText(text: string): Promise<void>`
+    Sends a simple text message to the user without waiting for a response.
+    Example: `await message.sendText("Task completed successfully.");`
+
+  - `message.sendFiles(files: string[]): Promise<void>`
+    Sends files (documents or photos) to the user.
+    Example: `await message.sendFiles(["./report.pdf", "./image.png"]);`
+
+  - `message.sendVoice(text: string, voiceName?: string): Promise<void>`
+    Sends a voice message to the user using Gemini TTS.
+    Example: `await message.sendVoice("Hello, how are you?", "Orus");`
+
+module: index.ts

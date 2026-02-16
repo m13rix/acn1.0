@@ -11,10 +11,15 @@ import { AgentLoader } from '../loaders/AgentLoader.js';
 import { ToolLoader } from '../loaders/ToolLoader.js';
 import { Session } from '../core/Session.js';
 import { Executor } from '../core/Executor.js';
-import { PlannerExecutor } from '../core/PlannerExecutor.js';
 import { getProvider } from '../providers/base.js';
 import { getSyntax } from '../syntax/base.js';
+
 import { getLoop } from '../loops/base.js';
+import { TelegramService } from '../services/TelegramService.js';
+import { HeartbeatService } from '../heartbeat/HeartbeatService.js';
+import { COLORS, SYMBOLS, StreamDisplay } from './display.js';
+import { runWithAgentContext } from '../core/AgentContext.js';
+import { setGlobalDisplay } from '../core/GlobalDisplay.js';
 
 // Import to register all modules
 import '../providers/index.js';
@@ -32,30 +37,7 @@ const enableStreaming = !disableStreaming;
 let debugMode = false;
 
 // UI Constants
-const COLORS = {
-  primary: chalk.hex('#7C3AED'),    // Purple
-  secondary: chalk.hex('#10B981'),   // Emerald
-  muted: chalk.hex('#6B7280'),       // Gray
-  reasoning: chalk.hex('#F59E0B'),   // Amber
-  action: chalk.hex('#3B82F6'),      // Blue
-  observation: chalk.hex('#06B6D4'), // Cyan
-  error: chalk.hex('#EF4444'),       // Red
-  text: chalk.hex('#E5E7EB'),        // Light gray
-  skills: chalk.hex('#8B5CF6'),      // Purple for skills
-  embed: chalk.hex('#10B981'),       // Green for embedding
-};
 
-const SYMBOLS = {
-  thinking: '◐',
-  streaming: '▸',
-  complete: '●',
-  action: '⚡',
-  observation: '◆',
-  user: '›',
-  assistant: '◀',
-  skills: '🔮',
-  embed: '⚡',
-};
 
 async function selectAgent(): Promise<string> {
   const agents = await agentLoader.getAvailableAgents();
@@ -101,47 +83,26 @@ async function selectAgent(): Promise<string> {
 async function createSession(agentName: string): Promise<Session> {
   console.log(COLORS.muted(`Loading agent "${agentName}"...`));
 
-  const originalAgent = await agentLoader.loadByName(agentName);
-  if (!originalAgent) {
+  const agent = await agentLoader.loadByName(agentName);
+  if (!agent) {
     throw new Error(`Agent "${agentName}" not found`);
   }
 
-  // Handle Dual-Layer Agent Prompt Swapping
-  // If this is a planner agent, the main session should use the Planner's system prompt
-  let agent = originalAgent;
-  if (originalAgent.config.planner && originalAgent.plannerSystemPromptContent) {
-    // Clone and swap prompt
-    agent = {
-      ...originalAgent,
-      systemPromptContent: originalAgent.plannerSystemPromptContent
-    };
-    // Provide planner specific model if needed
-    // agent.config.model is used by Session for provider config.
-    // If planner has its own model, we should update it here or Session will use base model.
-    if (originalAgent.config.planner.model) {
-      agent.config = { ...agent.config, model: originalAgent.config.planner.model };
-    }
-  }
-
-  // Load components
-  const providerName = agent.config.provider || (agent.config.planner ? agent.config.planner.provider : undefined) || 'gemini';
-  const provider = getProvider(providerName);
+  const provider = getProvider(agent.config.provider || 'gemini');
   const syntax = getSyntax(agent.config.syntax);
   const loop = getLoop(agent.config.loop);
+
+  // Load tools
   const toolNames = [...(agent.config.tools || [])];
-  // Always include system tools
   if (!toolNames.includes('files')) toolNames.push('files');
-  // Include planner tool if this is a planner agent
-  if (agent.config.planner && !toolNames.includes('plan')) {
-    toolNames.push('plan');
-  }
-  if (agent.config.skillsTable && !toolNames.includes('skills')) {
-    toolNames.push('skills');
+  if (agent.config.skillsTable && !toolNames.includes('skills')) toolNames.push('skills');
+  if (agent.config.memory && agent.config.memory.enabled !== false && !toolNames.includes('memory')) {
+    toolNames.push('memory');
   }
 
   const tools = await toolLoader.loadByNames(toolNames);
 
-  console.log(COLORS.muted(`Provider: ${providerName} | Tools: ${tools.map(t => t.config.name).join(', ') || 'none'}`));
+  console.log(COLORS.muted(`Provider: ${agent.config.provider || 'gemini'} | Tools: ${tools.map(t => t.config.name).join(', ') || 'none'}`));
 
   const session = new Session({
     agent,
@@ -161,75 +122,7 @@ async function createSession(agentName: string): Promise<Session> {
 /**
  * Manages the streaming display state
  */
-class StreamDisplay {
-  private isShowingReasoning = false;
-  private isShowingText = false;
-  private reasoningLineCount = 0;
 
-  startReasoning(): void {
-    if (!this.isShowingReasoning) {
-      this.isShowingReasoning = true;
-      process.stdout.write(COLORS.reasoning(`\n${SYMBOLS.thinking} Reasoning: `));
-      this.reasoningLineCount = 0;
-    }
-  }
-
-  writeReasoning(delta: string): void {
-    process.stdout.write(COLORS.muted(delta));
-  }
-
-  endReasoning(): void {
-    if (this.isShowingReasoning) {
-      process.stdout.write('\n');
-      this.isShowingReasoning = false;
-    }
-  }
-
-  startText(): void {
-    if (!this.isShowingText) {
-      this.isShowingText = true;
-      process.stdout.write(COLORS.text(''));
-    }
-  }
-
-  writeText(delta: string): void {
-    process.stdout.write(delta);
-  }
-
-  endText(): void {
-    if (this.isShowingText) {
-      this.isShowingText = false;
-    }
-  }
-
-  showAction(code: string): void {
-    this.endReasoning();
-    this.endText();
-    console.log(COLORS.action(`\n${SYMBOLS.action} Executing action...`));
-    // Show truncated code preview
-    const preview = code.length > 100 ? code.slice(0, 100) + '...' : code;
-    console.log(COLORS.muted(preview));
-  }
-
-  showObservation(output: string): void {
-    console.log(COLORS.observation(`${SYMBOLS.observation} Result:`));
-    console.log(COLORS.muted(output));
-  }
-
-  reset(): void {
-    this.isShowingReasoning = false;
-    this.isShowingText = false;
-    this.reasoningLineCount = 0;
-  }
-
-  finalize(): void {
-    this.endReasoning();
-    if (this.isShowingText) {
-      process.stdout.write('\n');
-    }
-    this.reset();
-  }
-}
 
 /**
  * Extract words from text using Unicode-aware regex
@@ -239,17 +132,20 @@ function extractWords(text: string): string[] {
   return matches.filter(w => w.length > 1);
 }
 
-async function runChat(session: Session): Promise<void> {
+async function runChat(session: Session, telegramService?: TelegramService): Promise<void> {
   const display = new StreamDisplay();
 
-  // Real-time embedding state
+  // Set global display for agents tool to use
+  setGlobalDisplay(display);
+
+  // Real-time embedding state (kept for compatibility, but unused)
   let currentInput = '';
   let currentWord = '';
-  let embeddedWordCount = 0;
 
   const executorOptions = {
     maxIterations: 10,
     stream: enableStreaming,
+    requireFinish: session.agent.config.requireFinish,
     callbacks: {
       // Streaming callbacks
       onReasoningDelta: (delta: string) => {
@@ -313,22 +209,7 @@ async function runChat(session: Session): Promise<void> {
     },
   };
 
-  let executor: Executor | PlannerExecutor;
-  if (session.agent.config.planner) {
-    executor = new PlannerExecutor(session, executorOptions);
-    console.log(COLORS.secondary('Using Planner/Executor Architecture'));
-  } else {
-    executor = new Executor(session, executorOptions);
-  }
-
-  /**
-   * Pre-embed a word in real-time (DEPRECATED - no longer used in example-based system)
-   * Kept for compatibility but does nothing - the new system doesn't use keyword pre-embedding
-   */
-  const preEmbedWord = (_word: string): void => {
-    // No-op: Pre-embedding removed in example-based system
-    // The new system uses example-based matching, not keyword-based
-  };
+  const executor = new Executor(session, executorOptions);
 
   // Header
   console.log('');
@@ -359,7 +240,6 @@ async function runChat(session: Session): Promise<void> {
     const resetInput = (): void => {
       currentInput = '';
       currentWord = '';
-      embeddedWordCount = 0;
     };
 
     const handleCommand = async (cmd: string): Promise<boolean> => {
@@ -425,11 +305,6 @@ async function runChat(session: Session): Promise<void> {
 
       // Enter - submit
       if (chunk === '\r' || chunk === '\n') {
-        // Finalize current word
-        if (currentWord) {
-          preEmbedWord(currentWord);
-        }
-
         console.log(''); // New line after input
 
         const trimmed = currentInput.trim();
@@ -452,7 +327,18 @@ async function runChat(session: Session): Promise<void> {
           process.stdout.write(COLORS.secondary(`${SYMBOLS.assistant} `));
 
           display.reset();
-          const response = await executor.execute(trimmed);
+          const response = await runWithAgentContext(
+            session.agent.config.name,
+            () => executor.execute(trimmed),
+            executorOptions.callbacks,
+            enableStreaming,
+            session.sandbox
+          );
+
+          if (telegramService) {
+            // Run in background to not block CLI
+            telegramService.broadcast(`✅ Agent finished executing task.`).catch(console.error);
+          }
           display.finalize();
 
           // In non-streaming mode, print the response
@@ -481,13 +367,6 @@ async function runChat(session: Session): Promise<void> {
       if (chunk.length > 1) {
         process.stdout.write(chunk);
         currentInput += chunk;
-
-        // Extract and pre-embed all words from pasted text
-        const pastedWords = extractWords(chunk);
-        for (const word of pastedWords) {
-          preEmbedWord(word);
-        }
-
         return;
       }
 
@@ -496,18 +375,15 @@ async function runChat(session: Session): Promise<void> {
       currentInput += chunk;
 
       // Check for word boundary
-      if (/\s|[.,!?;:'"()[\]{}]/u.test(chunk)) {
-        if (currentWord) {
-          preEmbedWord(currentWord);
-          currentWord = '';
-        }
+      if (/\s|[.,!?;:'"()\[\]{}]/u.test(chunk)) {
+        currentWord = '';
       } else {
         currentWord += chunk;
       }
     });
 
   } else {
-    // Fallback to readline interface (no real-time embedding)
+    // Fallback to readline interface
     const rl = readline.createInterface({
       input: process.stdin,
       output: process.stdout,
@@ -562,16 +438,23 @@ async function runChat(session: Session): Promise<void> {
           return;
         }
 
-        // Skills retrieval is now handled automatically by the Executor using semantic search
-        // against the configured skills table. No manual pre-embedding is needed.
-
-
         // Process message
         try {
           process.stdout.write(COLORS.secondary(`${SYMBOLS.assistant} `));
 
           display.reset();
-          const response = await executor.execute(trimmed);
+          const response = await runWithAgentContext(
+            session.agent.config.name,
+            () => executor.execute(trimmed),
+            executorOptions.callbacks,
+            enableStreaming,
+            session.sandbox,
+            session.agent.config.modelSwitching
+          );
+
+          if (telegramService) {
+            telegramService.broadcast(`✅ Agent finished executing task.`).catch(console.error);
+          }
           display.finalize();
 
           // In non-streaming mode, print the response
@@ -616,10 +499,29 @@ async function main(): Promise<void> {
     console.log(COLORS.muted('Set GEMINI_KEY or OPENROUTER_API_KEY in your environment.\n'));
   }
 
+  // Initialize Heartbeat Service
+  try {
+    const heartbeat = HeartbeatService.getInstance();
+    await heartbeat.initialize();
+    await heartbeat.start();
+  } catch (error) {
+    console.error(COLORS.error('Failed to start Heartbeat Service:'), error);
+  }
+
+  let telegramService: TelegramService | undefined;
+
+  // Start Telegram Bot Service
+  try {
+    telegramService = new TelegramService();
+    await telegramService.start();
+  } catch (error) {
+    console.error(COLORS.error('Failed to start Telegram Service:'), error);
+  }
+
   try {
     const agentName = await selectAgent();
     const session = await createSession(agentName);
-    await runChat(session);
+    await runChat(session, telegramService);
   } catch (error) {
     console.error(COLORS.error(`\nFatal error: ${error instanceof Error ? error.message : 'Unknown error'}`));
     if (error instanceof Error && error.stack) {

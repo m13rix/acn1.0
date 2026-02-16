@@ -1,0 +1,12 @@
+name: heartbeat
+description: |
+  Proactive automation and sensors.
+  API:
+  - heartbeat.tasks.create(name, { trigger, condition?, action, maxRepeats? })
+  - heartbeat.tasks.list() -> active/inactive
+  - heartbeat.tasks.edit(name, options)
+  - heartbeat.tasks.setActive(name, boolean)
+  - heartbeat.tasks.delete(name)
+  - heartbeat.sensors.list() -> capabilities/docs
+  - heartbeat.sensors.ask(name, query) -> Dynamic llm-based state check
+  - heartbeat.sensors.create(prompt) -> Scaffolds new sensor

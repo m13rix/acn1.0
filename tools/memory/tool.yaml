@@ -1,0 +1,29 @@
+name: memory
+description: |
+  Dynamic semantic graph memory (global shared).
+  
+  API:
+  - memory.addFact(input): Promise<AddFactResult>
+    input: {
+      fact: string,
+      confidence: number (0..1),
+      topics: string[],
+      ref?: string
+    }
+  
+  - memory.addFacts(input): Promise<AddFactsResult>
+    input: {
+      facts: [{ text:string, confidence:number (0..1), topics:string[], ref?:string }]
+    }
+
+  - memory.addLinks(input): Promise<AddLinksResult>
+    input: {
+      links: [{ from:{id?|ref?}, to:{id?|ref?}, relation:string, confidence?:number }],
+      refMap?: { [ref:string]: factId }
+    }
+  
+  - memory.search(query: string, options?): Promise<string>
+    Returns text chains like:
+    "Fact A ->CAUSES-> Fact B ->COUNTERARGUMENT-> Fact C"
+
+module: index.ts

@@ -1,0 +1,15 @@
+name: clock
+description: >
+  Time management sensor.
+  
+  Triggers:
+  - heartbeat.sensors.clock.events.every("10m") -> Repeats every interval. (Formats: s, m, h)
+  - heartbeat.sensors.clock.events.at("14:00") -> Fires daily at specific HH:MM.
+  - heartbeat.sensors.clock.events.after("5m") -> Fires once after delay.
+
+  Context:
+  Returns current ISO time, local time, and date.
+  
+minillm:
+  model: openai/gpt-oss-20b
+  provider: openrouter

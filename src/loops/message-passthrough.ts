@@ -19,19 +19,28 @@ import type { ProcessedResponse, SyntaxType } from '../types/index.js';
 
 export class MessagePassthroughLoop extends BaseLoop {
   name = 'message-passthrough';
-  override stopSequences = ['</action>', '</cli>'];
+  override stopSequences = ['</action>', '</cli>', '```observation'];
 
   processResponse(response: string, syntax: SyntaxType): ProcessedResponse {
     const hasAction = syntax.hasAction(response);
     const hasCli = syntax.hasCli(response);
+    const filesToWrite = syntax.getFiles(response);
+    const diffs = syntax.getDiffs(response);
+    const edits = syntax.getEdits(response);
+    const hasFiles = filesToWrite.length > 0;
+    const hasDiffs = diffs.length > 0;
+    const hasEdits = edits.length > 0;
 
-    if (!hasAction && !hasCli) {
+    if (!hasAction && !hasCli && !hasFiles && !hasDiffs && !hasEdits) {
       // No action or CLI - this is the final response
       return {
         hasAction: false,
         actionCode: null,
         hasCli: false,
         cliCommand: null,
+        filesToWrite: [],
+        diffs: [],
+        edits: [],
         fullResponse: response,
       };
     }
@@ -46,6 +55,9 @@ export class MessagePassthroughLoop extends BaseLoop {
       actionCode,
       hasCli,
       cliCommand,
+      filesToWrite,
+      diffs,
+      edits,
       fullResponse: response,
     };
   }
@@ -57,23 +69,23 @@ export class MessagePassthroughLoop extends BaseLoop {
     filename?: string,
     originalUserRequest?: string
   ): { updatedAssistantContent: string; continuationUserMessage: string } {
-    // Complete the action tag that was cut off by stop sequence
-    const hasCli = syntax.hasCli(currentAssistantContent);
-    const hasAction = syntax.hasAction(currentAssistantContent);
+    // For Markdown, we generally don't need to close tags if we stop at ```observation
+    // But if we used XML, we might.
+    // Let's keep it simple: just return content.
 
-    // Determine closing tag based on which unclosed tag is present
-    let closingTag: string;
-    if (hasCli && !currentAssistantContent.includes('</cli>')) {
-      closingTag = '</cli>';
-    } else if (hasAction && !currentAssistantContent.includes('</action>')) {
-      closingTag = '</action>';
-    } else {
-      // Fallback - shouldn't happen
-      closingTag = '</action>';
+    // Check if we need to close XML tags (backward compatibility)
+    let updatedAssistantContent = currentAssistantContent;
+    if (syntax.name === 'xml-tags') {
+      const hasCli = syntax.hasCli(currentAssistantContent);
+      const hasAction = syntax.hasAction(currentAssistantContent);
+      let closingTag = '';
+      if (hasCli && !currentAssistantContent.includes('</cli>')) {
+        closingTag = '</cli>';
+      } else if (hasAction && !currentAssistantContent.includes('</action>')) {
+        closingTag = '</action>';
+      }
+      updatedAssistantContent += closingTag;
     }
-
-    // Complete the assistant message with the closing tag (no observation appended)
-    const updatedAssistantContent = currentAssistantContent + closingTag;
 
     // Format observation with filename prefix if available
     const formattedObservation = filename
@@ -97,9 +109,7 @@ export class MessagePassthroughLoop extends BaseLoop {
   getDescription(): string {
     return `## Loop (message-passthrough)
 
-- If you need to run code, output \`<action>...</action>\` and stop at \`</action>\`.
-- If you need to run a shell command, output \`<cli>...</cli>\` and stop at \`</cli>\`.
-- The system will execute the action and send the result as \`<obs>...</obs>\` in a new user message.
+- The system will execute the action and send the result as observation in a new user message.
 - Respond to the observation in your next message.`;
   }
 }

@@ -12,7 +12,7 @@ import { mkdir, writeFile, rm } from 'fs/promises';
 import { join, dirname, resolve } from 'path';
 import { randomUUID } from 'crypto';
 import { fileURLToPath } from 'url';
-import type { ExecutionResult, LoadedTool } from '../types/index.js';
+import type { AgentMemoryConfig, ExecutionResult, LoadedTool } from '../types/index.js';
 import type { ISandbox } from './interfaces.js';
 import { getMinimalHtml } from '../utils/minimalHtml.js';
 
@@ -39,7 +39,7 @@ export class BrowserSandbox implements ISandbox {
         this.directory = join(baseDir || join(PROJECT_ROOT, 'sandboxes'), `session-${this.id}`);
     }
 
-    async initialize(tools: LoadedTool[], skillsTable?: string): Promise<void> {
+    async initialize(_tools: LoadedTool[], _skillsTable?: string, _memoryConfig?: AgentMemoryConfig): Promise<void> {
         // Create sandbox directory
         await mkdir(this.directory, { recursive: true });
 
@@ -218,6 +218,24 @@ The content of cli tags are browser navigation commands.
                 error: `Browser command failed: ${error.message}`
             };
         }
+    }
+
+    /**
+     * Browser sandbox doesn't support file editing
+     */
+    parseSearchReplace(_content: string): Array<{ search: string; replace: string }> {
+        return [];
+    }
+
+    /**
+     * Browser sandbox doesn't support file editing
+     */
+    async applySearchReplace(_filename: string, _edits: Array<{ search: string; replace: string }>): Promise<ExecutionResult> {
+        return {
+            success: false,
+            output: '',
+            error: 'File editing is not supported in browser sandbox'
+        };
     }
 
     async cleanup(): Promise<void> {

@@ -1,0 +1,23 @@
+name: pptx-master
+description: Expert in creating professional PowerPoint presentations using pptxgenjs. Can generate structure from vague requests and handle full creation process including downloading images and charts.
+
+model: moonshotai/kimi-k2.5
+provider: openrouter
+systemPrompt: prompts/system.md
+
+modelSwitching:
+  whitelist:
+    - google/gemini-3-flash-preview
+    - moonshotai/kimi-k2.5
+  selector:
+    model: openai/gpt-oss-20b
+    provider: openrouter
+
+tools:
+  - search
+  - message
+
+loop: message-passthrough
+syntax: markdown
+skillsTable: pptx_skills
+injectAgentsList: false

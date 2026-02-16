@@ -7,7 +7,16 @@
 
 import { OpenRouter } from '@openrouter/sdk';
 import { BaseProvider, registerProvider } from './base.js';
-import type { Message, ProviderConfig, ProviderResponse, ProviderStreamChunk, ProviderStreamEvent } from '../types/index.js';
+import type {
+  Message,
+  ProviderConfig,
+  ProviderResponse,
+  ProviderStreamChunk,
+  ProviderStreamEvent,
+  ProviderToolCall,
+  ProviderToolRequest,
+  ProviderToolResponse,
+} from '../types/index.js';
 // @ts-ignore - mime-types doesn't have perfect TypeScript types
 import { lookup } from 'mime-types';
 
@@ -32,6 +41,16 @@ export class OpenRouterProvider extends BaseProvider {
     const cfg = this.withDefaults(config);
 
     return this.buildOpenRouterRequest(messages, cfg);
+  }
+
+  override buildRequestWithTools(
+    messages: Message[],
+    config: ProviderConfig,
+    toolRequest: ProviderToolRequest
+  ): any {
+    this.validateConfig(config);
+    const cfg = this.withDefaults(config);
+    return this.buildOpenRouterRequest(messages, cfg, toolRequest);
   }
 
   override async complete(messages: Message[], config: ProviderConfig): Promise<ProviderResponse> {
@@ -79,6 +98,54 @@ export class OpenRouterProvider extends BaseProvider {
       reasoning,
       finishReason,
       usage,
+    };
+  }
+
+  override async completeWithTools(
+    messages: Message[],
+    config: ProviderConfig,
+    toolRequest: ProviderToolRequest
+  ): Promise<ProviderToolResponse> {
+    this.validateConfig(config);
+    const cfg = this.withDefaults(config);
+    const request = this.buildOpenRouterRequest(messages, cfg, toolRequest);
+    const response = await this.client.chat.send(request);
+
+    const choice = response.choices?.[0];
+    if (!choice) {
+      throw new Error('No response choices returned from OpenRouter');
+    }
+
+    const parsedToolCalls = this.parseToolCalls((choice as any)?.message);
+    const messageContent = choice.message?.content;
+    const content = typeof messageContent === 'string'
+      ? messageContent
+      : Array.isArray(messageContent)
+        ? messageContent
+          .map(item => {
+            if (typeof item === 'string') return item;
+            if (item && typeof item === 'object' && 'type' in item && item.type === 'text' && 'text' in item) {
+              return item.text ?? '';
+            }
+            return '';
+          })
+          .join('')
+        : '';
+
+    const reasoning = (choice.message as any)?.reasoning_content || (choice.message as any)?.reasoning || '';
+    const finishReason = this.mapFinishReason(choice.finishReason);
+    const usage = response.usage ? {
+      promptTokens: response.usage.promptTokens ?? 0,
+      completionTokens: response.usage.completionTokens ?? 0,
+      totalTokens: response.usage.totalTokens ?? 0,
+    } : undefined;
+
+    return {
+      content,
+      reasoning,
+      finishReason,
+      usage,
+      toolCalls: parsedToolCalls,
     };
   }
 
@@ -155,13 +222,116 @@ export class OpenRouterProvider extends BaseProvider {
     yield { type: 'done' };
   }
 
+  override async *streamEventsWithTools(
+    messages: Message[],
+    config: ProviderConfig,
+    toolRequest: ProviderToolRequest
+  ): AsyncIterable<ProviderStreamEvent> {
+    this.validateConfig(config);
+    const cfg = this.withDefaults(config);
+    const request = this.buildOpenRouterRequest(messages, { ...cfg, stream: true }, toolRequest);
+
+    const streamPromise = this.client.chat.send({
+      ...request,
+      stream: true,
+    }) as unknown as Promise<AsyncIterable<any>>;
+
+    const streamResult = await streamPromise;
+    const toolCallState = new Map<number, { id: string; name: string; argumentsRaw: string }>();
+    let hasEmittedReasoningDone = false;
+
+    for await (const chunk of streamResult) {
+      const choice = chunk.choices?.[0];
+      if (!choice) continue;
+
+      const reasoningDelta = choice.delta?.reasoning ?? choice.delta?.reasoning_content ?? '';
+      if (reasoningDelta) {
+        yield { type: 'reasoning.delta', delta: reasoningDelta };
+      }
+
+      const textDelta = choice.delta?.content ?? '';
+      if (textDelta) {
+        if (!hasEmittedReasoningDone && reasoningDelta === '' && textDelta) {
+          yield { type: 'reasoning.done' };
+          hasEmittedReasoningDone = true;
+        }
+        yield { type: 'text.delta', delta: textDelta };
+      }
+
+      const toolCallDeltas = choice.delta?.toolCalls || choice.delta?.tool_calls || [];
+      if (Array.isArray(toolCallDeltas) && toolCallDeltas.length > 0) {
+        for (const delta of toolCallDeltas) {
+          if (!delta || typeof delta !== 'object') continue;
+          const index = Number((delta as any).index ?? 0);
+          const existing = toolCallState.get(index) || { id: '', name: '', argumentsRaw: '' };
+
+          const id = (delta as any).id || existing.id;
+          const name = (delta as any).function?.name || existing.name;
+          const argumentsChunk = (delta as any).function?.arguments || '';
+          const next = {
+            id,
+            name,
+            argumentsRaw: existing.argumentsRaw + argumentsChunk,
+          };
+          toolCallState.set(index, next);
+
+          if (argumentsChunk) {
+            yield {
+              type: 'tool_call.delta',
+              delta: argumentsChunk,
+              toolCallId: next.id || `tool_${index}`,
+              toolName: next.name || 'unknown',
+            };
+          }
+        }
+      }
+
+      const finishReason = choice.finishReason || choice.finish_reason;
+      if (finishReason) {
+        for (const [index, call] of toolCallState.entries()) {
+          if (!call.name) continue;
+          yield {
+            type: 'tool_call.done',
+            toolCallId: call.id || `tool_${index}`,
+            toolName: call.name,
+            toolCall: {
+              id: call.id || `tool_${index}`,
+              name: call.name,
+              arguments: this.safeParseArguments(call.argumentsRaw),
+            },
+          };
+        }
+        yield { type: 'text.done' };
+        yield { type: 'done' };
+        return;
+      }
+    }
+
+    for (const [index, call] of toolCallState.entries()) {
+      if (!call.name) continue;
+      yield {
+        type: 'tool_call.done',
+        toolCallId: call.id || `tool_${index}`,
+        toolName: call.name,
+        toolCall: {
+          id: call.id || `tool_${index}`,
+          name: call.name,
+          arguments: this.safeParseArguments(call.argumentsRaw),
+        },
+      };
+    }
+    yield { type: 'text.done' };
+    yield { type: 'done' };
+  }
+
   /**
    * Build an OpenRouter request object
    * OpenRouter uses OpenAI-compatible format, so mapping is straightforward
    */
   private buildOpenRouterRequest(
     messages: Message[],
-    config: ProviderConfig
+    config: ProviderConfig,
+    toolRequest?: ProviderToolRequest
   ): any {
     // Convert messages to OpenRouter format, handling file messages
     const openRouterMessages: any[] = [];
@@ -202,12 +372,29 @@ export class OpenRouterProvider extends BaseProvider {
             content: this.convertFileToOpenRouter(m),
           });
         }
+      } else if (m.role === 'tool') {
+        openRouterMessages.push({
+          role: 'tool',
+          content: m.content,
+          toolCallId: m.toolCallId,
+        });
       } else {
         // Regular message - convert as-is
-        openRouterMessages.push({
+        const baseMessage: any = {
           role: m.role,
           content: m.content,
-        });
+        };
+        if (m.role === 'assistant' && m.toolCalls && m.toolCalls.length > 0) {
+          baseMessage.toolCalls = m.toolCalls.map(call => ({
+            id: call.id,
+            type: 'function',
+            function: {
+              name: call.name,
+              arguments: JSON.stringify(call.arguments ?? {}),
+            },
+          }));
+        }
+        openRouterMessages.push(baseMessage);
       }
     }
 
@@ -231,6 +418,13 @@ export class OpenRouterProvider extends BaseProvider {
     // OpenRouter (like OpenAI) expects stop to be an array with at least one string
     if (config.stopSequences && config.stopSequences.length > 0) {
       request.stop = config.stopSequences;
+    }
+
+    if (toolRequest) {
+      request.tools = toolRequest.tools;
+      if (toolRequest.toolChoice) {
+        request.toolChoice = toolRequest.toolChoice;
+      }
     }
 
     // Remove undefined values to keep request clean
@@ -346,6 +540,45 @@ export class OpenRouterProvider extends BaseProvider {
         return 'stop_sequence';
       default:
         return 'other';
+    }
+  }
+
+  private parseToolCalls(message: any): ProviderToolCall[] {
+    const raw = message?.toolCalls || message?.tool_calls || [];
+    if (!Array.isArray(raw)) return [];
+
+    const out: ProviderToolCall[] = [];
+    for (let i = 0; i < raw.length; i++) {
+      const call = raw[i];
+      if (!call || typeof call !== 'object') continue;
+      const id = call.id || `tool_${i}`;
+      const name = call.function?.name;
+      const rawArgs = call.function?.arguments;
+      if (!name) continue;
+      out.push({
+        id,
+        name,
+        arguments: this.safeParseArguments(rawArgs),
+      });
+    }
+    return out;
+  }
+
+  private safeParseArguments(rawArgs: unknown): Record<string, unknown> {
+    if (rawArgs && typeof rawArgs === 'object' && !Array.isArray(rawArgs)) {
+      return rawArgs as Record<string, unknown>;
+    }
+    if (typeof rawArgs !== 'string' || !rawArgs.trim()) {
+      return {};
+    }
+    try {
+      const parsed = JSON.parse(rawArgs);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+      return { value: parsed };
+    } catch {
+      return { content: rawArgs };
     }
   }
 }

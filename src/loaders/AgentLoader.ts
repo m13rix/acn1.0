@@ -5,13 +5,13 @@
  */
 
 import { readdir, readFile, stat } from 'fs/promises';
+import { existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { parse as parseYaml } from 'yaml';
 import { fileURLToPath } from 'url';
 import type { AgentConfig, LoadedAgent } from '../types/index.js';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const PROJECT_ROOT = join(__dirname, '..', '..');
+const PROJECT_ROOT = process.env['PROJECT_ROOT'] || 'G:\\agent0\\acn1.0';
 const DEFAULT_AGENTS_DIR = join(PROJECT_ROOT, 'agents');
 
 export class AgentLoader {
@@ -105,14 +105,8 @@ export class AgentLoader {
           const config = this.parseConfig(content, configFile) as AgentConfig;
 
           // Validate required fields
-          // If planner/executor defined, legacy model/systemPrompt not strictly required
-          const isDualLayer = !!config.planner && !!config.executor;
-          if (!isDualLayer && (!config.name || !config.model || !config.systemPrompt)) {
+          if (!config.name || !config.model || !config.systemPrompt) {
             console.warn(`Warning: Agent config in ${dir} missing required fields (name, model, systemPrompt)`);
-            continue;
-          }
-          if (isDualLayer && !config.name) {
-            console.warn(`Warning: Agent config in ${dir} missing name`);
             continue;
           }
 
@@ -120,43 +114,20 @@ export class AgentLoader {
           config.tools = config.tools || [];
           config.loop = config.loop || 'accumulator';
           config.syntax = config.syntax || 'xml-tags';
+          config.injectAgentsList = config.injectAgentsList ?? true;
 
           // Load system prompt content
           let systemPromptContent = '';
-          if (config.systemPrompt) {
-            const systemPromptPath = join(dir, config.systemPrompt);
-            try {
-              systemPromptContent = await readFile(systemPromptPath, 'utf-8');
-            } catch {
-              console.warn(`Warning: Could not load system prompt ${systemPromptPath}`);
-            }
-          }
-
-          let plannerSystemPromptContent = '';
-          if (config.planner?.systemPrompt) {
-            const p = join(dir, config.planner.systemPrompt);
-            try {
-              plannerSystemPromptContent = await readFile(p, 'utf-8');
-            } catch {
-              console.warn(`Warning: Could not load planner system prompt ${p}`);
-            }
-          }
-
-          let executorSystemPromptContent = '';
-          if (config.executor?.systemPrompt) {
-            const p = join(dir, config.executor.systemPrompt);
-            try {
-              executorSystemPromptContent = await readFile(p, 'utf-8');
-            } catch {
-              console.warn(`Warning: Could not load executor system prompt ${p}`);
-            }
+          const systemPromptPath = join(dir, config.systemPrompt);
+          try {
+            systemPromptContent = await readFile(systemPromptPath, 'utf-8');
+          } catch {
+            console.warn(`Warning: Could not load system prompt ${systemPromptPath}`);
           }
 
           return {
             config,
             systemPromptContent,
-            plannerSystemPromptContent,
-            executorSystemPromptContent,
             directory: dir,
           };
         }

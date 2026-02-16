@@ -1,0 +1,54 @@
+name: CORE
+description: The primary and base agent.
+
+model: deepseek/deepseek-v3.2
+provider: openrouter
+systemPrompt: prompts/system.md
+
+modelSwitching:
+  whitelist:
+    - x-ai/grok-4.1-fast
+    - deepseek/deepseek-v3.2
+    - minimax/minimax-m2.5
+    - moonshotai/kimi-k2.5
+  selector:
+    model: openai/gpt-oss-20b
+    provider: openrouter
+
+tools:
+  - search
+  - message
+  - agents
+  - srcAgent
+  - heartbeat
+
+memory:
+  enabled: true
+  # Storage
+  table: global_memory
+
+  # Linker (Auto-Linking)
+  linkerProvider: ollama      # openrouter, google, ollama
+  linkerModel: gpt-oss:20b    # Model ID for the linker
+  linkerTemperature: 0.0
+  linkerMaxTokens: 100000
+
+  # Embeddings
+  embeddingModel: bge-m3
+
+  # Tuning
+  candidateFactsPerTopic: 10
+  candidatePoolMax: 30
+  maxAutoLinksPerFact: 3
+  dedupeThreshold: 0.99
+
+  # Search
+  searchMaxDepth: 2
+  searchMaxStartFacts: 5
+  searchMaxChains: 5
+
+loop: provider-tools
+syntax: markdown
+skillsTable: test
+injectAgentsList: true
+requireFinish: true # Set to false to disable mandatory FINISH command

@@ -7,7 +7,15 @@
 
 import { Ollama } from 'ollama';
 import { BaseProvider, registerProvider } from './base.js';
-import type { Message, ProviderConfig, ProviderResponse, ProviderStreamEvent } from '../types/index.js';
+import type {
+    Message,
+    ProviderConfig,
+    ProviderResponse,
+    ProviderStreamEvent,
+    ProviderToolCall,
+    ProviderToolRequest,
+    ProviderToolResponse,
+} from '../types/index.js';
 // @ts-ignore - mime-types doesn't have perfect TypeScript types
 import { lookup } from 'mime-types';
 
@@ -32,6 +40,16 @@ export class OllamaProvider extends BaseProvider {
         return this.buildOllamaRequest(messages, cfg);
     }
 
+    override buildRequestWithTools(
+        messages: Message[],
+        config: ProviderConfig,
+        toolRequest: ProviderToolRequest
+    ): any {
+        this.validateConfig(config);
+        const cfg = this.withDefaults(config);
+        return this.buildOllamaRequest(messages, cfg, toolRequest);
+    }
+
     override async complete(messages: Message[], config: ProviderConfig): Promise<ProviderResponse> {
         this.validateConfig(config);
         const cfg = this.withDefaults(config);
@@ -53,6 +71,38 @@ export class OllamaProvider extends BaseProvider {
             content,
             reasoning,
             finishReason,
+            usage: {
+                promptTokens: response.prompt_eval_count ?? 0,
+                completionTokens: response.eval_count ?? 0,
+                totalTokens: (response.prompt_eval_count ?? 0) + (response.eval_count ?? 0),
+            },
+        };
+    }
+
+    override async completeWithTools(
+        messages: Message[],
+        config: ProviderConfig,
+        toolRequest: ProviderToolRequest
+    ): Promise<ProviderToolResponse> {
+        this.validateConfig(config);
+        const cfg = this.withDefaults(config);
+        const request = this.buildOllamaRequest(messages, cfg, toolRequest);
+
+        const response = (await this.client.chat({
+            ...request,
+            stream: false,
+        })) as any;
+
+        const content = response.message?.content || '';
+        const reasoning = response.message?.thinking || '';
+        const finishReason: ProviderResponse['finishReason'] = response.done_reason === 'length' ? 'length' : 'stop';
+        const toolCalls = this.parseToolCalls(response.message?.tool_calls);
+
+        return {
+            content,
+            reasoning,
+            finishReason,
+            toolCalls,
             usage: {
                 promptTokens: response.prompt_eval_count ?? 0,
                 completionTokens: response.eval_count ?? 0,
@@ -121,12 +171,72 @@ export class OllamaProvider extends BaseProvider {
         yield { type: 'done' };
     }
 
+    override async *streamEventsWithTools(
+        messages: Message[],
+        config: ProviderConfig,
+        toolRequest: ProviderToolRequest
+    ): AsyncIterable<ProviderStreamEvent> {
+        this.validateConfig(config);
+        const cfg = this.withDefaults(config);
+        const request = this.buildOllamaRequest(messages, { ...cfg, stream: true }, toolRequest);
+
+        const stream = await this.client.chat({
+            ...request,
+            stream: true,
+        });
+
+        let hasEmittedReasoningDone = false;
+        let inThinking = false;
+
+        for await (const chunk of stream) {
+            if (chunk.message?.thinking) {
+                inThinking = true;
+                yield { type: 'reasoning.delta', delta: chunk.message.thinking };
+            }
+
+            if (chunk.message?.content) {
+                if (inThinking) {
+                    yield { type: 'reasoning.done' };
+                    inThinking = false;
+                    hasEmittedReasoningDone = true;
+                }
+                yield { type: 'text.delta', delta: chunk.message.content };
+            }
+
+            const toolCalls = this.parseToolCalls(chunk.message?.tool_calls);
+            for (const call of toolCalls) {
+                yield {
+                    type: 'tool_call.done',
+                    toolCallId: call.id,
+                    toolName: call.name,
+                    toolCall: call,
+                };
+            }
+
+            if (chunk.done) {
+                if (inThinking && !hasEmittedReasoningDone) {
+                    yield { type: 'reasoning.done' };
+                }
+                yield { type: 'text.done' };
+                yield { type: 'done' };
+                return;
+            }
+        }
+
+        if (inThinking && !hasEmittedReasoningDone) {
+            yield { type: 'reasoning.done' };
+        }
+        yield { type: 'text.done' };
+        yield { type: 'done' };
+    }
+
     /**
      * Build an Ollama request object
      */
     private buildOllamaRequest(
         messages: Message[],
-        config: ProviderConfig
+        config: ProviderConfig,
+        toolRequest?: ProviderToolRequest
     ): any {
         const ollamaMessages: any[] = [];
 
@@ -144,11 +254,26 @@ export class OllamaProvider extends BaseProvider {
                         images: [m.content],
                     });
                 }
-            } else if (m.role !== 'file') {
+            } else if (m.role === 'tool') {
                 ollamaMessages.push({
+                    role: 'tool',
+                    content: m.content,
+                    tool_name: m.toolName,
+                });
+            } else if (m.role !== 'file') {
+                const baseMessage: any = {
                     role: m.role === 'assistant' ? 'assistant' : m.role,
                     content: m.content,
-                });
+                };
+                if (m.role === 'assistant' && m.toolCalls && m.toolCalls.length > 0) {
+                    baseMessage.tool_calls = m.toolCalls.map(call => ({
+                        function: {
+                            name: call.name,
+                            arguments: call.arguments,
+                        },
+                    }));
+                }
+                ollamaMessages.push(baseMessage);
             }
         }
 
@@ -164,6 +289,16 @@ export class OllamaProvider extends BaseProvider {
         const request: any = {
             model: config.model,
             messages: ollamaMessages,
+            tools: toolRequest
+                ? toolRequest.tools.map(tool => ({
+                    type: 'function',
+                    function: {
+                        name: tool.function.name,
+                        description: tool.function.description,
+                        parameters: tool.function.parameters,
+                    },
+                }))
+                : undefined,
             think: think,
             options: {
                 temperature: config.temperature,
@@ -187,6 +322,24 @@ export class OllamaProvider extends BaseProvider {
         }
 
         return request;
+    }
+
+    private parseToolCalls(rawToolCalls: any): ProviderToolCall[] {
+        if (!Array.isArray(rawToolCalls)) return [];
+        const out: ProviderToolCall[] = [];
+        for (let i = 0; i < rawToolCalls.length; i++) {
+            const call = rawToolCalls[i];
+            if (!call || typeof call !== 'object') continue;
+            const name = call.function?.name;
+            if (!name) continue;
+            const args = call.function?.arguments;
+            out.push({
+                id: `tool_${i}`,
+                name,
+                arguments: args && typeof args === 'object' ? args : {},
+            });
+        }
+        return out;
     }
 }
 

@@ -1,6 +1,6 @@
 /**
  * Skills Service
- * 
+ *
  * Central service for managing agent skills retrieval using example-based semantic matching.
  */
 
@@ -17,7 +17,7 @@ const DATA_DIR = join(__dirname, '..', '..', 'data', 'skills');
 /**
  * Default score threshold for automated skill retrieval (80%)
  */
-export const SCORE_THRESHOLD = 0.8;
+export const SCORE_THRESHOLD = 0.85;
 
 /**
  * Result from automatic skills search (returns multiple entries)
@@ -56,7 +56,7 @@ export class SkillsService {
    */
   async initialize(): Promise<void> {
     if (this.initialized) return;
-    
+
     this.db = await lancedb.connect(DATA_DIR);
     this.initialized = true;
   }
@@ -73,7 +73,7 @@ export class SkillsService {
     try {
       const table = await this.db.openTable(this.tableName);
       const results = await table.query().toArray();
-      
+
       const mapped: (SkillEntry | null)[] = results.map(row => {
         // Parse exampleVectors from JSON string
         let exampleVectors: number[][] = [];
@@ -86,7 +86,7 @@ export class SkillsService {
           // Invalid JSON or missing field - skip this entry (backward incompatible)
           return null;
         }
-        
+
         // Parse examples array - handle LanceDB/Arrow arrays
         let examples: string[] = [];
         try {
@@ -119,17 +119,17 @@ export class SkillsService {
           // Invalid examples - skip this entry (backward incompatible)
           return null;
         }
-        
+
         // Filter out entries without examples (backward incompatible)
         if (!examples || examples.length === 0 || !exampleVectors || exampleVectors.length === 0) {
           return null;
         }
-        
+
         // Ensure exampleVectors and examples arrays match in length
         if (exampleVectors.length !== examples.length) {
           return null;
         }
-        
+
         return {
           id: row.id as string,
           content: row.content as string,
@@ -139,7 +139,7 @@ export class SkillsService {
           updatedAt: row.updatedAt as number
         };
       });
-      
+
       return mapped.filter((entry): entry is SkillEntry => entry !== null);
     } catch (error) {
       // Table might not exist yet
@@ -163,7 +163,7 @@ export class SkillsService {
 
     // Use example-based retrieval (only include matched entries for production)
     const result = await retrieve(query, entries, SCORE_THRESHOLD, false);
-    
+
     // Filter entries by minimum threshold
     const matchingEntries = result.entries
       .filter(scored => scored.matched && scored.score >= SCORE_THRESHOLD)
@@ -201,32 +201,32 @@ export class SkillsService {
     // (as a simple approximation of content comparison)
     const { cosineSimilarity } = await import('./embeddings.js');
     const queryVector = await embed(query);
-    
+
     const scored: Array<{ entry: SkillEntry; score: number }> = [];
-    
+
     for (const entry of entries) {
       if (entry.exampleVectors.length === 0) continue;
-      
+
       // Use first example vector as proxy for content (simple approach)
       const firstVector = entry.exampleVectors[0];
       if (!firstVector) continue;
-      
+
       const similarity = cosineSimilarity(queryVector, firstVector);
       scored.push({ entry, score: similarity });
     }
-    
+
     if (scored.length === 0) {
       return null;
     }
-    
+
     // Sort by score descending and return top result
     scored.sort((a, b) => b.score - a.score);
     const topResult = scored[0];
-    
+
     if (!topResult) {
       return null;
     }
-    
+
     return {
       content: topResult.entry.content,
       score: topResult.score,
@@ -241,8 +241,8 @@ export class SkillsService {
    * @param scoreThreshold - Optional similarity threshold (default: 0.8)
    */
   async addEntry(
-    content: string, 
-    examples: string[], 
+    content: string,
+    examples: string[],
     scoreThreshold?: number
   ): Promise<{ success: boolean; id: string }> {
     if (!this.initialized) {
@@ -260,13 +260,13 @@ export class SkillsService {
 
     // Embed all examples
     const exampleVectors = await embedBatch(examples);
-    
+
     if (exampleVectors.length !== examples.length) {
       throw new Error('Failed to embed all examples');
     }
 
     const id = uuidv4();
-    
+
     const entry = {
       id,
       content,

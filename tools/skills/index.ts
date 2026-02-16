@@ -9,23 +9,29 @@ import { SkillsService } from '../../src/skills_system/SkillsService.js';
 import * as fs from 'fs';
 import * as path from 'path';
 
-// Get the skills table from environment variable (set by Sandbox)
-const SKILLS_TABLE = process.env.SKILLS_TABLE;
-
 // Lazily initialized SkillsService
 let skillsService: SkillsService | null = null;
+let currentTable: string | null = null;
 
 /**
  * Get or create the SkillsService instance
  */
 async function getSkillsService(): Promise<SkillsService> {
-  if (!SKILLS_TABLE) {
+  const table = process.env.SKILLS_TABLE;
+
+  if (!table) {
     throw new Error('Skills system not configured for this agent. Add skillsTable to agent config.');
   }
 
+  // If table changed, we need a new service
+  if (skillsService && currentTable !== table) {
+    skillsService = null;
+  }
+
   if (!skillsService) {
-    skillsService = new SkillsService(SKILLS_TABLE);
+    skillsService = new SkillsService(table);
     await skillsService.initialize();
+    currentTable = table;
   }
 
   return skillsService;

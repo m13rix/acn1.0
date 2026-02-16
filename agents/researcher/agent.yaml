@@ -1,0 +1,24 @@
+name: researcher
+description: Specialized agent for high-quality and efficient research. Automatically selects the best search method (answer, search, or deep research) based on query complexity.
+
+model: deepseek/deepseek-v3.2
+provider: openrouter
+systemPrompt: prompts/system.md
+
+modelSwitching:
+  whitelist:
+    - x-ai/grok-4.1-fast
+    - google/gemini-3-flash-preview
+    - moonshotai/kimi-k2.5
+  selector:
+    model: openai/gpt-oss-20b
+    provider: openrouter
+
+tools:
+  - search
+  - message
+
+loop: message-passthrough
+syntax: markdown
+skillsTable: researcher_skills
+injectAgentsList: false

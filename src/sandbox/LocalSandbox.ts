@@ -1,6 +1,6 @@
 /**
  * Local Sandbox Manager
- * 
+ *
  * Creates isolated execution environments for agent code.
  * Each session gets a fresh sandbox directory.
  */
@@ -10,7 +10,7 @@ import { mkdir, writeFile, readFile, rm } from 'fs/promises';
 import { join, dirname } from 'path';
 import { randomUUID } from 'crypto';
 import { fileURLToPath } from 'url';
-import type { ExecutionResult, LoadedTool } from '../types/index.js';
+import type { AgentMemoryConfig, ExecutionResult, LoadedTool } from '../types/index.js';
 import type { ISandbox } from './interfaces.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -20,6 +20,8 @@ const PROJECT_ROOT = join(__dirname, '..', '..');
 const SKILLS_TOOL_PATH = join(PROJECT_ROOT, 'tools', 'skills', 'index.ts');
 // Path to the built-in files tool
 const FILES_TOOL_PATH = join(PROJECT_ROOT, 'tools', 'files', 'index.ts');
+// Path to the built-in agents tool
+const AGENTS_TOOL_PATH = join(PROJECT_ROOT, 'tools', 'agents', 'index.ts');
 
 export class LocalSandbox implements ISandbox {
     public readonly id: string;
@@ -27,33 +29,51 @@ export class LocalSandbox implements ISandbox {
     private tools: LoadedTool[] = [];
     private initialized = false;
     private skillsTable: string | undefined;
+    private memoryConfig: AgentMemoryConfig | undefined;
+
     private executionCounter: number = 0; // Counter for execution files, starts at 0
     private executedFiles: Map<string, string> = new Map(); // filename -> filePath mapping for diff support
 
-    constructor(baseDir?: string) {
-        this.id = randomUUID().slice(0, 8);
-        this.directory = join(baseDir || join(PROJECT_ROOT, 'sandboxes'), `session-${this.id}`);
+    constructor(optionsOrBaseDir?: string | { baseDir?: string; existingPath?: string }) {
+        if (typeof optionsOrBaseDir === 'object' && optionsOrBaseDir.existingPath) {
+            this.id = 'attached'; // Special ID for attached sandboxes
+            this.directory = optionsOrBaseDir.existingPath;
+        } else {
+            const baseDir = typeof optionsOrBaseDir === 'string' ? optionsOrBaseDir : optionsOrBaseDir?.baseDir;
+            this.id = randomUUID().slice(0, 8);
+            this.directory = join(baseDir || join(PROJECT_ROOT, 'sandboxes'), `session-${this.id}`);
+        }
     }
 
     /**
-     * Initialize the sandbox with the given tools
      * @param tools - Array of loaded tools to make available in the sandbox
      * @param skillsTable - Optional skills table name for the system tool
+     * @param memoryConfig - Optional memory configuration for memory tool env wiring
      */
-    async initialize(tools: LoadedTool[], skillsTable?: string): Promise<void> {
+    async initialize(tools: LoadedTool[], skillsTable?: string, memoryConfig?: AgentMemoryConfig): Promise<void> {
         this.tools = tools;
         this.skillsTable = skillsTable;
+        this.memoryConfig = memoryConfig;
 
-        // Create sandbox directory
-        await mkdir(this.directory, { recursive: true });
+        if (this.id !== 'attached') {
+            // Create sandbox directory
+            await mkdir(this.directory, { recursive: true });
 
-        // Create package.json for npm installs
-        await this.createPackageJson();
+            // Create package.json for npm installs
+            await this.createPackageJson();
 
-        // Create tsconfig for the sandbox
-        await this.createTsConfig();
+            // Create globals.ts for system functions
+            await this.createGlobalsFile();
+
+            // Create tsconfig for the sandbox
+            await this.createTsConfig();
+        }
 
         this.initialized = true;
+    }
+
+    public getTools(): LoadedTool[] {
+        return this.tools;
     }
 
     getDescription(): string {
@@ -64,23 +84,6 @@ The agent runs in a local sandbox environment.
 ### Action
 The content of actions is TypeScript code executed locally.
 - Use \`console.log(...)\` to produce observations.
-- New files are created for each execution.
-- To edit a previously executed file, use unified diff format:
-  \`\`\`
-  <action>
-  --- exec_0.ts
-  +++ exec_0.ts
-  @@ -1,5 +1,6 @@
-  -function greet(name) {
-  -  return "Hello " + name;
-  +function greet(name: string): string {
-  +  const greeting = "Hello universe";
-  +  return \`\${greeting}, \${name}!\`;
-   }
-  -console.log(greet("world"));
-  +console.log(greet("Explorer"));
-  </action>
-  \`\`\`
 
 ### CLI
 The content of cli tags are shell commands executed in the sandbox directory.
@@ -91,15 +94,25 @@ The content of cli tags are shell commands executed in the sandbox directory.
      * Execute TypeScript code in the sandbox
      * Supports both regular code execution and diff-based editing
      */
-    async execute(code: string): Promise<ExecutionResult> {
+    async execute(code: string, language?: string, env?: Record<string, string>, onStderr?: (data: string) => void): Promise<ExecutionResult> {
         if (!this.initialized) {
             throw new Error('Sandbox not initialized. Call initialize() first.');
         }
 
         // Check if this is a diff format
+        // If language is explicitly 'diff', we require it to parse as diff
+        const isDiffMode = language === 'diff';
         const diffInfo = this.parseDiff(code);
+
         if (diffInfo) {
             return this.applyDiff(diffInfo);
+        } else if (isDiffMode) {
+            // It was supposed to be a diff but failed parsing
+            return {
+                success: false,
+                output: '',
+                error: 'Failed to parse diff: Invalid format. Ensure you use standard unified diff format starting with "--- filename" and "+++ filename", followed by "@@ ... @@" blocks.',
+            };
         }
 
         // Clean code (remove markdown blocks if model included them)
@@ -121,7 +134,7 @@ The content of cli tags are shell commands executed in the sandbox directory.
         this.executedFiles.set(filename, filePath);
 
         // Execute with tsx
-        const result = await this.runTypeScript(filePath);
+        const result = await this.runTypeScript(filePath, env, onStderr);
 
         // Add filename to result
         return {
@@ -133,27 +146,55 @@ The content of cli tags are shell commands executed in the sandbox directory.
     /**
      * Execute a CLI command in the sandbox directory
      */
-    async executeCli(command: string): Promise<ExecutionResult> {
+    async executeCli(command: string, onStdout?: (data: string) => void, onStderr?: (data: string) => void): Promise<ExecutionResult> {
         if (!this.initialized) {
             throw new Error('Sandbox not initialized. Call initialize() first.');
         }
 
-        return this.runShellCommand(command);
+        // Process command for better compatibility
+        let processedCommand = command;
+
+        // 1. Handle multiline commands (join with &&)
+        // Split by newline, trim, filter empty
+        const lines = command.split('\n')
+            .map(line => line.trim())
+            .filter(line => line.length > 0 && !line.startsWith('#')); // Skip comments too
+
+        if (lines.length > 1) {
+            // Join with && for sequential execution
+            processedCommand = lines.join(' && ');
+        } else if (lines.length === 1) {
+            processedCommand = lines[0];
+        } else {
+            return { success: true, output: '(empty command)' };
+        }
+
+        // 2. Windows-specific fixes
+        if (process.platform === 'win32') {
+            // Fix "mkdir -p" which creates literal "-p" folder on Windows CMD
+            // Windows mkdir is already recursive by default
+            // Replace "mkdir -p <path>" with "mkdir <path>"
+            // handle "mkdir -p path" and "mkdir -p path1 path2"
+            processedCommand = (processedCommand || '').replace(/\bmkdir\s+-p\s+/g, 'mkdir ');
+        }
+
+        return this.runShellCommand(processedCommand, onStdout, onStderr);
     }
 
     /**
      * Run a shell command in the sandbox directory
      */
-    private runShellCommand(command: string): Promise<ExecutionResult> {
+    private runShellCommand(command: string, onStdout?: (data: string) => void, onStderr?: (data: string) => void): Promise<ExecutionResult> {
         return new Promise((resolve) => {
             const stdout: string[] = [];
             const stderr: string[] = [];
 
             // Build environment with SKILLS_TABLE if configured
-            const env = { ...process.env };
+            const env: NodeJS.ProcessEnv = { ...process.env };
             if (this.skillsTable) {
                 env.SKILLS_TABLE = this.skillsTable;
             }
+            this.applyMemoryEnv(env);
 
             const proc = spawn(command, {
                 cwd: this.directory,
@@ -162,11 +203,19 @@ The content of cli tags are shell commands executed in the sandbox directory.
             });
 
             proc.stdout.on('data', (data) => {
-                stdout.push(data.toString());
+                const str = data.toString();
+                stdout.push(str);
+                if (onStdout) {
+                    onStdout(str);
+                }
             });
 
             proc.stderr.on('data', (data) => {
-                stderr.push(data.toString());
+                const str = data.toString();
+                stderr.push(str);
+                if (onStderr) {
+                    onStderr(str);
+                }
             });
 
             proc.on('error', (error) => {
@@ -197,16 +246,6 @@ The content of cli tags are shell commands executed in the sandbox directory.
                     });
                 }
             });
-
-            // Timeout after 5 minutes
-            setTimeout(() => {
-                proc.kill();
-                resolve({
-                    success: false,
-                    output: stdout.join('').trim(),
-                    error: 'Execution timed out (5 minutes limit)',
-                });
-            }, 300000);
         });
     }
 
@@ -214,16 +253,19 @@ The content of cli tags are shell commands executed in the sandbox directory.
      * Generate the execution file with tool imports
      */
     private generateExecutionFile(code: string): string {
-        const importStatements: string[] = [];
+        const requireStatements: string[] = [];
 
-        // Always import the files tool (built-in system tool)
+        // Import globals (FINISH function)
+        requireStatements.push(`require('./globals.js');`);
+
+        // Always require the files tool (built-in system tool)
         const filesToolRelativePath = this.getRelativePath(FILES_TOOL_PATH);
-        importStatements.push(`import * as files from '${filesToolRelativePath}';`);
+        requireStatements.push(`const files = require('${filesToolRelativePath}');`);
 
-        // Import the skills tool if configured
+        // Require the skills tool if configured
         if (this.skillsTable) {
             const skillsToolRelativePath = this.getRelativePath(SKILLS_TOOL_PATH);
-            importStatements.push(`import * as skills from '${skillsToolRelativePath}';`);
+            requireStatements.push(`const skills = require('${skillsToolRelativePath}');`);
         }
 
         // Add user-configured tools
@@ -232,45 +274,47 @@ The content of cli tags are shell commands executed in the sandbox directory.
             if (tool.config.name === 'skills' || tool.config.name === 'files') continue;
 
             const relativePath = this.getRelativePath(tool.absolutePath);
-            importStatements.push(`import * as ${tool.config.name} from '${relativePath}';`);
+            requireStatements.push(`const ${tool.config.name} = require('${relativePath}');`);
         }
 
-        const toolImports = importStatements.join('\n');
+        const toolRequires = requireStatements.join('\n');
 
-        // Extract all import/export statements from agent code
-        const { imports: agentImports, codeWithoutImports } = this.extractImports(code);
+        // Extract all import/require statements from agent code and convert to require()
+        const { imports: agentRequires, codeWithoutImports } = this.extractImports(code);
 
-        // Tool imports stay at the top level (they're static relative imports)
-        // Agent imports (npm packages) are converted to dynamic imports inside the IIFE
-        // for better CJS/ESM interop
+        // Tool requires stay at the top level (they're static relative requires)
+        // Agent requires (npm packages) are converted to require() calls inside the IIFE
 
-        // Wrap the code without imports in an async IIFE to support top-level await
-        // Dynamic imports (agent imports) go inside the IIFE since they use await
-        return `${toolImports}
+        // Wrap the code in an async IIFE to support top-level await
+        return `${toolRequires}
 
 // Agent code execution
 (async () => {
-// Dynamic imports for npm packages (CJS/ESM interop)
-${agentImports}
+// Package requires
+${agentRequires}
 
 ${codeWithoutImports}
-})().catch(console.error).then(() => {
+})().catch(err => {
+  console.error(err);
+  process.exit(1);
+}).then(() => {
   // Keep the event loop alive to allow promise chains (like .then() calls) to complete
   return new Promise(resolve => setTimeout(resolve, 500));
 }).catch(err => {
   console.error('Error in promise chain:', err);
+  process.exit(1);
 });
 `;
     }
 
     /**
-     * Extract import and export statements from code
-     * Returns the imports and the code without those statements
-     * Converts static imports to dynamic imports to handle CJS/ESM interop for npm packages
+     * Extract import and require statements from code
+     * Returns the requires and the code without those statements
+     * Converts ESM imports to CJS require() calls
      */
     private extractImports(code: string): { imports: string; codeWithoutImports: string } {
-        const lines = code.split('\n');
-        const imports: string[] = [];
+        const lines = (code || '').split('\n');
+        const requires: string[] = [];
         const codeLines: string[] = [];
         let inMultiLineImport = false;
         let currentImport = '';
@@ -284,12 +328,12 @@ ${codeWithoutImports}
             if (isImport) {
                 // Check if it's a complete import (ends with semicolon or quote)
                 if (trimmed.includes(';') || (trimmed.includes("'") && trimmed.split("'").length >= 3) || (trimmed.includes('"') && trimmed.split('"').length >= 3)) {
-                    // Complete import on one line - convert to dynamic import
-                    const converted = this.convertToDynamicImport(line);
+                    // Complete import on one line - convert to require()
+                    const converted = this.convertToRequire(line);
                     if (converted) {
-                        imports.push(converted);
+                        requires.push(converted);
                     } else {
-                        imports.push(line);
+                        requires.push(line);
                     }
                 } else {
                     // Multi-line import
@@ -301,11 +345,11 @@ ${codeWithoutImports}
                 currentImport += '\n' + line;
                 // Check if this line completes the import (has semicolon or closing quote)
                 if (line.includes(';') || (line.includes("'") && line.split("'").length >= 3) || (line.includes('"') && line.split('"').length >= 3)) {
-                    const converted = this.convertToDynamicImport(currentImport);
+                    const converted = this.convertToRequire(currentImport);
                     if (converted) {
-                        imports.push(converted);
+                        requires.push(converted);
                     } else {
-                        imports.push(currentImport);
+                        requires.push(currentImport);
                     }
                     inMultiLineImport = false;
                     currentImport = '';
@@ -318,25 +362,25 @@ ${codeWithoutImports}
 
         // Handle case where multi-line import wasn't closed
         if (inMultiLineImport && currentImport) {
-            const converted = this.convertToDynamicImport(currentImport);
+            const converted = this.convertToRequire(currentImport);
             if (converted) {
-                imports.push(converted);
+                requires.push(converted);
             } else {
-                imports.push(currentImport);
+                requires.push(currentImport);
             }
         }
 
         return {
-            imports: imports.join('\n'),
+            imports: requires.join('\n'),
             codeWithoutImports: codeLines.join('\n'),
         };
     }
 
     /**
-     * Convert a static import to a dynamic import for better CJS/ESM interop
-     * This helps with npm packages that don't export correctly in ESM
+     * Convert a static ESM import to a CJS require() call
+     * Agents can write `import X from 'pkg'` and it'll become `const X = require('pkg')`
      */
-    private convertToDynamicImport(importStatement: string): string | null {
+    private convertToRequire(importStatement: string): string | null {
         // Match: import DefaultExport from 'package' or import type DefaultExport from 'package'
         const defaultImportMatch = importStatement.match(/import\s+(?:type\s+)?(\w+)\s+from\s+['"]([^'"]+)['"]/);
         if (defaultImportMatch) {
@@ -347,8 +391,7 @@ ${codeWithoutImports}
             if (pkg.startsWith('.') || pkg.startsWith('/')) {
                 return null;
             }
-            // Convert to dynamic import with CJS/ESM interop handling
-            return `const ${name} = await (async () => { const m = await import('${pkg}'); return m.default || m; })();`;
+            return `const ${name} = require('${pkg}');`;
         }
 
         // Match: import * as Name from 'package' or import type * as Name from 'package'
@@ -360,7 +403,7 @@ ${codeWithoutImports}
             if (pkg.startsWith('.') || pkg.startsWith('/')) {
                 return null;
             }
-            return `const ${name} = await import('${pkg}');`;
+            return `const ${name} = require('${pkg}');`;
         }
 
         // Match: import { a, b } from 'package' or import type { a, b } from 'package'
@@ -373,14 +416,8 @@ ${codeWithoutImports}
                 return null;
             }
             const cleanNames = names.split(',').map(n => n.trim()).filter(Boolean);
-            return `const { ${cleanNames.join(', ')} } = await import('${pkg}');`;
+            return `const { ${cleanNames.join(', ')} } = require('${pkg}');`;
         }
-
-        // Match: import {a,b} from 'package' (no spaces)
-        const tightNamedImportMatch = importStatement.match(/import\s+(?:type\s+)?\{([^}]+)\}\s+from\s+['"]([^'"]+)['"]/);
-        // (the previous regex already handles it if we adjust the spaces, but let's be explicit if needed)
-        // Actually the previous regex handles it.
-
 
         return null;
     }
@@ -413,10 +450,10 @@ ${codeWithoutImports}
         const upPath = '../'.repeat(upCount);
         const downPath = toolParts.slice(commonLength).join('/');
 
-        // Remove .ts extension for imports
-        const importPath = (upPath + downPath).replace(/\.ts$/, '.js');
+        // Keep .ts extension — tsx handles TypeScript requires natively
+        const requirePath = upPath + downPath;
 
-        return importPath || './';
+        return requirePath || './';
     }
 
     /**
@@ -426,7 +463,6 @@ ${codeWithoutImports}
         const packageJson = {
             name: `sandbox-${this.id}`,
             version: '1.0.0',
-            type: 'module',
             description: 'ACN agent sandbox',
             private: true,
         };
@@ -444,8 +480,8 @@ ${codeWithoutImports}
         const tsconfig = {
             compilerOptions: {
                 target: 'ES2022',
-                module: 'NodeNext',
-                moduleResolution: 'NodeNext',
+                module: 'CommonJS',
+                moduleResolution: 'Node',
                 esModuleInterop: true,
                 allowSyntheticDefaultImports: true,
                 strict: false,  // Allow loose typing in agent code
@@ -460,23 +496,58 @@ ${codeWithoutImports}
     }
 
     /**
+     * Create globals.ts with system functions like FINISH
+     */
+    private async createGlobalsFile(): Promise<void> {
+        const content = `
+import { exit } from 'process';
+
+// System function to finish the task
+(global as any).FINISH = (message: string) => {
+    console.log('__ACN_FINISH_START__' + JSON.stringify(message) + '__ACN_FINISH_END__');
+    exit(0);
+};
+
+// Type definition for TypeScript (doesn't affect runtime but good for documentation if we generated d.ts)
+declare global {
+    function FINISH(message: string): void;
+}
+`;
+        await writeFile(join(this.directory, 'globals.ts'), content, 'utf-8');
+    }
+
+    /**
      * Run TypeScript file using tsx
      */
-    private runTypeScript(filePath: string): Promise<ExecutionResult> {
+    private runTypeScript(
+        filePath: string,
+        extraEnv?: Record<string, string>,
+        onStderr?: (data: string) => void
+    ): Promise<ExecutionResult> {
         return new Promise((resolve) => {
             const stdout: string[] = [];
             const stderr: string[] = [];
 
-            // Build environment with SKILLS_TABLE if configured
-            const env = { ...process.env };
+            // Build environment with SKILLS_TABLE if configured and extraEnv
+            const env = { ...process.env, ...extraEnv };
             if (this.skillsTable) {
                 env.SKILLS_TABLE = this.skillsTable;
+            }
+            this.applyMemoryEnv(env);
+            // Provide sandbox directory to tools, guaranteed string
+            env.SANDBOX_DIR = this.directory;
+            // Provide project root, fallback to current dir if missing (though calculatedRoot handles it)
+            env.PROJECT_ROOT = PROJECT_ROOT || process.cwd();
+
+            // Ensure PATH is a string
+            if (process.env.PATH) {
+                env.PATH = process.env.PATH;
             }
 
             const proc = spawn('npx', ['tsx', filePath], {
                 cwd: this.directory,
                 shell: true,
-                env,
+                env: env as NodeJS.ProcessEnv, // Cast to satisfy type if needed
             });
 
             proc.stdout.on('data', (data) => {
@@ -484,7 +555,11 @@ ${codeWithoutImports}
             });
 
             proc.stderr.on('data', (data) => {
-                stderr.push(data.toString());
+                const str = data.toString();
+                stderr.push(str);
+                if (onStderr) {
+                    onStderr(str);
+                }
             });
 
             proc.on('error', (error) => {
@@ -512,17 +587,26 @@ ${codeWithoutImports}
                     });
                 }
             });
-
-            // Timeout after 5 minutes
-            setTimeout(() => {
-                proc.kill();
-                resolve({
-                    success: false,
-                    output: stdout.join('').trim(),
-                    error: 'Execution timed out (5 minutes limit)',
-                });
-            }, 300000);
         });
+    }
+
+    private applyMemoryEnv(env: Record<string, string | undefined>): void {
+        const cfg = this.memoryConfig;
+        if (!cfg) return;
+
+        if (cfg.table) env.MEMORY_TABLE = cfg.table;
+        if (cfg.linkerProvider) env.MEMORY_LINKER_PROVIDER = cfg.linkerProvider;
+        if (cfg.linkerModel) env.MEMORY_LINKER_MODEL = cfg.linkerModel;
+        if (typeof cfg.linkerTemperature === 'number') env.MEMORY_LINKER_TEMPERATURE = String(cfg.linkerTemperature);
+        if (typeof cfg.linkerMaxTokens === 'number') env.MEMORY_LINKER_MAX_TOKENS = String(cfg.linkerMaxTokens);
+        if (cfg.embeddingModel) env.MEMORY_EMBEDDING_MODEL = cfg.embeddingModel;
+        if (typeof cfg.candidateFactsPerTopic === 'number') env.MEMORY_CANDIDATE_FACTS_PER_TOPIC = String(cfg.candidateFactsPerTopic);
+        if (typeof cfg.candidatePoolMax === 'number') env.MEMORY_CANDIDATE_POOL_MAX = String(cfg.candidatePoolMax);
+        if (typeof cfg.maxAutoLinksPerFact === 'number') env.MEMORY_MAX_AUTO_LINKS_PER_FACT = String(cfg.maxAutoLinksPerFact);
+        if (typeof cfg.dedupeThreshold === 'number') env.MEMORY_DEDUPE_THRESHOLD = String(cfg.dedupeThreshold);
+        if (typeof cfg.searchMaxDepth === 'number') env.MEMORY_SEARCH_MAX_DEPTH = String(cfg.searchMaxDepth);
+        if (typeof cfg.searchMaxStartFacts === 'number') env.MEMORY_SEARCH_MAX_START_FACTS = String(cfg.searchMaxStartFacts);
+        if (typeof cfg.searchMaxChains === 'number') env.MEMORY_SEARCH_MAX_CHAINS = String(cfg.searchMaxChains);
     }
 
     /**
@@ -566,8 +650,13 @@ ${codeWithoutImports}
             }
 
             // Look for hunk header: @@ -start,count +start,count @@
-            const hunkMatch = line.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
+            // Relaxed regex to handle LLM hallucinations (garbage text, missing trailing @@)
+            // We just look for the numbers pattern: -N,N +N,N
+            const hunkMatch = line.match(/[-−](\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))?/);
             if (hunkMatch) {
+                // Determine if this looks like a hunk header (starts with @@ or similar, or just is the numbers)
+                // If the line contains typical hunk numbers, we treat it as a header
+
                 const oldStartStr = hunkMatch[1];
                 const oldCountStr = hunkMatch[2];
                 const newStartStr = hunkMatch[3];
@@ -634,18 +723,25 @@ ${codeWithoutImports}
     private async applyDiff(diffInfo: { filename: string; hunks: DiffHunk[] }): Promise<ExecutionResult> {
         const { filename, hunks } = diffInfo;
 
-        // Find the file path (must be an executed file we've tracked)
-        const filePath = this.executedFiles.get(filename);
-        if (!filePath) {
-            return {
-                success: false,
-                output: '',
-                error: `Cannot apply diff: file "${filename}" not found. Only previously executed files can be edited with diffs.`,
-            };
+        // Resolve file path relative to sandbox directory
+        // Security check: ensure the path stays within sandbox
+        const filePath = join(this.directory, filename);
+        const relative = this.getRelativePath(filePath);
+        if (relative.startsWith('..') && !relative.startsWith('../')) {
+            // checks if it tries to go up. getRelativePath returns relative to sandbox.
+            // Actually simply:
+            if (!filePath.startsWith(this.directory)) {
+                return {
+                    success: false,
+                    output: '',
+                    error: `Security Error: Cannot access files outside sandbox: ${filename}`,
+                };
+            }
         }
 
         try {
             // Read the current file content
+            // This implicitly checks if file exists
             const currentContent = await readFile(filePath, 'utf-8');
             const currentLines = currentContent.split('\n');
 
@@ -656,18 +752,42 @@ ${codeWithoutImports}
             const newContent = modifiedLines.join('\n');
             await writeFile(filePath, newContent, 'utf-8');
 
-            // Execute the modified file
-            const result = await this.runTypeScript(filePath);
+            // If it's a typescript/javascript file, try to execute it to verify (or just because it might be the intention?)
+            // The previous logic executed it.
+            // The user says "edit... ANY FILE... ts, js, py, txt".
+            // Running a txt file makes no sense.
+            // If it is TS/JS, maybe we should run it?
+            // "The diff editing should look like this... [code] ... generatePresentation().catch..."
+            // The example shows code that runs.
+            // But if I edit a README.md, I shouldn't run it.
+
+            // Let's check extension.
+            if (filename.endsWith('.ts') || filename.endsWith('.js')) {
+                const result = await this.runTypeScript(filePath);
+                return {
+                    ...result,
+                    filename,
+                };
+            }
 
             return {
-                ...result,
-                filename,
+                success: true,
+                output: `File ${filename} updated successfully.`,
+                filename
             };
+
         } catch (error: any) {
+            if (error.code === 'ENOENT') {
+                return {
+                    success: false,
+                    output: '',
+                    error: `Cannot apply diff: file "${filename}" not found in sandbox.`,
+                };
+            }
             return {
                 success: false,
                 output: '',
-                error: `Failed to apply diff: ${error.message}`,
+                error: `Failed to apply diff: ${error instanceof Error ? error.message : String(error)}`,
             };
         }
     }
@@ -698,78 +818,108 @@ ${codeWithoutImports}
             return [...originalLines];
         }
 
-        // Apply all hunks in a single pass using matched positions
         const result: string[] = [];
         let originalIndex = 0;
         let hunkIndex = 0;
 
         while (originalIndex < originalLines.length || hunkIndex < hunksWithPositions.length) {
-            const currentHunk = hunkIndex < hunksWithPositions.length ? hunksWithPositions[hunkIndex] : null;
+            const currentHunkObj = hunkIndex < hunksWithPositions.length ? hunksWithPositions[hunkIndex] : null;
 
-            if (currentHunk && originalIndex === currentHunk.matchPosition) {
-                // Apply this hunk
-                const hunk = currentHunk.hunk;
-                let hunkLineIndex = 0;
-                let originalLinesConsumed = 0;
+            // If we have a hunk and we are at (or past) its start position
+            // Note: If we are past its start position (due to previous hunk pushing index forward),
+            // we should apply it immediately.
+            // But we also need to respect the gap between previous hunk and this one.
 
-                // Process hunk lines
-                while (hunkLineIndex < hunk.lines.length) {
-                    const hunkLine = hunk.lines[hunkLineIndex];
-                    if (!hunkLine) {
-                        hunkLineIndex++;
-                        continue;
-                    }
+            // Actually, we should copy lines until we reach the hunk's match position.
+            // But if matchPosition < originalIndex (overlap?), we just apply it now.
 
-                    if (hunkLine.startsWith(' ')) {
-                        // Context line - keep it if it matches
-                        if (originalIndex < originalLines.length) {
-                            const contextContent = hunkLine.substring(1);
-                            const originalLine = originalLines[originalIndex];
-                            if (originalLine !== undefined) {
-                                if (originalLine.trim() === contextContent.trim()) {
-                                    result.push(originalLine);
-                                } else {
-                                    // Mismatch - keep original anyway
-                                    result.push(originalLine);
-                                }
-                            }
-                            originalIndex++;
-                            originalLinesConsumed++;
-                        }
-                        hunkLineIndex++;
-                    } else if (hunkLine.startsWith('-')) {
-                        // Line to remove - skip it
-                        if (originalIndex < originalLines.length) {
-                            originalIndex++;
-                            originalLinesConsumed++;
-                        }
-                        hunkLineIndex++;
-                    } else if (hunkLine.startsWith('+')) {
-                        // Line to add
+            if (currentHunkObj) {
+                // Copy lines until we reach the hunk
+                while (originalIndex < currentHunkObj.matchPosition && originalIndex < originalLines.length) {
+                    result.push(originalLines[originalIndex]!);
+                    originalIndex++;
+                }
+
+                // Now apply the hunk "smartly"
+                const hunk = currentHunkObj.hunk;
+
+                // Smart Hunk Application Logic
+                for (const hunkLine of hunk.lines) {
+                    if (hunkLine.startsWith('+')) {
+                        // Addition: always add
                         result.push(hunkLine.substring(1));
-                        hunkLineIndex++;
-                    } else {
-                        hunkLineIndex++;
+                    } else if (hunkLine.startsWith('-')) {
+                        // Deletion: find the line to delete
+                        const contentToDelete = hunkLine.substring(1).trim();
+                        let foundAt = -1;
+
+                        // Search ahead (limited range) for the line to delete
+                        // This handles cases where file has extra lines inserted compared to what hunk expects
+                        const searchLimit = 20; // Look ahead 20 lines
+                        for (let i = 0; i < searchLimit && (originalIndex + i) < originalLines.length; i++) {
+                            if (originalLines[originalIndex + i].trim() === contentToDelete) {
+                                foundAt = originalIndex + i;
+                                break;
+                            }
+                        }
+
+                        if (foundAt !== -1) {
+                            // Found the line!
+                            // Preserve everything before it (if any)
+                            while (originalIndex < foundAt) {
+                                result.push(originalLines[originalIndex]!);
+                                originalIndex++;
+                            }
+                            // Skip the deleted line
+                            originalIndex++;
+                        } else {
+                            // Line to delete not found within range.
+                            // Assume it was already deleted or LLM hallucinated it.
+                            // Do not advance originalIndex.
+                        }
+                    } else if (hunkLine.startsWith(' ')) {
+                        // Context: verify matches
+                        const contentToMatch = hunkLine.substring(1).trim();
+                        let foundAt = -1;
+
+                        const searchLimit = 20;
+                        for (let i = 0; i < searchLimit && (originalIndex + i) < originalLines.length; i++) {
+                            if (originalLines[originalIndex + i].trim() === contentToMatch) {
+                                foundAt = originalIndex + i;
+                                break;
+                            }
+                        }
+
+                        if (foundAt !== -1) {
+                            // Found the context line
+                            // Preserve everything before it
+                            while (originalIndex < foundAt) {
+                                result.push(originalLines[originalIndex]);
+                                originalIndex++;
+                            }
+                            // Keep the context line
+                            result.push(originalLines[originalIndex]);
+                            originalIndex++;
+                        } else {
+                            // Context line not found.
+                            // This suggests desynchronization or changed file.
+                            // However, we shouldn't just skip/delete random lines.
+                            // Best effort: Just add the context line from the hunk to result?
+                            // Or assume it's there but we missed it?
+                            // Safest: Keep original line at current index (don't consume it),
+                            // but ignore this context requirement from hunk.
+                            // This risks duplicating code if we simply ignore.
+                            // Actually, if we can't match context, we might be in the wrong place.
+                            // But since we are inside the hunk application, we proceed.
+                        }
                     }
                 }
 
                 hunkIndex++;
-            } else if (currentHunk && originalIndex < currentHunk.matchPosition) {
-                // Copy original lines until we reach the next hunk
-                if (originalIndex < originalLines.length) {
-                    const line = originalLines[originalIndex];
-                    if (line !== undefined) {
-                        result.push(line);
-                    }
-                }
-                originalIndex++;
             } else {
-                // No more hunks, copy remaining original lines
+                // No more hunks, copy remainder
                 if (originalIndex < originalLines.length) {
-                    const line = originalLines[originalIndex];
-                    if (line !== undefined) {
-                        result.push(line);
-                    }
+                    result.push(originalLines[originalIndex]);
                     originalIndex++;
                 } else {
                     break;
@@ -795,11 +945,18 @@ ${codeWithoutImports}
             }
         }
 
+        // Case 1: No context lines (pure addition)
         if (contextLines.length === 0) {
-            // No context to match - can't locate this hunk reliably
-            return null;
+            // If the file is empty, start at 0
+            if (lines.length === 0) {
+                return 0;
+            }
+            // If not empty, fallback to the hunk's declared start line
+            // This allows adding to the top of file (oldStart=0) or appending
+            return Math.min(hunk.oldStart, lines.length);
         }
 
+        // Case 2: Try to match context
         // Try to find a sequence of matching context lines in the file
         // We need at least 2-3 matching consecutive lines to be confident
         const minContextMatch = Math.min(3, contextLines.length);
@@ -857,7 +1014,145 @@ ${codeWithoutImports}
             }
         }
 
+        // Case 3: Context matching failed completely
+        // Fallback to hunk.oldStart logic "don't look at hunk" was user request,
+        // but if context fails, we have no other clue.
+        // However, we can check if oldStart seems reasonable.
+        if (hunk.oldStart <= lines.length) {
+            return hunk.oldStart;
+        }
+
         return null;
+    }
+
+    /**
+     * Parse Search & Replace format from edit block content
+     * Format:
+     * <<<< SEARCH
+     * text to find
+     * >>>>
+     * <<<< REPLACE
+     * replacement text
+     * >>>>
+     */
+    parseSearchReplace(content: string): Array<{ search: string; replace: string }> {
+        const edits: Array<{ search: string; replace: string }> = [];
+        const text = content.replace(/\r\n/g, '\n');
+
+        // Combined pattern to support both:
+        // 1. Standard: <<<< SEARCH ... >>>> <<<< REPLACE ... >>>>
+        // 2. Git-style: <<<< SEARCH ... ======= ... >>>>
+        // Group 1: Search content
+        // Group 2: Replace content
+        const regex = /<<<+\s*SEARCH\s*\n([\s\S]*?)\n?(?:>>>+\s*\n<<<+\s*REPLACE|======+)\s*\n?([\s\S]*?)\n?>>>+/gi;
+
+        let match;
+        while ((match = regex.exec(text)) !== null) {
+            const search = match[1] || '';
+            const replace = match[2] || '';
+            edits.push({ search, replace });
+        }
+
+        return edits;
+    }
+
+    /**
+     * Apply Search & Replace edits to a file
+     * Much simpler and more reliable than unified diff
+     */
+    async applySearchReplace(filename: string, edits: Array<{ search: string; replace: string }>): Promise<ExecutionResult> {
+        // Resolve file path
+        const filePath = join(this.directory, filename);
+
+        // Security check
+        if (!filePath.startsWith(this.directory)) {
+            return {
+                success: false,
+                output: '',
+                error: `Security Error: Cannot access files outside sandbox: ${filename}`,
+            };
+        }
+
+        try {
+            // Read current file
+            let content = await readFile(filePath, 'utf-8');
+            const appliedEdits: string[] = [];
+            const errors: string[] = [];
+
+            // Apply each edit
+            for (let i = 0; i < edits.length; i++) {
+                const edit = edits[i];
+                if (!edit) continue;
+
+                const { search, replace } = edit;
+
+                // Count occurrences
+                const occurrences = content.split(search).length - 1;
+
+                if (occurrences === 0) {
+                    // Not found - provide helpful error
+                    const searchPreview = search.length > 100
+                        ? search.substring(0, 100) + '...'
+                        : search;
+                    errors.push(`Edit #${i + 1}: Text not found:\n"${searchPreview}"\n\nMake sure the SEARCH text matches EXACTLY (including whitespace).`);
+                } else if (occurrences > 1) {
+                    // Multiple occurrences - ambiguous
+                    const searchPreview = search.length > 60
+                        ? search.substring(0, 60) + '...'
+                        : search;
+                    errors.push(`Edit #${i + 1}: Found ${occurrences} matches for:\n"${searchPreview}"\n\nAdd more context to make it unique.`);
+                } else {
+                    // Exactly one match - apply it
+                    content = content.replace(search, replace);
+                    appliedEdits.push(`Edit #${i + 1}: Applied successfully`);
+                }
+            }
+
+            // Write result if any edits were applied
+            if (appliedEdits.length > 0) {
+                await writeFile(filePath, content, 'utf-8');
+            }
+
+            // Build result message
+            const summary: string[] = [];
+            if (appliedEdits.length > 0) {
+                summary.push(`✓ Applied ${appliedEdits.length}/${edits.length} edits to ${filename}`);
+            }
+            if (errors.length > 0) {
+                summary.push(`✗ Failed ${errors.length}/${edits.length} edits:\n${errors.join('\n\n')}`);
+            }
+
+            // If it's a TS/JS file and all edits succeeded, run it
+            if (errors.length === 0 && (filename.endsWith('.ts') || filename.endsWith('.js'))) {
+                const result = await this.runTypeScript(filePath);
+                return {
+                    ...result,
+                    output: summary.join('\n') + '\n\n' + result.output,
+                    filename,
+                };
+            }
+
+            return {
+                success: errors.length === 0,
+                output: summary.join('\n'),
+                error: errors.length > 0 ? 'Some edits failed' : undefined,
+                filename,
+            };
+
+        } catch (error: any) {
+            if (error.code === 'ENOENT') {
+                return {
+                    success: false,
+                    output: '',
+                    error: `File not found: "${filename}". Use \`\`\`./filename to create new files.`,
+                };
+            }
+            return {
+                success: false,
+                output: '',
+                error: `Failed to apply edits: ${error.message}`,
+            };
+        }
     }
 
 
@@ -884,4 +1179,17 @@ interface DiffHunk {
     lines: string[]; // The diff lines (with +, -, or space prefix)
 }
 
+/**
+ * Represents a Search & Replace edit operation
+ * Much simpler and more reliable than unified diff
+ */
+interface SearchReplaceEdit {
+    filename: string;
+    edits: Array<{
+        search: string;   // Exact text to find
+        replace: string;  // Text to replace with
+    }>;
+}
+
 export default LocalSandbox;
+

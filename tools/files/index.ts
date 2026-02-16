@@ -7,12 +7,26 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+// @ts-ignore - mime-types doesn't have perfect TypeScript types
+import { lookup } from 'mime-types';
+
+const SUPPORTED_EXTENSIONS = new Set([
+    // Text
+    '.txt', '.md', '.markdown', '.js', '.jsx', '.ts', '.tsx', '.json', '.html', '.css', '.py', '.rb', '.go', '.rs', '.c', '.cpp', '.h', '.hpp', '.java', '.php', '.sql', '.yaml', '.yml', '.env', '.xml',
+    // Images
+    '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg',
+    // Documents
+    '.pdf',
+    // Video
+    '.mp4', '.webm', '.mov'
+]);
 
 /**
  * View files from the sandbox directory and add them to context
  * Files are read as base64 and stored in .acn-files.json for the Executor to process
  * 
  * @param filePaths - Array of file paths relative to the sandbox directory
+ * @param baseDir - Optional base directory (defaults to process.cwd())
  * @returns Object with success status, count of files read, and any errors
  * 
  * @example
@@ -20,7 +34,8 @@ import * as path from 'path';
  * console.log(result.filesRead); // Number of files successfully read
  */
 export async function View(
-    filePaths: string[]
+    filePaths: string[],
+    baseDir?: string
 ): Promise<{ success: boolean; filesRead: number; errors?: string[] }> {
     if (!filePaths || !Array.isArray(filePaths) || filePaths.length === 0) {
         throw new Error('filePaths must be a non-empty array');
@@ -33,7 +48,7 @@ export async function View(
         }
     }
 
-    const sandboxDir = process.cwd(); // Sandbox directory is the current working directory
+    const sandboxDir = baseDir || process.cwd(); // Sandbox directory is the current working directory or baseDir
     const filesJsonPath = path.join(sandboxDir, '.acn-files.json');
 
     const files: Array<{ content: string; filename: string }> = [];
@@ -59,6 +74,18 @@ export async function View(
             const stats = fs.statSync(absolutePath);
             if (!stats.isFile()) {
                 errors.push(`"${filePath}" is not a file`);
+                continue;
+            }
+
+            // Check if file type is supported
+            const ext = path.extname(absolutePath).toLowerCase();
+            const mimeType = lookup(absolutePath);
+
+            const isSupported = SUPPORTED_EXTENSIONS.has(ext) ||
+                (mimeType && (mimeType.startsWith('image/') || mimeType.startsWith('video/') || mimeType === 'application/pdf'));
+
+            if (!isSupported) {
+                errors.push(`File extension "${ext}" is not supported for reading`);
                 continue;
             }
 

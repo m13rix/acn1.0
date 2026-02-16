@@ -4,7 +4,7 @@ description: |
   
   Methods:
   - plan.createSubAgent(name: string, config: { model: string, systemPrompt: string, ... }): Promise<void>
-    Creates a new sub-agent with the specified configuration.
+    Creates a new sub-agent with the specified configuration. Where "model" is AN ABSTRACT DESCRIPTION of what model you want, e.g. "fast, cheap, agentic, efficient, good for agentic search on various topics"
     
   - plan.switchSubAgent(name: string): Promise<void>
     Switches the active executor to the specified sub-agent. Use 'default' to return to base.

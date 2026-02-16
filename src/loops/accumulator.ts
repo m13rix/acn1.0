@@ -18,19 +18,28 @@ import type { ProcessedResponse, SyntaxType } from '../types/index.js';
 
 export class AccumulatorLoop extends BaseLoop {
   name = 'accumulator';
-  override stopSequences = ['</action>', '</cli>'];
+  override stopSequences = ['</action>', '</cli>', '```observation'];
 
   processResponse(response: string, syntax: SyntaxType): ProcessedResponse {
     const hasAction = syntax.hasAction(response);
     const hasCli = syntax.hasCli(response);
+    const filesToWrite = syntax.getFiles(response);
+    const diffs = syntax.getDiffs(response);
+    const edits = syntax.getEdits(response);
+    const hasFiles = filesToWrite.length > 0;
+    const hasDiffs = diffs.length > 0;
+    const hasEdits = edits.length > 0;
 
-    if (!hasAction && !hasCli) {
+    if (!hasAction && !hasCli && !hasFiles && !hasDiffs && !hasEdits) {
       // No action or CLI - this is the final response
       return {
         hasAction: false,
         actionCode: null,
         hasCli: false,
         cliCommand: null,
+        filesToWrite: [],
+        diffs: [],
+        edits: [],
         fullResponse: response,
       };
     }
@@ -45,6 +54,9 @@ export class AccumulatorLoop extends BaseLoop {
       actionCode,
       hasCli,
       cliCommand,
+      filesToWrite,
+      diffs,
+      edits,
       fullResponse: response,
     };
   }

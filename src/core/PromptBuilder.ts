@@ -39,10 +39,13 @@ export class PromptBuilder {
     // 2. Separator
     sections.push('---');
 
-    // 3. Syntax documentation
-    const syntaxDoc = syntax.getDescription();
-    if (syntaxDoc.trim()) {
-      sections.push(syntaxDoc.trim());
+    // 3. Syntax documentation (only for syntax-aware loops)
+    const loopUsesSyntax = loop.usesSyntax?.() ?? true;
+    if (loopUsesSyntax) {
+      const syntaxDoc = syntax.getDescription();
+      if (syntaxDoc.trim()) {
+        sections.push(syntaxDoc.trim());
+      }
     }
 
     // 4. Loop documentation

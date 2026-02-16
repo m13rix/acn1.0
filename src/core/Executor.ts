@@ -1,6 +1,6 @@
 /**
  * Executor
- * 
+ *
  * Main orchestrator for the agent loop.
  * Handles the full cycle of:
  * 1. Sending messages to the provider
@@ -10,10 +10,13 @@
  * 5. Continuing until complete
  */
 
+import { actionContext } from './ActionContext.js';
+import { agentContext } from './AgentContext.js'; // Import agentContext
 import type { Session } from './Session.js';
 import type { ProviderConfig, ProviderStreamEvent } from '../types/index.js';
-import { readFile, unlink } from 'fs/promises';
-import { join } from 'path';
+import { ToolExecutionEngine } from './ToolExecutionEngine.js';
+import { readFile, unlink, writeFile, mkdir } from 'fs/promises';
+import { join, dirname } from 'path';
 
 /**
  * Streaming callbacks following industry-standard patterns
@@ -33,6 +36,7 @@ export interface ExecutorCallbacks extends StreamCallbacks {
   onThinking?: (content: string) => void;
   onAction?: (code: string) => void;
   onCli?: (command: string) => void;
+  onFile?: (filename: string, content: string) => void;
   onObservation?: (output: string) => void;
   onResponse?: (content: string) => void;
   onError?: (error: Error) => void;
@@ -49,10 +53,15 @@ export interface ExecutorOptions {
   maxIterations?: number;
   stream?: boolean;
   callbacks?: ExecutorCallbacks;
+  requireFinish?: boolean;
 }
 
 const DEFAULT_MAX_ITERATIONS = 10;
-const SKILLS_SCORE_THRESHOLD = 0.8; // 80% minimum score for automated skill retrieval
+const SKILLS_SCORE_THRESHOLD = 0.85; // 80% minimum score for automated skill retrieval
+
+// Regex to capture FINISH("message") output from sandbox
+// Matches: __ACN_FINISH_START__"message"__ACN_FINISH_END__
+const FINISH_REGEX = /__ACN_FINISH_START__(.*?)__ACN_FINISH_END__/s;
 
 export class Executor {
   private session: Session;
@@ -64,6 +73,7 @@ export class Executor {
       maxIterations: options.maxIterations ?? DEFAULT_MAX_ITERATIONS,
       stream: options.stream ?? false,
       callbacks: options.callbacks ?? {},
+      requireFinish: options.requireFinish ?? true,
     };
   }
 
@@ -148,6 +158,26 @@ export class Executor {
     // Add (possibly enhanced) user message to history
     this.session.addUserMessage(enhancedMessage);
 
+    // Shared execution helper for action/cli/file flows
+    const toolEngine = new ToolExecutionEngine(this.session, {
+      onAction: this.options.callbacks?.onAction,
+      onCli: this.options.callbacks?.onCli,
+      onFile: this.options.callbacks?.onFile,
+    });
+
+    // Provider-native loop path (loop owns provider round-trips and tool orchestration)
+    if (this.session.loop.run) {
+      const delegated = await this.session.loop.run({
+        session: this.session,
+        options: this.options,
+        processFileMessages: this.processFileMessages.bind(this),
+        toolEngine,
+      });
+      if (delegated !== null) {
+        return delegated;
+      }
+    }
+
     let iterations = 0;
     let currentAssistantContent = '';
     let continuationUserMessage = 'Continue with the user request.';
@@ -213,60 +243,137 @@ export class Executor {
         this.options.callbacks.onThinking(thinking);
       }
 
-      if (!processed.hasAction && !processed.hasCli) {
-        // No action or CLI - we're done
-        this.session.addAssistantMessage(currentAssistantContent);
+      const hasFiles = processed.filesToWrite && processed.filesToWrite.length > 0;
+      const hasDiffs = processed.diffs && processed.diffs.length > 0;
+      const hasEdits = processed.edits && processed.edits.length > 0;
 
-        if (this.options.callbacks?.onResponse) {
-          this.options.callbacks.onResponse(currentAssistantContent);
+      if (!processed.hasAction && !processed.hasCli && !hasFiles && !hasDiffs && !hasEdits) {
+        // No action or CLI - check if we should finish or force continue
+        // We now REQUIRE FINISH() to be called.
+        // If we have no new actions, we must tell the agent to finish.
+        if (this.options.requireFinish) {
+          const warningMessage = 'SYSTEM: You haven\'t completed the task yet. To finish, you MUST call the `FINISH("message")` function with a description of what you have done and the result.';
+
+          // Append warning and continue loop
+          currentAssistantContent += '\n\n' + warningMessage;
+
+          // Add to session for next iteration
+          this.session.addAssistantMessage(currentAssistantContent);
+          this.session.addUserMessage(warningMessage); // Treat as system feedback
+
+          // Reset assistant content for next turn
+          currentAssistantContent = '';
+          continuationUserMessage = 'Please call FINISH("message") to complete the task.';
+
+          continue; // Force next iteration
+        } else {
+          // Require finish is disabled, so we can exit the loop naturally
+          // If there are no actions, we assume the agent is done with this turn/task
+          const message = currentAssistantContent || '(no content generated)';
+
+          // Commit the final state so it's not lost
+          this.session.addAssistantMessage(currentAssistantContent);
+
+          if (this.options.callbacks?.onResponse) {
+            this.options.callbacks.onResponse(message);
+          }
+          return message;
         }
-
-        return currentAssistantContent;
       }
 
       // Execute the action or CLI command
-      let observation: string;
-
+      let observationParts: string[] = [];
       let filename: string | undefined;
 
-      if (processed.hasAction && processed.actionCode) {
-        // Execute code action
-        if (this.options.callbacks?.onAction) {
-          this.options.callbacks.onAction(processed.actionCode);
+      // 1. Write files first
+      if (hasFiles) {
+        for (const file of processed.filesToWrite) {
+          const result = await toolEngine.writeFileToSandbox(file.path, file.content);
+          observationParts.push(result.observation);
         }
+      }
 
-        const result = await this.session.sandbox.execute(processed.actionCode);
-        filename = result.filename; // Get filename from result
+      // 2. Apply Diffs (legacy unified diff format)
+      if (hasDiffs) {
+        for (const diff of processed.diffs) {
+          // Execute handles diff parsing automatically
+          // We treat it as an execution because the sandbox logic routes it to applyDiff
+          const result = await this.session.sandbox.execute(diff, 'diff');
+
+          if (result.success) {
+            observationParts.push(result.output);
+            if (result.filename) filename = result.filename; // Maybe useful if it executed something?
+          } else {
+            observationParts.push(`Error applying diff: ${result.error}\n${result.output}`);
+          }
+        }
+      }
+
+      // 3. Apply Search & Replace edits (new format - preferred)
+      if (hasEdits) {
+        for (const edit of processed.edits) {
+          const result = await toolEngine.applySearchReplaceEdit(edit.filename, edit.content);
+          observationParts.push(result.observation);
+          if (result.filename) filename = result.filename;
+        }
+      }
+
+      // 3. Execute Action or CLI
+      if (processed.hasAction && processed.actionCode) {
+        const result = await toolEngine.executeAction(processed.actionCode);
+        if (result.filename) filename = result.filename;
 
         // Process file messages from .acn-files.json if it exists
         await this.processFileMessages();
 
-        if (result.success) {
-          observation = result.output;
-        } else {
-          observation = `Error: ${result.error}\n${result.output}`.trim();
-        }
+        observationParts.push(result.observation);
       } else if (processed.hasCli && processed.cliCommand) {
-        // Execute CLI command
-        if (this.options.callbacks?.onCli) {
-          this.options.callbacks.onCli(processed.cliCommand);
-        }
-
-        const result = await this.session.sandbox.executeCli(processed.cliCommand);
-
-        if (result.success) {
-          observation = result.output;
-        } else {
-          observation = `Error: ${result.error}\n${result.output}`.trim();
-        }
+        const result = await toolEngine.executeCli(processed.cliCommand);
+        observationParts.push(result.observation);
         // CLI doesn't have a filename, so filename remains undefined
-      } else {
-        // Shouldn't happen, but handle gracefully
+      }
+
+      let observation = observationParts.join('\n\n');
+      if (!observation && (hasFiles || hasDiffs)) {
+        // If only files were written/diffed and no output produced (rare, but possible)
+        observation = "Files processed successfully.";
+      } else if (!observation) {
         observation = '(no executable content found)';
       }
 
       if (this.options.callbacks?.onObservation) {
         this.options.callbacks.onObservation(observation);
+      }
+
+      // Check for FINISH signal
+      const finishMatch = observation.match(FINISH_REGEX);
+      if (finishMatch) {
+        try {
+          // Parse the JSON message
+          const rawFinishPayload = finishMatch[1];
+          if (!rawFinishPayload) {
+            throw new Error('FINISH payload is empty');
+          }
+          const finishMessage = JSON.parse(rawFinishPayload);
+
+          // We found the finish signal!
+          // Remove the signal from observation to keep history clean? 
+          // Or keep it as log? Let's keep it but maybe format it.
+
+          // Commit the final state
+          this.session.addAssistantMessage(currentAssistantContent);
+          this.session.addUserMessage(observation); // Add final observation
+
+          if (this.options.callbacks?.onResponse) {
+            this.options.callbacks.onResponse(finishMessage);
+          }
+
+          return finishMessage;
+        } catch (e) {
+          console.error('Failed to parse FINISH message:', e);
+          // Verify this doesn't loop infinitely if parse fails
+          observation += '\nSYSTEM: Failed to parse FINISH message. Ensure it is a valid string.';
+        }
       }
 
       // Build continuation - use the accumulated content (which now includes the new response)
@@ -404,6 +511,13 @@ export class Executor {
             this.options.callbacks?.onTextDelta?.(event.delta, text);
             // Legacy callback support
             this.options.callbacks?.onStreamChunk?.(event.delta, text);
+
+            // Dynamic Stopping: Check if an actionable block has been fully generated
+            if (this.session.syntax.hasAnyClosedBlock(text)) {
+              // We found a closed action/cli/file block.
+              // Stop generation immediately to prevent hallucinations/extra actions.
+              return { text, reasoning };
+            }
           }
           break;
 

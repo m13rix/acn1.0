@@ -18,15 +18,17 @@ export interface SessionComponents {
   syntax: SyntaxType;
   loop: LoopType;
   tools: LoadedTool[];
+  /** Optional: use an existing sandbox instead of creating a new one (for agent-to-agent calls) */
+  sandbox?: ISandbox;
 }
 
 export class Session {
   public readonly id: string;
-  public readonly agent: LoadedAgent;
-  public readonly provider: Provider;
-  public readonly syntax: SyntaxType;
-  public readonly loop: LoopType;
-  public readonly tools: LoadedTool[];
+  public agent: LoadedAgent;
+  public provider: Provider;
+  public syntax: SyntaxType;
+  public loop: LoopType;
+  public tools: LoadedTool[];
   public readonly sandbox: ISandbox;
   public readonly skillsService?: SkillsService;
 
@@ -42,7 +44,7 @@ export class Session {
     this.syntax = components.syntax;
     this.loop = components.loop;
     this.tools = components.tools;
-    this.sandbox = createSandbox(this.agent.config.sandbox);
+    this.sandbox = components.sandbox || createSandbox(this.agent.config.sandbox);
 
     // Initialize SkillsService if agent has a skillsTable configured
     if (this.agent.config.skillsTable) {
@@ -50,9 +52,16 @@ export class Session {
     }
 
     // Build the system prompt
+    this.systemPrompt = this.buildPrompt();
+  }
+
+  /**
+   * Build/Rebuild the system prompt based on current agent and components
+   */
+  private buildPrompt(agentOverride?: LoadedAgent): string {
     const promptBuilder = new PromptBuilder();
-    this.systemPrompt = promptBuilder.build(
-      this.agent,
+    return promptBuilder.build(
+      agentOverride || this.agent,
       this.syntax,
       this.loop,
       this.tools,
@@ -61,13 +70,32 @@ export class Session {
   }
 
   /**
+   * Rebuild the system prompt, optionally with a different agent config (e.g. for mode switching)
+   */
+  public rebuildPrompt(
+    agentOverride?: LoadedAgent,
+    providerOverride?: Provider,
+    syntaxOverride?: SyntaxType,
+    loopOverride?: LoopType,
+    toolsOverride?: LoadedTool[]
+  ): void {
+    if (agentOverride) this.agent = agentOverride;
+    if (providerOverride) this.provider = providerOverride;
+    if (syntaxOverride) this.syntax = syntaxOverride;
+    if (loopOverride) this.loop = loopOverride;
+    if (toolsOverride) this.tools = toolsOverride;
+
+    this.systemPrompt = this.buildPrompt();
+  }
+
+  /**
    * Initialize the session (creates sandbox, skills service, etc.)
    */
   async initialize(): Promise<void> {
     if (this.initialized) return;
 
-    // Initialize sandbox with tools and skillsTable
-    await this.sandbox.initialize(this.tools, this.agent.config.skillsTable);
+    // Initialize sandbox with tools, skillsTable, and memory config
+    await this.sandbox.initialize(this.tools, this.agent.config.skillsTable, this.agent.config.memory);
 
     // Initialize SkillsService if configured
     if (this.skillsService) {
@@ -98,6 +126,13 @@ export class Session {
    */
   addUserMessage(content: string): void {
     this.messages.push({ role: 'user', content });
+  }
+
+  /**
+   * Add any message (used by provider-native tool loops)
+   */
+  addMessage(message: Message): void {
+    this.messages.push(message);
   }
 
   /**

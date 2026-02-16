@@ -1,0 +1,67 @@
+{
+    "24": {
+        "inputs": {
+            "audio": "Recording.wav",
+            "audioUI": ""
+        },
+        "class_type": "LoadAudio",
+        "_meta": {
+            "title": "Load Audio"
+        }
+    },
+    "40": {
+        "inputs": {
+            "target_text": [
+                "42",
+                0
+            ],
+            "model_choice": "1.7B",
+            "device": "auto",
+            "precision": "bf16",
+            "language": "Auto",
+            "ref_text": "Вы думаете, если отменить рабство, вас будут любить?\nАлександр Второй отменил крепостное право. За это его прозвали Освободителем.\nНо через двадцать лет его разорвало на куски бомба. Его убили не крепостные помещики, которых он обобрал. И не консерваторы, которых предал.\nЕго убили те, ради кого он все это затеял.",
+            "seed": 990748070665024,
+            "max_new_tokens": 2048,
+            "top_p": 0.8,
+            "top_k": 20,
+            "temperature": 1,
+            "repetition_penalty": 1.05,
+            "x_vector_only": false,
+            "attention": "sage_attn",
+            "unload_model_after_generate": false,
+            "custom_model_path": "",
+            "ref_audio": [
+                "24",
+                0
+            ]
+        },
+        "class_type": "FB_Qwen3TTSVoiceClone",
+        "_meta": {
+            "title": "🎭 Qwen3-TTS VoiceClone"
+        }
+    },
+    "41": {
+        "inputs": {
+            "filename_prefix": "audio/ComfyUI",
+            "quality": "V0",
+            "audioUI": "",
+            "audio": [
+                "40",
+                0
+            ]
+        },
+        "class_type": "SaveAudioMP3",
+        "_meta": {
+            "title": "Save Audio (MP3)"
+        }
+    },
+    "42": {
+        "inputs": {
+            "value": "Александр Второй отменил крепостное право. За это его прозвали Освободителем."
+        },
+        "class_type": "PrimitiveStringMultiline",
+        "_meta": {
+            "title": "Prompt"
+        }
+    }
+}

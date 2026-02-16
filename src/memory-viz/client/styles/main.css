@@ -1,0 +1,179 @@
+:root {
+    --bg-color: #050508;
+    --text-primary: #e0e0e0;
+    --text-secondary: #8080a0;
+    --accent: #00f0ff;
+    --accent-glow: rgba(0, 240, 255, 0.3);
+    --node-default: #404060;
+    --link-color: #50506b;
+    --hud-bg: rgba(10, 10, 15, 0.7);
+    --font-heading: 'Inter', sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
+}
+
+body,
+html {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background-color: var(--bg-color);
+    color: var(--text-primary);
+    font-family: var(--font-heading);
+    overflow: hidden;
+}
+
+#universe {
+    width: 100vw;
+    height: 100vh;
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: 1;
+    cursor: grab;
+}
+
+#universe:active {
+    cursor: grabbing;
+}
+
+/* HUD */
+.hud {
+    position: absolute;
+    top: 20px;
+    left: 20px;
+    z-index: 10;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    pointer-events: none;
+    /* Let clicks pass through to canvas where possible */
+}
+
+.hud>* {
+    pointer-events: auto;
+}
+
+header {
+    background: var(--hud-bg);
+    backdrop-filter: blur(10px);
+    padding: 15px 20px;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+}
+
+h1 {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 2px;
+    color: var(--accent);
+    text-shadow: 0 0 10px var(--accent-glow);
+}
+
+.stats {
+    margin-top: 5px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+
+.separator {
+    margin: 0 8px;
+    opacity: 0.3;
+}
+
+.controls {
+    background: var(--hud-bg);
+    backdrop-filter: blur(10px);
+    padding: 15px;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    width: 200px;
+}
+
+.control-group {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.control-group label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--text-secondary);
+}
+
+input[type="text"] {
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: var(--text-primary);
+    padding: 8px;
+    border-radius: 4px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    outline: none;
+    transition: border-color 0.2s;
+}
+
+input[type="text"]:focus {
+    border-color: var(--accent);
+}
+
+button {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: var(--text-primary);
+    padding: 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    transition: all 0.2s;
+}
+
+button:hover {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: var(--accent);
+}
+
+/* Tooltip */
+.tooltip {
+    position: absolute;
+    background: rgba(5, 5, 8, 0.95);
+    backdrop-filter: blur(5px);
+    border: 1px solid var(--accent);
+    border-radius: 4px;
+    padding: 10px;
+    max-width: 300px;
+    pointer-events: none;
+    z-index: 100;
+    box-shadow: 0 0 20px rgba(0, 240, 255, 0.1);
+    transition: opacity 0.2s;
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+.tooltip.hidden {
+    opacity: 0;
+}
+
+.tooltip-id {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--text-secondary);
+    margin-bottom: 4px;
+    display: block;
+}
+
+.tooltip-rel {
+    color: var(--accent);
+    font-weight: bold;
+    margin-bottom: 2px;
+    display: block;
+}

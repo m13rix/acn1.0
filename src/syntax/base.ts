@@ -19,6 +19,9 @@ export abstract class BaseSyntax implements SyntaxType {
   abstract getObservation(text: string): string | null;
   abstract getCli(text: string): string | null;
   abstract getSkills(text: string): string | null;
+  abstract getFiles(text: string): { path: string; content: string }[];
+  abstract getDiffs(text: string): string[];
+  abstract getEdits(text: string): { filename: string; content: string }[];
 
   // Check if tag exists
   abstract hasAction(text: string): boolean;
@@ -27,6 +30,8 @@ export abstract class BaseSyntax implements SyntaxType {
   // Check if tag is fully closed
   abstract isActionClosed(text: string): boolean;
   abstract isCliClosed(text: string): boolean;
+
+  abstract hasAnyClosedBlock(text: string): boolean;
 
   // Wrapping methods
   abstract wrapThinking(content: string): string;

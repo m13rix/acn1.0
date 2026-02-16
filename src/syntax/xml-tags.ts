@@ -31,8 +31,8 @@ export class XMLTagsSyntax extends BaseSyntax {
    * @returns The content inside the tag, or null if not found
    */
   private extractTag(text: string, tagName: string): string | null {
-    const isThinkingTag = tagName === 'think' || tagName === 'thought';
-    const textToSearch = isThinkingTag ? text : this.stripThoughts(text);
+    // We scan the full text, including thoughts, to support CoT actions
+    const textToSearch = text;
 
     const openTag = `<${tagName}>`;
     const closeTag = `</${tagName}>`;
@@ -69,8 +69,7 @@ export class XMLTagsSyntax extends BaseSyntax {
    * Check if a tag opening exists in the text
    */
   private hasTag(text: string, tagName: string): boolean {
-    const isThinkingTag = tagName === 'think' || tagName === 'thought';
-    const textToSearch = isThinkingTag ? text : this.stripThoughts(text);
+    const textToSearch = text;
 
     const pattern = new RegExp(`<${tagName}>`, 'i');
     return pattern.test(textToSearch);
@@ -80,8 +79,7 @@ export class XMLTagsSyntax extends BaseSyntax {
    * Check if a tag is fully closed
    */
   private isTagClosed(text: string, tagName: string): boolean {
-    const isThinkingTag = tagName === 'think' || tagName === 'thought';
-    const textToSearch = isThinkingTag ? text : this.stripThoughts(text);
+    const textToSearch = text;
 
     const openTag = `<${tagName}>`;
     const closeTag = `</${tagName}>`;
@@ -113,6 +111,18 @@ export class XMLTagsSyntax extends BaseSyntax {
     return this.extractTag(text, 'skills');
   }
 
+  getFiles(text: string): { path: string; content: string }[] {
+    return [];
+  }
+
+  getDiffs(text: string): string[] {
+    return [];
+  }
+
+  getEdits(text: string): { filename: string; content: string }[] {
+    return []; // XML syntax doesn't support edit blocks
+  }
+
   hasAction(text: string): boolean {
     return this.hasTag(text, 'action');
   }
@@ -127,6 +137,10 @@ export class XMLTagsSyntax extends BaseSyntax {
 
   isCliClosed(text: string): boolean {
     return this.isTagClosed(text, 'cli');
+  }
+
+  hasAnyClosedBlock(text: string): boolean {
+    return this.isActionClosed(text) || this.isCliClosed(text);
   }
 
   wrapThinking(content: string): string {

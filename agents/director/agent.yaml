@@ -1,0 +1,22 @@
+name: director
+description: AI-Director for creating high-quality documentary videos from text scripts using the editor tool.
+
+model: moonshotai/kimi-k2.5
+provider: openrouter
+
+systemPrompt: prompts/system.md
+
+modelSwitching:
+  whitelist:
+    - x-ai/grok-4.1-fast
+    - deepseek/deepseek-v3.2
+  selector:
+    model: openai/gpt-oss-20b
+    provider: openrouter
+
+tools:
+  - editor
+
+loop: message-passthrough
+syntax: markdown
+skillsTable: director

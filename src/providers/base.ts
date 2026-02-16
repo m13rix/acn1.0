@@ -5,7 +5,16 @@
  * Each provider is responsible for mapping these to their native format.
  */
 
-import type { Message, Provider, ProviderConfig, ProviderResponse, ProviderStreamChunk, ProviderStreamEvent } from '../types/index.js';
+import type {
+  Message,
+  Provider,
+  ProviderConfig,
+  ProviderResponse,
+  ProviderStreamChunk,
+  ProviderStreamEvent,
+  ProviderToolRequest,
+  ProviderToolResponse,
+} from '../types/index.js';
 
 /**
  * Abstract base class for all providers
@@ -22,6 +31,18 @@ export abstract class BaseProvider implements Provider {
   abstract complete(messages: Message[], config: ProviderConfig): Promise<ProviderResponse>;
 
   /**
+   * Complete a conversation with provider-native tools.
+   * Default behavior throws unsupported error.
+   */
+  completeWithTools(
+    _messages: Message[],
+    _config: ProviderConfig,
+    _toolRequest: ProviderToolRequest
+  ): Promise<ProviderToolResponse> {
+    throw new Error(`Provider "${this.name}" does not support native tools`);
+  }
+
+  /**
    * @deprecated Use streamEvents instead
    * Legacy streaming interface for backward compatibility.
    */
@@ -32,6 +53,18 @@ export abstract class BaseProvider implements Provider {
    * Providers should implement this for proper streaming support.
    */
   streamEvents?(messages: Message[], config: ProviderConfig): AsyncIterable<ProviderStreamEvent>;
+
+  /**
+   * Streaming completion with provider-native tools.
+   * Default behavior throws unsupported error.
+   */
+  async *streamEventsWithTools(
+    _messages: Message[],
+    _config: ProviderConfig,
+    _toolRequest: ProviderToolRequest
+  ): AsyncIterable<ProviderStreamEvent> {
+    throw new Error(`Provider "${this.name}" does not support native tools`);
+  }
   
   /**
    * Build the actual provider-specific request object.
@@ -41,6 +74,18 @@ export abstract class BaseProvider implements Provider {
    * @returns The actual request object that will be sent to the provider
    */
   buildRequest?(messages: Message[], config: ProviderConfig): any;
+
+  /**
+   * Build the provider-specific request object including native tools.
+   * Default behavior throws unsupported error.
+   */
+  buildRequestWithTools(
+    _messages: Message[],
+    _config: ProviderConfig,
+    _toolRequest: ProviderToolRequest
+  ): any {
+    throw new Error(`Provider "${this.name}" does not support native tools`);
+  }
   
   /**
    * Validate that required configuration is present

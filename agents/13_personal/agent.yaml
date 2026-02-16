@@ -1,0 +1,31 @@
+name: 13_personal
+description: The personal conversational and support agent for the subject 13 with a 'soul'.
+
+model: moonshotai/kimi-k2.5
+provider: openrouter
+systemPrompt: prompts/system.md
+
+modelSwitching:
+  whitelist:
+    - x-ai/grok-4.1-fast
+    - deepseek/deepseek-v3.2
+    - minimax/minimax-m2.5
+    - moonshotai/kimi-k2.5
+  selector:
+    model: openai/gpt-oss-20b
+    provider: openrouter
+
+tools:
+  - search
+  - message
+  - agents
+
+requireFinish: false
+
+memory:
+  enabled: false
+
+loop: provider-tools
+syntax: markdown
+skillsTable: 13_personal
+injectAgentsList: true
