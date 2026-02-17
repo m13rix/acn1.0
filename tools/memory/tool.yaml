@@ -21,6 +21,10 @@ description: |
       links: [{ from:{id?|ref?}, to:{id?|ref?}, relation:string, confidence?:number }],
       refMap?: { [ref:string]: factId }
     }
+
+  - memory.addDoc(path: string): Promise<AddDocResult>
+    input:
+      "./relative/path/to/document.md" or "./relative/path/to/document.txt"
   
   - memory.search(query: string, options?): Promise<string>
     Returns text chains like:

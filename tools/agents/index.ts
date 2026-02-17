@@ -15,6 +15,7 @@ import {
     getAgentDepth,
     getAgentSandbox,
     isStreamingEnabled,
+    getCurrentAgent,
 } from '../../src/core/AgentContext.js';
 import { getAgentModelSwitchingConfig } from '../../src/core/AgentContext.js';
 import { getGlobalDisplay } from '../../src/core/GlobalDisplay.js';
@@ -71,13 +72,14 @@ import { selectModel, SelectorConfig } from '../../src/services/model-selection/
 
 // ────────────────────────────────────────────────────────────────────────────
 // SubAgent storage
-// ────────────────────────────────────────────────────────────────────────────
+// ────────────────────────────────────────────────────────────────────────────────
 
 interface SubAgentConfig {
     name: string;
     description: string;
     systemPrompt: string;
     model: string;
+    baseSystemPrompt?: string;
 }
 
 const SUBAGENTS_FILE = '.acn-subagents.json';
@@ -174,11 +176,16 @@ export async function subAgent(name: string, config: {
     // Resolve model description to actual model ID
     const resolvedModel = await resolveModel(config.model);
 
+    // Check if the current agent has a subagent base prompt defined
+    const currentAgent = getCurrentAgent();
+    const baseSystemPrompt = currentAgent?.subagentPromptContent;
+
     const subAgentConfig: SubAgentConfig = {
         name,
         description: config.description,
         systemPrompt: config.systemPrompt,
         model: resolvedModel,
+        baseSystemPrompt,
     };
 
     currentSubAgents.set(name, subAgentConfig);
@@ -268,6 +275,7 @@ export async function call(name: string, request: string): Promise<string> {
                 extraSystemPrompt: subConfig.systemPrompt,
                 stream,
                 modelOverride: subConfig.model,
+                systemPromptOverride: subConfig.baseSystemPrompt,
             });
         }
 

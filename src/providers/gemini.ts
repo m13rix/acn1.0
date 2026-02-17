@@ -291,7 +291,7 @@ export class GeminiProvider extends BaseProvider {
       } else if (m.includes('gemini-3-pro')) {
         // pro: 'off' and 'medium' not supported; default is 'high'
         level = (reasoning === 'off' || reasoning === 'medium') ? 'high' : reasoning;
-      } else {
+      }  else {
         // fallback for unknown gemini-3 variants
         level = reasoning === 'off' ? 'minimal' : reasoning;
       }

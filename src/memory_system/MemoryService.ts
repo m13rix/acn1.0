@@ -1,10 +1,15 @@
 import { randomUUID } from 'crypto';
+import { readFile } from 'fs/promises';
+import { extname, isAbsolute, relative, resolve } from 'path';
 import { getGlobalDisplay } from '../core/GlobalDisplay.js';
 import { cosineSimilarity, embedBatch, embedText, vectorSubtract } from './embeddings.js';
+import { enrichDocFacts } from './doc_enricher.js';
+import { parseDocumentToGraph } from './doc_parser.js';
 import { generateAutoLinks } from './linker.js';
 import { searchGraphChains } from './search.js';
 import { MemoryStore } from './store.js';
 import type {
+  AddDocResult,
   AddFactInput,
   AddFactResult,
   AddFactsInput,
@@ -69,6 +74,13 @@ function resolveInt(value: unknown, fallback: number): number {
   return Math.max(1, Math.floor(value));
 }
 
+function isInsidePath(basePath: string, targetPath: string): boolean {
+  const normalizedBase = resolve(basePath);
+  const normalizedTarget = resolve(targetPath);
+  const rel = relative(normalizedBase, normalizedTarget);
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+}
+
 function resolveConfig(input?: Partial<MemoryRuntimeConfig>): MemoryRuntimeConfig {
   const cfg = input ?? {};
   return {
@@ -77,6 +89,17 @@ function resolveConfig(input?: Partial<MemoryRuntimeConfig>): MemoryRuntimeConfi
     linkerModel: (typeof cfg.linkerModel === 'string' && cfg.linkerModel.trim()) ? cfg.linkerModel.trim() : DEFAULT_MEMORY_CONFIG.linkerModel,
     linkerTemperature: typeof cfg.linkerTemperature === 'number' ? cfg.linkerTemperature : DEFAULT_MEMORY_CONFIG.linkerTemperature,
     linkerMaxTokens: resolveInt(cfg.linkerMaxTokens, DEFAULT_MEMORY_CONFIG.linkerMaxTokens),
+    docParserProvider: (typeof cfg.docParserProvider === 'string' && cfg.docParserProvider.trim()) ? cfg.docParserProvider.trim() : DEFAULT_MEMORY_CONFIG.docParserProvider,
+    docParserModel: (typeof cfg.docParserModel === 'string' && cfg.docParserModel.trim()) ? cfg.docParserModel.trim() : DEFAULT_MEMORY_CONFIG.docParserModel,
+    docParserTemperature: typeof cfg.docParserTemperature === 'number' ? cfg.docParserTemperature : DEFAULT_MEMORY_CONFIG.docParserTemperature,
+    docParserMaxTokens: resolveInt(cfg.docParserMaxTokens, DEFAULT_MEMORY_CONFIG.docParserMaxTokens),
+    docCrossLinkMax: resolveInt(cfg.docCrossLinkMax, DEFAULT_MEMORY_CONFIG.docCrossLinkMax),
+    docEnricherProvider: (typeof cfg.docEnricherProvider === 'string' && cfg.docEnricherProvider.trim()) ? cfg.docEnricherProvider.trim() : DEFAULT_MEMORY_CONFIG.docEnricherProvider,
+    docEnricherModel: (typeof cfg.docEnricherModel === 'string' && cfg.docEnricherModel.trim()) ? cfg.docEnricherModel.trim() : DEFAULT_MEMORY_CONFIG.docEnricherModel,
+    docEnricherTemperature: typeof cfg.docEnricherTemperature === 'number' ? cfg.docEnricherTemperature : DEFAULT_MEMORY_CONFIG.docEnricherTemperature,
+    docEnricherMaxTokens: resolveInt(cfg.docEnricherMaxTokens, DEFAULT_MEMORY_CONFIG.docEnricherMaxTokens),
+    docFactConfidenceFallback: typeof cfg.docFactConfidenceFallback === 'number' ? clamp01(cfg.docFactConfidenceFallback) : DEFAULT_MEMORY_CONFIG.docFactConfidenceFallback,
+    docTopicFallback: (typeof cfg.docTopicFallback === 'string' && cfg.docTopicFallback.trim()) ? cfg.docTopicFallback.trim() : DEFAULT_MEMORY_CONFIG.docTopicFallback,
     embeddingModel: (typeof cfg.embeddingModel === 'string' && cfg.embeddingModel.trim()) ? cfg.embeddingModel.trim() : DEFAULT_MEMORY_CONFIG.embeddingModel,
     candidateFactsPerTopic: resolveInt(cfg.candidateFactsPerTopic, DEFAULT_MEMORY_CONFIG.candidateFactsPerTopic),
     candidatePoolMax: resolveInt(cfg.candidatePoolMax, DEFAULT_MEMORY_CONFIG.candidatePoolMax),
@@ -397,6 +420,175 @@ export class MemoryService {
     };
   }
 
+  async addDoc(path: string): Promise<AddDocResult> {
+    await this.initialize();
+    const docPathInput = ensureNonEmptyString(path, 'path');
+    const sandboxRoot = resolve(process.cwd());
+    const resolvedPath = resolve(sandboxRoot, docPathInput);
+
+    if (!isInsidePath(sandboxRoot, resolvedPath)) {
+      throw new Error(`Path "${docPathInput}" is outside sandbox directory.`);
+    }
+
+    const ext = extname(resolvedPath).toLowerCase();
+    if (ext !== '.md' && ext !== '.txt') {
+      throw new Error(`addDoc supports only .md or .txt files. Got "${ext || 'unknown'}".`);
+    }
+
+    const content = await readFile(resolvedPath, 'utf8');
+    if (!content.trim()) {
+      throw new Error(`Document "${docPathInput}" is empty.`);
+    }
+
+    const display = getGlobalDisplay();
+    if (display) {
+      display.showMemoryLog(`Importing document: ${docPathInput}`);
+    }
+
+    const existingFactsBeforeDoc = await this.store.getAllFacts();
+    const parsed = await parseDocumentToGraph(content, this.config);
+    if (parsed.facts.length === 0) {
+      throw new Error('Doc parser returned zero facts.');
+    }
+
+    const warnings: string[] = [];
+    let enrichmentById = new Map<number, { topics: string[]; confidence: number }>();
+    try {
+      const enriched = await enrichDocFacts(parsed.facts, this.config);
+      enrichmentById = new Map(
+        enriched.map(item => [item.id, { topics: item.topics, confidence: item.confidence }])
+      );
+    } catch (error) {
+      warnings.push(
+        `Doc enricher failed, using fallbacks: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+
+    const addFactsInput: AddFactsInput = {
+      facts: parsed.facts.map(fact => {
+        const enriched = enrichmentById.get(fact.id);
+        const topics = (enriched?.topics && enriched.topics.length > 0)
+          ? enriched.topics
+          : [this.config.docTopicFallback];
+        const confidence = typeof enriched?.confidence === 'number'
+          ? clamp01(enriched.confidence)
+          : this.config.docFactConfidenceFallback;
+
+        return {
+          ref: `doc_${fact.id}`,
+          text: fact.content,
+          confidence,
+          topics,
+        };
+      }),
+    };
+
+    const addFactsResult = await this.addFacts(addFactsInput);
+    const docFactIds = addFactsResult.facts.map(f => f.factId);
+    const rollbackDocImport = async () => {
+      await Promise.allSettled([
+        this.store.deleteLinksByFactIds(docFactIds),
+        this.store.deleteFactsByIds(docFactIds),
+      ]);
+    };
+
+    let internalLinksCreated = 0;
+    try {
+      if (parsed.links.length > 0) {
+        const internalLinksResult = await this.addLinks({
+          links: parsed.links.map(link => ({
+            from: { ref: `doc_${link.fromId}` },
+            to: { ref: `doc_${link.toId}` },
+            relation: link.relation,
+            confidence: link.confidence,
+          })),
+          refMap: addFactsResult.refMap,
+        });
+        internalLinksCreated = internalLinksResult.created;
+      }
+    } catch (error) {
+      await rollbackDocImport();
+      throw error;
+    }
+
+    let externalAutoLinksCreated = 0;
+    try {
+      if (existingFactsBeforeDoc.length > 0 && this.config.docCrossLinkMax > 0) {
+        const allFacts = await this.store.getAllFacts();
+        const allById = new Map<string, FactRecord>(allFacts.map(f => [f.id, f]));
+        const docFacts = docFactIds
+          .map(id => allById.get(id))
+          .filter((fact): fact is FactRecord => Boolean(fact));
+        const externalCandidates = this.collectDocExternalCandidates(
+          docFacts,
+          existingFactsBeforeDoc,
+          this.config.docCrossLinkMax
+        );
+
+        if (docFacts.length > 0 && externalCandidates.length > 0) {
+          const docSet = new Set<string>(docFacts.map(f => f.id));
+          const externalSet = new Set<string>(externalCandidates.map(f => f.id));
+          const existingLinks = await this.store.getAllLinks();
+          const existingKeys = new Set<string>(
+            existingLinks.map(link => linkKey(link.fromFactId, link.toFactId, link.relation))
+          );
+
+          const suggestions = await generateAutoLinks({
+            newFacts: docFacts.map(f => ({ id: f.id, text: f.text, confidence: f.confidence, topics: f.topics })),
+            candidateFacts: [
+              ...docFacts.map(f => ({ id: f.id, text: f.text, confidence: f.confidence, topics: f.topics })),
+              ...externalCandidates.map(f => ({ id: f.id, text: f.text, confidence: f.confidence, topics: f.topics })),
+            ],
+            manualLinks: [],
+            maxAutoLinksPerFact: this.config.maxAutoLinksPerFact,
+          }, this.config);
+
+          const filtered = suggestions.filter(link => {
+            const from = link.fromFactId.trim();
+            const to = link.toFactId.trim();
+            const relation = link.relation.trim();
+            if (!from || !to || !relation) return false;
+            if (from === to) return false;
+
+            const isDocExternal = (docSet.has(from) && externalSet.has(to)) || (externalSet.has(from) && docSet.has(to));
+            if (!isDocExternal) return false;
+
+            const key = linkKey(from, to, relation);
+            if (existingKeys.has(key)) return false;
+            existingKeys.add(key);
+            return true;
+          }).map(link => ({
+            fromFactId: link.fromFactId.trim(),
+            toFactId: link.toFactId.trim(),
+            relation: link.relation.trim(),
+            confidence: clamp01(typeof link.confidence === 'number' ? link.confidence : 0.55),
+          }));
+
+          if (filtered.length > 0) {
+            const records = await this.buildLinksFromResolved(filtered, allById, false);
+            await this.store.addLinks(records);
+            externalAutoLinksCreated = records.length;
+          }
+        }
+      }
+    } catch (error) {
+      warnings.push(
+        `External cross-linking skipped: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+
+    return {
+      documentPath: docPathInput,
+      documentFactCount: docFactIds.length,
+      documentInternalLinks: internalLinksCreated,
+      documentExternalAutoLinks: externalAutoLinksCreated,
+      factIds: docFactIds,
+      refMap: addFactsResult.refMap,
+      totalLinksAdded: addFactsResult.totalLinks + internalLinksCreated + externalAutoLinksCreated,
+      ...(warnings.length > 0 ? { warnings } : {}),
+    };
+  }
+
   async search(query: string, options: SearchOptions = {}): Promise<string> {
     await this.initialize();
     const cleanQuery = ensureNonEmptyString(query, 'query');
@@ -536,6 +728,31 @@ export class MemoryService {
         return fact ? { fact, score } : null;
       })
       .filter((item): item is { fact: FactRecord; score: number } => Boolean(item));
+  }
+
+  private collectDocExternalCandidates(
+    docFacts: FactRecord[],
+    externalFacts: FactRecord[],
+    maxCandidates: number
+  ): FactRecord[] {
+    if (docFacts.length === 0 || externalFacts.length === 0 || maxCandidates <= 0) return [];
+
+    const bestScoreByExternalId = new Map<string, number>();
+    for (const docFact of docFacts) {
+      for (const external of externalFacts) {
+        const sim = cosineSimilarity(docFact.embedding, external.embedding);
+        const prev = bestScoreByExternalId.get(external.id);
+        if (prev === undefined || sim > prev) {
+          bestScoreByExternalId.set(external.id, sim);
+        }
+      }
+    }
+
+    return Array.from(bestScoreByExternalId.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, maxCandidates)
+      .map(([factId]) => externalFacts.find(f => f.id === factId))
+      .filter((fact): fact is FactRecord => Boolean(fact));
   }
 
   private async buildSoftMergeLinks(

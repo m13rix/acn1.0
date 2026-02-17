@@ -6,6 +6,56 @@ const cache = new Map<string, number[]>();
 
 let ai: GoogleGenAI | null = null;
 let ollamaClient: Ollama | null = null;
+const EMBED_RETRY_DELAY_MS = 3000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function collectErrorCodes(err: unknown): string[] {
+  const out: string[] = [];
+  const anyErr = err as any;
+  if (anyErr?.code) out.push(String(anyErr.code));
+  if (anyErr?.cause?.code) out.push(String(anyErr.cause.code));
+  if (Array.isArray(anyErr?.cause?.errors)) {
+    for (const nested of anyErr.cause.errors) {
+      if (nested?.code) out.push(String(nested.code));
+    }
+  }
+  return out;
+}
+
+function isTransientNetworkError(err: unknown): boolean {
+  const msg = String((err as any)?.message ?? err ?? '').toLowerCase();
+  const codes = collectErrorCodes(err).map(code => code.toUpperCase());
+  if (msg.includes('fetch failed')) return true;
+  if (msg.includes('network')) return true;
+  if (msg.includes('timeout')) return true;
+  if (msg.includes('socket hang up')) return true;
+  if (msg.includes('temporar')) return true;
+  return codes.some(code =>
+    code === 'ECONNREFUSED' ||
+    code === 'ECONNRESET' ||
+    code === 'ETIMEDOUT' ||
+    code === 'EAI_AGAIN' ||
+    code === 'ENETUNREACH' ||
+    code === 'EHOSTUNREACH'
+  );
+}
+
+async function withTransientRetry<T>(opName: string, fn: () => Promise<T>): Promise<T> {
+  for (;;) {
+    try {
+      return await fn();
+    } catch (error) {
+      if (!isTransientNetworkError(error)) {
+        throw error;
+      }
+      console.warn(`[memory.embeddings] ${opName} transient error, retrying in ${EMBED_RETRY_DELAY_MS}ms:`, error);
+      await sleep(EMBED_RETRY_DELAY_MS);
+    }
+  }
+}
 
 function getOllamaClient(): Ollama {
   if (!ollamaClient) {
@@ -37,11 +87,13 @@ export async function embedText(text: string, model: string): Promise<number[]> 
 
   // Use Google for specific legacy models or if explicitly requested (could add prefix logic later)
   if (model === 'gemini-embedding-001' || model === 'text-embedding-004') {
-    const client = getClient();
-    const response = await client.models.embedContent({
-      model,
-      contents: [text],
-      config: { taskType: 'SEMANTIC_SIMILARITY' },
+    const response = await withTransientRetry(`google:${model}`, async () => {
+      const client = getClient();
+      return client.models.embedContent({
+        model,
+        contents: [text],
+        config: { taskType: 'SEMANTIC_SIMILARITY' },
+      });
     });
 
     const vector = response.embeddings?.[0]?.values as number[] | undefined;
@@ -53,10 +105,12 @@ export async function embedText(text: string, model: string): Promise<number[]> 
   }
 
   // Default to Ollama for everything else (e.g., bge-m3, mxbai-embed-large)
-  const client = getOllamaClient();
-  const response = await client.embeddings({
-    model,
-    prompt: text,
+  const response = await withTransientRetry(`ollama:${model}`, async () => {
+    const client = getOllamaClient();
+    return client.embeddings({
+      model,
+      prompt: text,
+    });
   });
 
   const vector = response.embedding;
@@ -102,4 +156,3 @@ export function vectorSubtract(to: number[] | ArrayLike<number>, from: number[] 
   }
   return out;
 }
-

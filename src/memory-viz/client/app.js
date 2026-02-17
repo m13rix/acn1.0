@@ -10,6 +10,15 @@ const CONFIG = {
         semantic: 0.2, // Weaker force for semantic similarity
         charge: -200,
         collide: 30
+    },
+    layout: {
+        anchorStrengthExisting: 0.08,
+        anchorStrengthNew: 0.015,
+        alphaStartStable: 0.08,
+        alphaStartFresh: 0.22,
+        alphaMin: 0.03,
+        alphaDecay: 0.12,
+        velocityDecay: 0.6,
     }
 };
 
@@ -22,6 +31,8 @@ let state = {
     height: window.innerHeight,
     transform: d3.zoomIdentity
 };
+let simulationRef = null;
+let nodePositionCache = new Map();
 
 // Elements
 const container = d3.select("#universe");
@@ -52,6 +63,35 @@ function cosineSimilarity(vecA, vecB) {
     }
     const mag = Math.sqrt(magA) * Math.sqrt(magB);
     return mag === 0 ? 0 : dot / mag;
+}
+
+function hashString(input) {
+    let hash = 0;
+    for (let i = 0; i < input.length; i++) {
+        hash = ((hash << 5) - hash) + input.charCodeAt(i);
+        hash |= 0;
+    }
+    return Math.abs(hash);
+}
+
+function getDeterministicStartPosition(id, centerX, centerY) {
+    const hash = hashString(String(id));
+    const angle = (hash % 360) * (Math.PI / 180);
+    const radius = 40 + (hash % 220);
+    return {
+        x: centerX + Math.cos(angle) * radius,
+        y: centerY + Math.sin(angle) * radius,
+    };
+}
+
+function snapshotNodePositions(nodes) {
+    const next = new Map();
+    for (const node of nodes || []) {
+        if (!node || !node.id) continue;
+        if (!Number.isFinite(node.x) || !Number.isFinite(node.y)) continue;
+        next.set(node.id, { x: node.x, y: node.y });
+    }
+    nodePositionCache = next;
 }
 
 // --- DATA PROCESSING ---
@@ -131,6 +171,14 @@ function processData(data) {
 // --- VISUALIZATION ---
 
 function initVis(data) {
+    snapshotNodePositions(state.nodes);
+    if (simulationRef) {
+        simulationRef.stop();
+    }
+    linkGroup.selectAll("*").remove();
+    nodeGroup.selectAll("*").remove();
+    labelGroup.selectAll("*").remove();
+
     // Update Stats
     d3.select("#fact-count").text(`${data.nodes.length} FACTS`);
     d3.select("#link-count").text(`${data.links.length} LINKS`);
@@ -138,6 +186,31 @@ function initVis(data) {
     const { nodes, links, simLinks } = processData(data);
     state.nodes = nodes;
     state.links = links;
+
+    let reusedPositions = 0;
+    const centerX = state.width / 2;
+    const centerY = state.height / 2;
+    for (const node of nodes) {
+        const cached = nodePositionCache.get(node.id);
+        if (cached) {
+            node.x = cached.x;
+            node.y = cached.y;
+            node.vx = 0;
+            node.vy = 0;
+            node._isNew = false;
+            reusedPositions += 1;
+        } else {
+            const start = getDeterministicStartPosition(node.id, centerX, centerY);
+            node.x = start.x;
+            node.y = start.y;
+            node.vx = 0;
+            node.vy = 0;
+            node._isNew = true;
+        }
+        node._anchorX = node.x;
+        node._anchorY = node.y;
+    }
+    const stableRatio = nodes.length > 0 ? (reusedPositions / nodes.length) : 0;
 
     // Combined links for simulation
     const allLinks = [...links, ...simLinks];
@@ -147,9 +220,16 @@ function initVis(data) {
         .force("link", d3.forceLink(allLinks).id(d => d.id).strength(l => {
             return l.type === 'explicit' ? 0.3 : (l.confidence * 0.5);
         }))
-        .force("charge", d3.forceManyBody().strength(-150))
+        .force("charge", d3.forceManyBody().strength(-90))
         .force("center", d3.forceCenter(state.width / 2, state.height / 2))
-        .force("collide", d3.forceCollide().radius(20).iterations(2));
+        .force("collide", d3.forceCollide().radius(20).iterations(2))
+        .force("anchorX", d3.forceX(d => d._anchorX).strength(d => d._isNew ? CONFIG.layout.anchorStrengthNew : CONFIG.layout.anchorStrengthExisting))
+        .force("anchorY", d3.forceY(d => d._anchorY).strength(d => d._isNew ? CONFIG.layout.anchorStrengthNew : CONFIG.layout.anchorStrengthExisting))
+        .alpha(stableRatio > 0.5 ? CONFIG.layout.alphaStartStable : CONFIG.layout.alphaStartFresh)
+        .alphaMin(CONFIG.layout.alphaMin)
+        .alphaDecay(CONFIG.layout.alphaDecay)
+        .velocityDecay(CONFIG.layout.velocityDecay);
+    simulationRef = simulation;
 
     // --- RENDERING ---
 
@@ -256,6 +336,9 @@ function initVis(data) {
         labels
             .attr("transform", d => `translate(${d.x},${d.y})`);
     });
+    simulation.on("end", () => {
+        snapshotNodePositions(nodes);
+    });
 
     // --- ZOOM ---
     const updateScales = (k) => {
@@ -276,6 +359,7 @@ function initVis(data) {
         });
 
     svg.call(zoom);
+    svg.call(zoom.transform, state.transform || d3.zoomIdentity);
 
     // --- CONTROLS ---
     d3.select("#toggle-sim").on("click", function () {
@@ -317,7 +401,7 @@ function initVis(data) {
 
     // Drag functions
     function dragstarted(event, d) {
-        if (!event.active) simulation.alphaTarget(0.3).restart();
+        if (!event.active) simulation.alphaTarget(0.15).restart();
         d.fx = d.x;
         d.fy = d.y;
     }
@@ -335,13 +419,144 @@ function initVis(data) {
 }
 
 // --- BOOTSTRAP ---
+async function loadGraph() {
+    const response = await fetch('/api/data');
+    if (!response.ok) {
+        throw new Error(`Failed to fetch graph data: ${response.status}`);
+    }
+    const data = await response.json();
+    initVis(data);
+}
+
+function setImportStatus(message, isError = false) {
+    const statusEl = document.getElementById("import-status");
+    if (!statusEl) return;
+    statusEl.textContent = message;
+    statusEl.style.color = isError ? "#ff7070" : "";
+}
+
+function setSearchStatus(message, isError = false) {
+    const statusEl = document.getElementById("search-status");
+    if (!statusEl) return;
+    statusEl.textContent = message;
+    statusEl.style.color = isError ? "#ff7070" : "";
+}
+
+function renderSearchResults(chains) {
+    const pre = document.getElementById("search-results");
+    if (!(pre instanceof HTMLElement)) return;
+    if (!Array.isArray(chains) || chains.length === 0) {
+        pre.textContent = "No chains found.";
+        return;
+    }
+    pre.textContent = chains.map((chain, index) => `${index + 1}. ${chain}`).join("\n");
+}
+
+async function runSemanticSearch() {
+    const queryInput = document.getElementById("semantic-query");
+    if (!(queryInput instanceof HTMLInputElement)) return;
+    const query = queryInput.value.trim();
+    if (!query) {
+        setSearchStatus("Enter a query first.", true);
+        renderSearchResults([]);
+        return;
+    }
+
+    setSearchStatus("Running memory.search...");
+    const response = await fetch("/api/search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query }),
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+        setSearchStatus(payload?.error || "Search failed.", true);
+        renderSearchResults([]);
+        return;
+    }
+
+    const chains = Array.isArray(payload?.chains) ? payload.chains : [];
+    setSearchStatus(`Found ${chains.length} chain(s).`);
+    renderSearchResults(chains);
+}
+
+async function uploadSelectedDoc() {
+    const fileInput = document.getElementById("doc-file");
+    if (!(fileInput instanceof HTMLInputElement) || !fileInput.files || fileInput.files.length === 0) {
+        setImportStatus("Select a .md or .txt file first.", true);
+        return;
+    }
+
+    const file = fileInput.files[0];
+    if (!file) return;
+    const lower = file.name.toLowerCase();
+    if (!(lower.endsWith(".md") || lower.endsWith(".txt"))) {
+        setImportStatus("Only .md/.txt files are supported.", true);
+        return;
+    }
+
+    setImportStatus("Uploading and importing document...");
+    const text = await file.text();
+
+    const response = await fetch("/api/add-doc", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filename: file.name, content: text }),
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+        setImportStatus(payload?.error || "Failed to import document.", true);
+        return;
+    }
+
+    const result = payload?.result;
+    const warnings = Array.isArray(result?.warnings) && result.warnings.length > 0
+        ? `\nWarnings: ${result.warnings.join(" | ")}`
+        : "";
+    setImportStatus(
+        `Imported ${result.documentFactCount} facts, ${result.totalLinksAdded} links.${warnings}`
+    );
+    await loadGraph();
+    fileInput.value = "";
+}
+
 async function main() {
     try {
-        const response = await fetch('/api/data');
-        const data = await response.json();
-        initVis(data);
+        await loadGraph();
     } catch (err) {
         console.error("Failed to load data", err);
+    }
+
+    const importButton = document.getElementById("import-doc");
+    if (importButton) {
+        importButton.addEventListener("click", () => {
+            uploadSelectedDoc().catch((err) => {
+                console.error("Import failed", err);
+                setImportStatus(err instanceof Error ? err.message : "Import failed.", true);
+            });
+        });
+    }
+
+    const runSearchButton = document.getElementById("run-search");
+    if (runSearchButton) {
+        runSearchButton.addEventListener("click", () => {
+            runSemanticSearch().catch((err) => {
+                console.error("Search failed", err);
+                setSearchStatus(err instanceof Error ? err.message : "Search failed.", true);
+            });
+        });
+    }
+
+    const semanticQuery = document.getElementById("semantic-query");
+    if (semanticQuery instanceof HTMLInputElement) {
+        semanticQuery.addEventListener("keydown", (event) => {
+            if (event.key !== "Enter") return;
+            event.preventDefault();
+            runSemanticSearch().catch((err) => {
+                console.error("Search failed", err);
+                setSearchStatus(err instanceof Error ? err.message : "Search failed.", true);
+            });
+        });
     }
 }
 

@@ -1,0 +1,53 @@
+name: analyzer
+description: Super-human analytical agent. Deconstructs data using structured Tree-of-Thought reasoning, Bayesian updating, and detective-level deduction to extract maximum truth from minimum information.
+
+model: moonshotai/kimi-k2.5
+provider: openrouter
+systemPrompt: prompts/system.md
+subagentPrompt: prompts/subagent.md
+
+modelSwitching:
+  whitelist:
+    - moonshotai/kimi-k2.5
+    - x-ai/grok-4.1-fast
+    - minimax/minimax-m2.5
+    - deepseek/deepseek-v3.2
+  selector:
+    model: openai/gpt-oss-20b
+    provider: openrouter
+
+tools:
+  - search
+  - message
+  - agents
+
+memory:
+  enabled: false
+  # Storage
+  table: analyzer_memory
+
+  # Linker (Auto-Linking)
+  linkerProvider: ollama
+  linkerModel: gpt-oss:20b
+  linkerTemperature: 0.0
+  linkerMaxTokens: 100000
+
+  # Embeddings
+  embeddingModel: bge-m3
+
+  # Tuning
+  candidateFactsPerTopic: 10
+  candidatePoolMax: 30
+  maxAutoLinksPerFact: 3
+  dedupeThreshold: 0.99
+
+  # Search
+  searchMaxDepth: 2
+  searchMaxStartFacts: 5
+  searchMaxChains: 5
+
+loop: provider-tools
+syntax: markdown
+skillsTable: analyzer_skills
+injectAgentsList: true
+requireFinish: true

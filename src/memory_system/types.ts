@@ -39,6 +39,17 @@ export interface AddLinksResult {
   total: number;
 }
 
+export interface AddDocResult {
+  documentPath: string;
+  documentFactCount: number;
+  documentInternalLinks: number;
+  documentExternalAutoLinks: number;
+  factIds: string[];
+  refMap: Record<string, string>;
+  totalLinksAdded: number;
+  warnings?: string[];
+}
+
 export interface AddedFactInfo {
   factId: string;
   ref?: string;
@@ -71,6 +82,17 @@ export interface MemoryRuntimeConfig {
   linkerModel: string;
   linkerTemperature: number;
   linkerMaxTokens: number;
+  docParserProvider: string;
+  docParserModel: string;
+  docParserTemperature: number;
+  docParserMaxTokens: number;
+  docCrossLinkMax: number;
+  docEnricherProvider: string;
+  docEnricherModel: string;
+  docEnricherTemperature: number;
+  docEnricherMaxTokens: number;
+  docFactConfidenceFallback: number;
+  docTopicFallback: string;
   embeddingModel: string;
   candidateFactsPerTopic: number;
   candidatePoolMax: number;
@@ -83,10 +105,21 @@ export interface MemoryRuntimeConfig {
 
 export const DEFAULT_MEMORY_CONFIG: MemoryRuntimeConfig = {
   table: 'global_memory',
-  linkerProvider: 'ollama',
-  linkerModel: 'gpt-oss:20b',
-  linkerTemperature: 0.1,
-  linkerMaxTokens: 900,
+  linkerProvider: 'openrouter',
+  linkerModel: 'google/gemini-2.5-flash-lite-preview-09-2025',
+  linkerTemperature: 1,
+  linkerMaxTokens: 40000,
+  docParserProvider: 'openrouter',
+  docParserModel: 'google/gemini-2.5-flash-lite-preview-09-2025',
+  docParserTemperature: 1,
+  docParserMaxTokens: 40000,
+  docCrossLinkMax: 10,
+  docEnricherProvider: 'openrouter',
+  docEnricherModel: 'google/gemini-2.5-flash-lite-preview-09-2025',
+  docEnricherTemperature: 1,
+  docEnricherMaxTokens: 40000,
+  docFactConfidenceFallback: 0.75,
+  docTopicFallback: 'document-import',
   embeddingModel: 'bge-m3',
   candidateFactsPerTopic: 15,
   candidatePoolMax: 40,

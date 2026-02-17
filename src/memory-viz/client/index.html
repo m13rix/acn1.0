@@ -23,8 +23,15 @@
 
         <div class="controls">
             <div class="control-group">
-                <label>Search</label>
-                <input type="text" id="search-input" placeholder="Query memory...">
+                <label>Local Filter</label>
+                <input type="text" id="search-input" placeholder="Filter nodes on graph...">
+            </div>
+            <div class="control-group">
+                <label>Semantic Search</label>
+                <input type="text" id="semantic-query" placeholder="Why did X happen?">
+                <button id="run-search">Run memory.search</button>
+                <div id="search-status" class="status-text"></div>
+                <pre id="search-results" class="search-results"></pre>
             </div>
             <div class="control-group">
                 <label>Simulation</label>
@@ -36,6 +43,12 @@
                     <input type="checkbox" id="show-labels" checked>
                     <span>Labels</span>
                 </label>
+            </div>
+            <div class="control-group">
+                <label>Import Document (.md/.txt)</label>
+                <input type="file" id="doc-file" accept=".md,.txt,text/markdown,text/plain">
+                <button id="import-doc">Add Doc</button>
+                <div id="import-status" class="status-text"></div>
             </div>
         </div>
     </div>

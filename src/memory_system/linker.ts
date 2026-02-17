@@ -95,6 +95,48 @@ function parseDelimitedRow(line: string, delimiter: string): string[] {
   });
 }
 
+function stripLinkerNoiseLine(line: string): string {
+  return line
+    .replace(/^\s*\d+\s*,\s*\{?\s*"?links\[[^\]]*\]\{[^}]*\}\s*:\s*/i, '')
+    .replace(/^\s*"?links\[[^\]]*\]\{[^}]*\}\s*:\s*/i, '')
+    .replace(/^\s*"?links\[[^\]]*\]\s*:\s*/i, '')
+    .replace(/^\s*\{\s*"?links\[[^\]]*\]\{[^}]*\}\s*:\s*/i, '')
+    .replace(/\s*\}:\s*$/g, '')
+    .replace(/\s*\}\s*$/g, '')
+    .replace(/\s*TOON\s*$/i, '')
+    .trim();
+}
+
+function looksLikeLinkCsvRow(line: string): boolean {
+  if (!line) return false;
+  const parts = parseDelimitedRow(line, ',');
+  if (parts.length < 4) return false;
+  const from = (parts[0] ?? '').trim();
+  const to = (parts[1] ?? '').trim();
+  const relation = (parts[2] ?? '').trim();
+  return Boolean(from && to && relation);
+}
+
+function salvageLinkRowsFromText(text: string): Array<Record<string, unknown>> {
+  const rows: Array<Record<string, unknown>> = [];
+  const lines = normalizeRawResponse(text).split(/\r?\n/);
+
+  for (const rawLine of lines) {
+    const clean = stripLinkerNoiseLine(rawLine);
+    if (!clean) continue;
+    if (!looksLikeLinkCsvRow(clean)) continue;
+    const values = parseDelimitedRow(clean, ',');
+    rows.push({
+      fromFactId: values[0] ?? '',
+      toFactId: values[1] ?? '',
+      relation: values[2] ?? '',
+      confidence: values[3] ?? '',
+    });
+  }
+
+  return rows;
+}
+
 function parseObjectLikeRow(line: string): Record<string, unknown> | null {
   const trimmed = line.trim();
   if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) return null;
@@ -133,9 +175,13 @@ function extractToonRows(text: string): Array<Record<string, unknown>> {
   const fenced = trimmed.match(/```(?:toon)?\s*([\s\S]*?)```/i);
   const payload = (fenced?.[1] ?? trimmed).trim();
 
-  const header = payload.match(/links(?:\[(\d*)([,\t|;])?\])?(?:\{([^}]*)\})?:?/i);
+  const header = payload.match(/(?:^|[\s>])links(?:\[(\d*)([,\t|;])?\])?(?:\{([^\r\n}]*)\}|\{)?\s*:?/i);
   if (!header || header.index === undefined) {
     throw new Error('Linker response does not contain a TOON links table.');
+  }
+  const matchedHeader = header[0] ?? '';
+  if (!matchedHeader.includes('[') && !matchedHeader.includes('{')) {
+    throw new Error('Linker response does not contain a valid TOON links header.');
   }
 
   const expectedRows = header[1] === undefined || header[1] === '' ? -1 : Number(header[1]);
@@ -147,9 +193,9 @@ function extractToonRows(text: string): Array<Record<string, unknown>> {
   const columnsRaw = header[3] ?? '';
   const columnsDelimiter = columnsRaw.includes(rowDelimiter) ? rowDelimiter : ',';
   const columns = parseDelimitedRow(columnsRaw, columnsDelimiter).map(value => value.trim()).filter(Boolean);
-  if (columns.length === 0) {
-    throw new Error('TOON links table has no columns.');
-  }
+  const effectiveColumns = columns.length > 0
+    ? columns
+    : ['fromFactId', 'toFactId', 'relation', 'confidence'];
 
   const afterHeader = payload.slice(header.index + header[0].length);
   const lines = afterHeader.split(/\r?\n/);
@@ -159,21 +205,18 @@ function extractToonRows(text: string): Array<Record<string, unknown>> {
     const clean = line.trim();
     if (!clean || clean.startsWith('#')) continue;
     rowLines.push(clean.replace(/;$/, '').trim());
-    if (expectedRows >= 0 && rowLines.length >= expectedRows) break;
   }
 
-  if (expectedRows > 0 && rowLines.length < expectedRows) {
-    throw new Error(`TOON links table expected ${expectedRows} rows, got ${rowLines.length}.`);
-  }
-  if (expectedRows === 0) {
+  if (expectedRows === 0 && rowLines.length === 0) {
     return [];
   }
 
   const rows: Array<Record<string, unknown>> = [];
-  const limit = expectedRows > 0 ? expectedRows : rowLines.length;
+  const limit = rowLines.length;
   for (let i = 0; i < limit; i++) {
-    const line = rowLines[i];
+    const line = stripLinkerNoiseLine(rowLines[i] ?? '');
     if (!line) continue;
+    if (line === '{' || line === '}') continue;
 
     const objectLike = parseObjectLikeRow(line);
     if (objectLike) {
@@ -182,9 +225,10 @@ function extractToonRows(text: string): Array<Record<string, unknown>> {
     }
 
     const values = parseDelimitedRow(line, rowDelimiter);
+    if (values.length < 3) continue;
     const row: Record<string, unknown> = {};
-    for (let col = 0; col < columns.length; col++) {
-      const column = columns[col];
+    for (let col = 0; col < effectiveColumns.length; col++) {
+      const column = effectiveColumns[col];
       if (!column) continue;
       row[column] = values[col] ?? '';
     }
@@ -234,9 +278,13 @@ export function parseLinkerRawResponse(text: string): Array<Record<string, unkno
   try {
     return extractToonRows(normalized);
   } catch {
+    const salvaged = salvageLinkRowsFromText(normalized);
+    if (salvaged.length > 0) return salvaged;
     const jsonText = extractJsonObject(normalized);
     const parsed = JSON.parse(jsonText) as { links?: Array<Record<string, unknown>> };
-    return Array.isArray(parsed.links) ? parsed.links : [];
+    if (Array.isArray(parsed.links)) return parsed.links;
+    const nestedSalvaged = salvageLinkRowsFromText(JSON.stringify(parsed));
+    return nestedSalvaged;
   }
 }
 
@@ -496,7 +544,12 @@ export async function generateAutoLinks(
     const fromFactId = String(item.fromFactId ?? '').trim();
     const toFactId = String(item.toFactId ?? '').trim();
     const relation = String(item.relation ?? '').trim();
-    const confidence = clamp01(Number(item.confidence ?? 0.5));
+    const confidenceRaw = String(item.confidence ?? '0.5').trim();
+    const confidence = clamp01(
+      Number.isFinite(Number(confidenceRaw))
+        ? Number(confidenceRaw)
+        : Number.parseFloat(confidenceRaw.replace(/[^\d.+-]/g, ''))
+    );
     if (!fromFactId || !toFactId || !relation) continue;
     if (fromFactId === toFactId) continue;
     links.push({ fromFactId, toFactId, relation, confidence });

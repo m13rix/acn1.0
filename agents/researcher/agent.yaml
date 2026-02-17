@@ -1,7 +1,7 @@
 name: researcher
 description: Specialized agent for high-quality and efficient research. Automatically selects the best search method (answer, search, or deep research) based on query complexity.
 
-model: deepseek/deepseek-v3.2
+model: minimax/minimax-m2.5
 provider: openrouter
 systemPrompt: prompts/system.md
 
@@ -18,7 +18,7 @@ tools:
   - search
   - message
 
-loop: message-passthrough
+loop: provider_tools
 syntax: markdown
 skillsTable: researcher_skills
 injectAgentsList: false

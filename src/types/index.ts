@@ -170,6 +170,14 @@ export interface AgentConfig {
   // Agent system config
   injectAgentsList?: boolean;  // Inject available agents list into system prompt (default: true)
   requireFinish?: boolean;     // Whether the agent must call FINISH to complete a task (default: true)
+  subagentPrompt?: string;     // Optional: file to use as base system prompt for sub-agents (instead of CORE)
+}
+
+export interface LoadedAgent {
+  config: AgentConfig;
+  systemPromptContent: string;
+  subagentPromptContent?: string;
+  directory: string;
 }
 
 export interface AgentMemoryConfig {
@@ -179,6 +187,17 @@ export interface AgentMemoryConfig {
   linkerModel?: string;
   linkerTemperature?: number;
   linkerMaxTokens?: number;
+  docParserProvider?: string;
+  docParserModel?: string;
+  docParserTemperature?: number;
+  docParserMaxTokens?: number;
+  docCrossLinkMax?: number;
+  docEnricherProvider?: string;
+  docEnricherModel?: string;
+  docEnricherTemperature?: number;
+  docEnricherMaxTokens?: number;
+  docFactConfidenceFallback?: number;
+  docTopicFallback?: string;
   embeddingModel?: string;
   candidateFactsPerTopic?: number;
   candidatePoolMax?: number;
@@ -211,11 +230,7 @@ export interface ModelSwitchingConfig {
   };
 }
 
-export interface LoadedAgent {
-  config: AgentConfig;
-  systemPromptContent: string;
-  directory: string;
-}
+
 
 // ============================================================================
 // Tool Types

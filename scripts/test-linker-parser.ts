@@ -37,6 +37,15 @@ const cases: Case[] = [
     expectedRows: 2,
   },
   {
+    name: 'toon malformed header prefix and missing columns',
+    input: [
+      '4 links[44,]{',
+      'a,b,CAUSES,0.95',
+      'b,c,ELABORATES,0.90',
+    ].join('\n'),
+    expectedRows: 2,
+  },
+  {
     name: 'toon object rows',
     input: [
       'links[1,]{fromFactId,toFactId,relation,confidence}:',

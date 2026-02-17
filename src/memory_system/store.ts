@@ -225,5 +225,14 @@ export class MemoryStore {
     const expr = `id IN (${ids.map(quote).join(',')})`;
     await table.delete(expr);
   }
-}
 
+  async deleteLinksByFactIds(factIds: string[]): Promise<void> {
+    if (factIds.length === 0) return;
+    const db = await this.getDb();
+    if (!(await this.tableExists(this.linksTableName))) return;
+    const table = await db.openTable(this.linksTableName);
+    const inExpr = `(${factIds.map(quote).join(',')})`;
+    const expr = `fromFactId IN ${inExpr} OR toFactId IN ${inExpr}`;
+    await table.delete(expr);
+  }
+}

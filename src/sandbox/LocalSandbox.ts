@@ -599,6 +599,17 @@ declare global {
         if (cfg.linkerModel) env.MEMORY_LINKER_MODEL = cfg.linkerModel;
         if (typeof cfg.linkerTemperature === 'number') env.MEMORY_LINKER_TEMPERATURE = String(cfg.linkerTemperature);
         if (typeof cfg.linkerMaxTokens === 'number') env.MEMORY_LINKER_MAX_TOKENS = String(cfg.linkerMaxTokens);
+        if (cfg.docParserProvider) env.MEMORY_DOC_PARSER_PROVIDER = cfg.docParserProvider;
+        if (cfg.docParserModel) env.MEMORY_DOC_PARSER_MODEL = cfg.docParserModel;
+        if (typeof cfg.docParserTemperature === 'number') env.MEMORY_DOC_PARSER_TEMPERATURE = String(cfg.docParserTemperature);
+        if (typeof cfg.docParserMaxTokens === 'number') env.MEMORY_DOC_PARSER_MAX_TOKENS = String(cfg.docParserMaxTokens);
+        if (typeof cfg.docCrossLinkMax === 'number') env.MEMORY_DOC_CROSSLINK_MAX = String(cfg.docCrossLinkMax);
+        if (cfg.docEnricherProvider) env.MEMORY_DOC_ENRICHER_PROVIDER = cfg.docEnricherProvider;
+        if (cfg.docEnricherModel) env.MEMORY_DOC_ENRICHER_MODEL = cfg.docEnricherModel;
+        if (typeof cfg.docEnricherTemperature === 'number') env.MEMORY_DOC_ENRICHER_TEMPERATURE = String(cfg.docEnricherTemperature);
+        if (typeof cfg.docEnricherMaxTokens === 'number') env.MEMORY_DOC_ENRICHER_MAX_TOKENS = String(cfg.docEnricherMaxTokens);
+        if (typeof cfg.docFactConfidenceFallback === 'number') env.MEMORY_DOC_FACT_CONFIDENCE_FALLBACK = String(cfg.docFactConfidenceFallback);
+        if (cfg.docTopicFallback) env.MEMORY_DOC_TOPIC_FALLBACK = cfg.docTopicFallback;
         if (cfg.embeddingModel) env.MEMORY_EMBEDDING_MODEL = cfg.embeddingModel;
         if (typeof cfg.candidateFactsPerTopic === 'number') env.MEMORY_CANDIDATE_FACTS_PER_TOPIC = String(cfg.candidateFactsPerTopic);
         if (typeof cfg.candidatePoolMax === 'number') env.MEMORY_CANDIDATE_POOL_MAX = String(cfg.candidatePoolMax);

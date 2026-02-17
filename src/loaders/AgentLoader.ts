@@ -125,9 +125,21 @@ export class AgentLoader {
             console.warn(`Warning: Could not load system prompt ${systemPromptPath}`);
           }
 
+          // Load subagent prompt content if specified
+          let subagentPromptContent: string | undefined;
+          if (config.subagentPrompt) {
+            const subagentPromptPath = join(dir, config.subagentPrompt);
+            try {
+              subagentPromptContent = await readFile(subagentPromptPath, 'utf-8');
+            } catch {
+              console.warn(`Warning: Could not load subagent prompt ${subagentPromptPath}`);
+            }
+          }
+
           return {
             config,
             systemPromptContent,
+            subagentPromptContent,
             directory: dir,
           };
         }

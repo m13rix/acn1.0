@@ -44,6 +44,8 @@ export interface RunAgentOptions {
     stream?: boolean;
     /** Override model for the agent (used by subAgent with model switching) */
     modelOverride?: string;
+    /** Completely replace system prompt (for sub-agents) */
+    systemPromptOverride?: string;
 }
 
 /**
@@ -58,6 +60,7 @@ export async function runAgent(options: RunAgentOptions): Promise<string> {
         sandbox,
         parentDepth = 0,
         extraSystemPrompt,
+        systemPromptOverride,
         stream = true,
         modelOverride,
     } = options;
@@ -112,7 +115,12 @@ export async function runAgent(options: RunAgentOptions): Promise<string> {
         directory: loadedAgent.directory,
     };
 
-    // Apply extra system prompt (for subAgents)
+    // Apply system prompt overrides
+    if (systemPromptOverride) {
+        agentForSession.systemPromptContent = systemPromptOverride;
+    }
+
+    // Apply extra system prompt (for subAgents) - appended even if overridden
     if (extraSystemPrompt) {
         agentForSession.systemPromptContent =
             `[Sub-agent additional context]\n${extraSystemPrompt}\n\n---\n\n${agentForSession.systemPromptContent}`;
@@ -207,7 +215,8 @@ export async function runAgent(options: RunAgentOptions): Promise<string> {
             callbacks,
             stream,
             sandbox,
-            agentForSession.config.modelSwitching
+            agentForSession.config.modelSwitching,
+            agentForSession
         );
 
         // Show completion

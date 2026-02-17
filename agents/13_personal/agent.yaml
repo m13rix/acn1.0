@@ -18,8 +18,8 @@ modelSwitching:
 tools:
   - search
   - message
-  - agents
 
+injectAgentsList: true
 requireFinish: false
 
 memory:
@@ -28,4 +28,3 @@ memory:
 loop: provider-tools
 syntax: markdown
 skillsTable: 13_personal
-injectAgentsList: true

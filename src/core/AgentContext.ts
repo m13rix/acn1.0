@@ -9,7 +9,7 @@ import { AsyncLocalStorage } from 'async_hooks';
 import type { ExecutorCallbacks } from './Executor.js';
 import type { ISandbox } from '../sandbox/interfaces.js';
 
-import type { ModelSwitchingConfig } from '../types/index.js';
+import type { ModelSwitchingConfig, LoadedAgent } from '../types/index.js';
 
 export interface AgentContextData {
     /** Current nesting depth (0 = root agent) */
@@ -24,6 +24,8 @@ export interface AgentContextData {
     sandbox?: ISandbox;
     /** Agent-specific model switching configuration */
     modelSwitching?: ModelSwitchingConfig;
+    /** The running agent instance (for accessing config/prompts) */
+    agent?: LoadedAgent;
 }
 
 /**
@@ -61,6 +63,13 @@ export function getAgentModelSwitchingConfig(): ModelSwitchingConfig | undefined
 }
 
 /**
+ * Get the current running agent instance
+ */
+export function getCurrentAgent(): LoadedAgent | undefined {
+    return agentContext.getStore()?.agent;
+}
+
+/**
  * Check if streaming is enabled in context
  */
 export function isStreamingEnabled(): boolean {
@@ -83,7 +92,8 @@ export function runWithAgentContext<T>(
     callbacks?: ExecutorCallbacks,
     stream?: boolean,
     sandbox?: ISandbox,
-    modelSwitching?: ModelSwitchingConfig
+    modelSwitching?: ModelSwitchingConfig,
+    agent?: LoadedAgent
 ): T | Promise<T> {
     const parentStore = agentContext.getStore();
     const newDepth = (parentStore?.depth ?? -1) + 1;
@@ -96,6 +106,7 @@ export function runWithAgentContext<T>(
             stream: stream ?? parentStore?.stream ?? true,
             sandbox: sandbox ?? parentStore?.sandbox,
             modelSwitching: modelSwitching ?? parentStore?.modelSwitching,
+            agent: agent ?? parentStore?.agent,
         },
         fn
     );
