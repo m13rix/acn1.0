@@ -31,13 +31,18 @@ export class ToolExecutionEngine {
   constructor(
     private readonly session: Session,
     private readonly callbacks: ToolExecutionCallbacks = {}
-  ) {}
+  ) { }
 
   async executeAction(code: string): Promise<ToolExecutionResult> {
     this.callbacks.onAction?.(code);
 
     const env = actionContext.getStore()?.env || {};
     env.AGENT_DEPTH = String(agentContext.getStore()?.depth ?? 0);
+    // Pass current agent name so tools can load its config in the child process
+    const currentAgent = agentContext.getStore()?.agent;
+    if (currentAgent?.config?.name) {
+      env.ACN_AGENT_NAME = currentAgent.config.name;
+    }
 
     const onStderr = (chunk: string) => process.stderr.write(chunk);
     const result = await this.session.sandbox.execute(code, undefined, env, onStderr);

@@ -77,6 +77,47 @@ require('fs').writeFileSync('intake.md', intake);
 console.log("Intake saved to intake.md");
 ```
 
+**Then, search memory for prior knowledge:**
+
+ACTION CONTENT (TypeScript Code):
+```
+// Spawn a fast sub-agent to scan memory for anything relevant
+await agents.subAgent("memory_scout", {
+  description: "Searches memory graph for facts related to the analysis topic",
+  systemPrompt:
+    "You search the memory system for ALL relevant prior knowledge.\n\n" +
+    "Steps:\n" +
+    "1. Read intake.md to understand the topic, entities, and core question\n" +
+    "2. Run multiple memory.search() calls with different queries:\n" +
+    "   - Search for each key entity (by name/number)\n" +
+    "   - Search for the core topic/question\n" +
+    "   - Search for relationships between entities\n" +
+    "3. Adjust search depth for richer results:\n" +
+    "   memory.search(query, { maxDepth: 3, maxChains: 8 })\n" +
+    "4. Compile ALL relevant findings into memory_context.md\n\n" +
+    "Format: group facts by entity/topic, note confidence levels.\n" +
+    "Include EVERYTHING potentially relevant — the main agent will filter.",
+  model: "fast, efficient"
+});
+await agents.call("memory_scout",
+  "Search memory for everything related to this analysis. Read intake.md first."
+);
+
+// Append memory context to intake if found
+const fs = require('fs');
+if (fs.existsSync('memory_context.md')) {
+  const memCtx = fs.readFileSync('memory_context.md', 'utf-8');
+  if (memCtx.trim()) {
+    let intake = fs.readFileSync('intake.md', 'utf-8');
+    intake += `\n\n## Prior Knowledge (from memory)\n${memCtx}`;
+    fs.writeFileSync('intake.md', intake);
+    console.log("Memory context appended to intake.md");
+  }
+} else {
+  console.log("No memory context found — proceeding without prior knowledge.");
+}
+```
+
 ---
 
 ### Phase 1: RESEARCH — Understand Before You Hypothesize
@@ -451,11 +492,14 @@ Arguments: `filename`: `report.md`, `content`:
 3. [What to monitor for changes]
 ```
 
-Finally:
+Then save to memory and finish:
 
 ACTION CONTENT (TypeScript Code):
 ```
-FINISH("Analysis complete. Detailed report saved to report.md.");
+message.sendFiles(['report.md']);
+// Ingest report into memory graph (auto-extracts facts & links them)
+await memory.addDoc('report.md');
+FINISH("Analysis complete. Report saved to report.md and added to memory.");
 ```
 
 ---
@@ -468,7 +512,8 @@ Your context window is limited. Use `.md` files as external working memory:
 
 | File | Purpose |
 |------|---------|
-| `intake.md` | Raw facts, entities, unknowns |
+| `intake.md` | Raw facts, entities, unknowns + prior memory |
+| `memory_context.md` | Prior knowledge from memory graph |
 | `research_*.md` | Domain knowledge from researcher |
 | `hypotheses.md` | All hypotheses with initial probabilities |
 | `h*_findings.md` | Per-hypothesis investigation results |

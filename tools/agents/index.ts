@@ -25,7 +25,12 @@ import { getGlobalDisplay } from '../../src/core/GlobalDisplay.js';
 async function resolveModel(modelNameOrDescription: string): Promise<string> {
     const rootDir = process.env.PROJECT_ROOT || process.cwd();
     const registryPath = join(rootDir, 'data', 'models.json');
-    const contextConfig = getAgentModelSwitchingConfig();
+    // Try AsyncLocalStorage first, fallback to loading agent from env
+    let contextConfig = getAgentModelSwitchingConfig();
+    if (!contextConfig) {
+        const callingAgent = await getCallingAgent();
+        contextConfig = callingAgent?.config?.modelSwitching;
+    }
 
     if (!fs.existsSync(registryPath)) {
         console.warn(`[agents] Model registry not found at ${registryPath}. Using input as model ID.`);
@@ -70,6 +75,26 @@ import { sendRequest } from '../srcAgent/index.js';
 import { LocalSandbox } from '../../src/sandbox/LocalSandbox.js';
 import { selectModel, SelectorConfig } from '../../src/services/model-selection/ModelSelector.js';
 
+/**
+ * Get the calling agent's LoadedAgent — works across process boundaries.
+ * 1. Tries AsyncLocalStorage context (same process)
+ * 2. Falls back to ACN_AGENT_NAME env var (child process)
+ */
+async function getCallingAgent(): Promise<import('../../src/types/index.js').LoadedAgent | undefined> {
+    // 1. Try AsyncLocalStorage (works in same process)
+    const fromContext = getCurrentAgent();
+    if (fromContext) return fromContext;
+
+    // 2. Fallback: load from env var (works across process boundary)
+    const agentName = process.env.ACN_AGENT_NAME;
+    if (agentName) {
+        const loaded = await loadAgent(agentName);
+        return loaded || undefined;
+    }
+
+    return undefined;
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // SubAgent storage
 // ────────────────────────────────────────────────────────────────────────────────
@@ -80,6 +105,8 @@ interface SubAgentConfig {
     systemPrompt: string;
     model: string;
     baseSystemPrompt?: string;
+    /** Name of the agent that created this sub-agent (used as base config) */
+    parentAgentName?: string;
 }
 
 const SUBAGENTS_FILE = '.acn-subagents.json';
@@ -177,8 +204,10 @@ export async function subAgent(name: string, config: {
     const resolvedModel = await resolveModel(config.model);
 
     // Check if the current agent has a subagent base prompt defined
-    const currentAgent = getCurrentAgent();
+    // Uses getCallingAgent() which works across process boundaries
+    const currentAgent = await getCallingAgent();
     const baseSystemPrompt = currentAgent?.subagentPromptContent;
+    const parentAgentName = currentAgent?.config?.name;
 
     const subAgentConfig: SubAgentConfig = {
         name,
@@ -186,6 +215,7 @@ export async function subAgent(name: string, config: {
         systemPrompt: config.systemPrompt,
         model: resolvedModel,
         baseSystemPrompt,
+        parentAgentName,
     };
 
     currentSubAgents.set(name, subAgentConfig);
@@ -266,9 +296,10 @@ export async function call(name: string, request: string): Promise<string> {
         if (currentSubAgents.has(name)) {
             const subConfig = currentSubAgents.get(name)!;
 
-            // For sub-agents: load the CORE agent, apply sub-agent's prompt + model
+            // For sub-agents: load the PARENT agent that created it (not always CORE)
+            const baseAgent = subConfig.parentAgentName || 'CORE';
             return await runAgent({
-                agent: 'CORE',
+                agent: baseAgent,
                 message: request,
                 sandbox,
                 parentDepth,

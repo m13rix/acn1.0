@@ -62,6 +62,14 @@ Link the extracted facts using these precise verbs:
 Return ONLY TOON (Token-Oriented Object Notation). No markdown.
 Use exactly two tables: \`facts\` and \`links\`.
 
+Example Output:
+facts[2,]{id,content}:
+0,"[Doc...] First extracted fact..."
+1,"[Doc...] Second extracted fact..."
+
+links[1,]{fromId,toId,relation,confidence}:
+0,1,CONTINUES,1.0
+
 Schema:
 facts[N,]{id,content}:
 <id>,<content string>

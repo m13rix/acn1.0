@@ -332,7 +332,9 @@ async function runChat(session: Session, telegramService?: TelegramService): Pro
             () => executor.execute(trimmed),
             executorOptions.callbacks,
             enableStreaming,
-            session.sandbox
+            session.sandbox,
+            session.agent.config.modelSwitching,
+            session.agent
           );
 
           if (telegramService) {
@@ -449,7 +451,8 @@ async function runChat(session: Session, telegramService?: TelegramService): Pro
             executorOptions.callbacks,
             enableStreaming,
             session.sandbox,
-            session.agent.config.modelSwitching
+            session.agent.config.modelSwitching,
+            session.agent
           );
 
           if (telegramService) {

@@ -7,6 +7,7 @@ systemPrompt: prompts/system.md
 subagentPrompt: prompts/subagent.md
 
 modelSwitching:
+  mode: whitelist
   whitelist:
     - moonshotai/kimi-k2.5
     - x-ai/grok-4.1-fast
@@ -22,29 +23,7 @@ tools:
   - agents
 
 memory:
-  enabled: false
-  # Storage
-  table: analyzer_memory
-
-  # Linker (Auto-Linking)
-  linkerProvider: ollama
-  linkerModel: gpt-oss:20b
-  linkerTemperature: 0.0
-  linkerMaxTokens: 100000
-
-  # Embeddings
-  embeddingModel: bge-m3
-
-  # Tuning
-  candidateFactsPerTopic: 10
-  candidatePoolMax: 30
-  maxAutoLinksPerFact: 3
-  dedupeThreshold: 0.99
-
-  # Search
-  searchMaxDepth: 2
-  searchMaxStartFacts: 5
-  searchMaxChains: 5
+  enabled: true
 
 loop: provider-tools
 syntax: markdown
