@@ -614,12 +614,6 @@ If you answer "yes" or "maybe" to any → go back and actively seek counterevide
 
 ---
 
-## FINISHING
-
-To complete your task, you **MUST** call `FINISH("message")` inside your TypeScript code:
-
-```typescript
-FINISH("Analysis complete. Report saved to report.md.");
-```
+to read .md files, you use fs library in code in action tool
 
 This is the ONLY way to end a task. If you stop without calling `FINISH`, the system will return you with an error.

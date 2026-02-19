@@ -10,6 +10,7 @@ import { dirname, join } from 'path';
 import type { ProviderToolCall } from '../types/index.js';
 import { actionContext } from './ActionContext.js';
 import { agentContext } from './AgentContext.js';
+import { ActionAutoFixEngine } from './ActionAutoFixEngine.js';
 import type { Session } from './Session.js';
 
 export interface ToolExecutionCallbacks {
@@ -36,7 +37,7 @@ export class ToolExecutionEngine {
   async executeAction(code: string): Promise<ToolExecutionResult> {
     this.callbacks.onAction?.(code);
 
-    const env = actionContext.getStore()?.env || {};
+    const env = { ...(actionContext.getStore()?.env || {}) };
     env.AGENT_DEPTH = String(agentContext.getStore()?.depth ?? 0);
     // Pass current agent name so tools can load its config in the child process
     const currentAgent = agentContext.getStore()?.agent;
@@ -45,10 +46,28 @@ export class ToolExecutionEngine {
     }
 
     const onStderr = (chunk: string) => process.stderr.write(chunk);
-    const result = await this.session.sandbox.execute(code, undefined, env, onStderr);
-    const observation = result.success
+    let result = await this.session.sandbox.execute(code, undefined, env, onStderr);
+    let autoFixSummary: string[] = [];
+
+    if (!result.success) {
+      const autoFixEngine = new ActionAutoFixEngine(this.session);
+      const autoFixOutcome = await autoFixEngine.repairAndRetry({
+        originalCode: code,
+        initialResult: result,
+        env,
+        onStderr,
+      });
+      result = autoFixOutcome.result;
+      autoFixSummary = autoFixOutcome.summaryLines;
+    }
+
+    const baseObservation = result.success
       ? result.output
       : (`Error: ${result.error}\n${result.output}`).trim();
+
+    const observation = autoFixSummary.length > 0
+      ? `${autoFixSummary.join('\n')}\n${baseObservation}`.trim()
+      : baseObservation;
 
     return {
       observation,

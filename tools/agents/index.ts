@@ -6,8 +6,6 @@
  */
 
 import * as fs from 'fs';
-import * as path from 'path';
-import { fileURLToPath } from 'url';
 import { join } from 'path';
 
 import { runAgent, listAgents, loadAgent } from '../../src/core/AgentRunner.js';
@@ -19,18 +17,70 @@ import {
 } from '../../src/core/AgentContext.js';
 import { getAgentModelSwitchingConfig } from '../../src/core/AgentContext.js';
 import { getGlobalDisplay } from '../../src/core/GlobalDisplay.js';
+import type { LoadedAgent } from '../../src/types/index.js';
+
+const SUBAGENT_SCOPE_SEPARATOR = '::';
+
+function normaliseModelId(model: string): string {
+    return String(model || '').trim().toLowerCase();
+}
+
+function buildScopedSubAgentKey(name: string, parentAgentName?: string): string {
+    if (!parentAgentName) {
+        return name;
+    }
+    return `${parentAgentName}${SUBAGENT_SCOPE_SEPARATOR}${name}`;
+}
+
+async function loadAgentCaseInsensitive(name: string): Promise<LoadedAgent | undefined> {
+    const direct = await loadAgent(name);
+    if (direct) {
+        return direct;
+    }
+
+    const available = await listAgents();
+    const match = available.find(agentName => agentName.toLowerCase() === name.toLowerCase());
+    if (!match) {
+        return undefined;
+    }
+
+    return (await loadAgent(match)) || undefined;
+}
+
+function isModelAllowedForAgent(model: string, agent: LoadedAgent): boolean {
+    const switching = agent.config.modelSwitching;
+    if (switching?.mode !== 'whitelist') {
+        return true;
+    }
+
+    const whitelist = Array.isArray(switching.whitelist) ? switching.whitelist : [];
+    if (whitelist.length === 0) {
+        return normaliseModelId(model) === normaliseModelId(agent.config.model);
+    }
+
+    const normalizedModel = normaliseModelId(model);
+    return whitelist.some(item => normaliseModelId(item) === normalizedModel);
+}
+
+function getSafeFallbackModel(agent: LoadedAgent): string {
+    const switching = agent.config.modelSwitching;
+    const whitelist = Array.isArray(switching?.whitelist) ? switching!.whitelist! : [];
+
+    if (switching?.mode === 'whitelist' && whitelist.length > 0) {
+        const defaultModel = agent.config.model;
+        const hasDefault = whitelist.some(item => normaliseModelId(item) === normaliseModelId(defaultModel));
+        return hasDefault ? defaultModel : whitelist[0]!;
+    }
+
+    return agent.config.model;
+}
 /**
  * Resolve a model name or description to a valid model ID using the registry.
  */
-async function resolveModel(modelNameOrDescription: string): Promise<string> {
+async function resolveModel(modelNameOrDescription: string, callingAgent: LoadedAgent): Promise<string> {
     const rootDir = process.env.PROJECT_ROOT || process.cwd();
     const registryPath = join(rootDir, 'data', 'models.json');
-    // Try AsyncLocalStorage first, fallback to loading agent from env
-    let contextConfig = getAgentModelSwitchingConfig();
-    if (!contextConfig) {
-        const callingAgent = await getCallingAgent();
-        contextConfig = callingAgent?.config?.modelSwitching;
-    }
+    const contextConfig = getAgentModelSwitchingConfig() || callingAgent.config.modelSwitching;
 
     if (!fs.existsSync(registryPath)) {
         console.warn(`[agents] Model registry not found at ${registryPath}. Using input as model ID.`);
@@ -41,7 +91,8 @@ async function resolveModel(modelNameOrDescription: string): Promise<string> {
         // Base config with defaults
         const baseConfig: SelectorConfig = {
             registryPath,
-            mode: 'allow_all',
+            mode: 'whitelist',
+            whitelist: [callingAgent.config.model],
             selector: {
                 provider: 'openrouter', // Use openrouter provider for selection
                 model: 'openai/gpt-oss-20b', // Fast, cheap model
@@ -53,6 +104,10 @@ async function resolveModel(modelNameOrDescription: string): Promise<string> {
         const config: SelectorConfig = {
             ...baseConfig,
             ...contextConfig,
+            mode: contextConfig?.mode || baseConfig.mode,
+            whitelist: (Array.isArray(contextConfig?.whitelist) && contextConfig!.whitelist!.length > 0)
+                ? contextConfig!.whitelist
+                : baseConfig.whitelist,
             // Ensure registry path is always set fallback (context might not have it)
             registryPath: contextConfig?.registryPath || baseConfig.registryPath,
             // Merge selector config if present
@@ -66,8 +121,15 @@ async function resolveModel(modelNameOrDescription: string): Promise<string> {
         // Default to ID, then name (as ID), then fallback to input
         return selected.id || selected.name || modelNameOrDescription;
     } catch (error) {
-        console.warn(`[agents] Model selection failed (using strict input): ${error instanceof Error ? error.message : String(error)}`);
-        return modelNameOrDescription;
+        const fallbackModel = getSafeFallbackModel(callingAgent);
+
+        if (isModelAllowedForAgent(modelNameOrDescription, callingAgent)) {
+            console.warn(`[agents] Model selection failed (using provided model): ${error instanceof Error ? error.message : String(error)}`);
+            return modelNameOrDescription;
+        }
+
+        console.warn(`[agents] Model selection failed (fallback to ${fallbackModel}): ${error instanceof Error ? error.message : String(error)}`);
+        return fallbackModel;
     }
 }
 
@@ -80,15 +142,15 @@ import { selectModel, SelectorConfig } from '../../src/services/model-selection/
  * 1. Tries AsyncLocalStorage context (same process)
  * 2. Falls back to ACN_AGENT_NAME env var (child process)
  */
-async function getCallingAgent(): Promise<import('../../src/types/index.js').LoadedAgent | undefined> {
+async function getCallingAgent(): Promise<LoadedAgent | undefined> {
     // 1. Try AsyncLocalStorage (works in same process)
     const fromContext = getCurrentAgent();
     if (fromContext) return fromContext;
 
     // 2. Fallback: load from env var (works across process boundary)
-    const agentName = process.env.ACN_AGENT_NAME;
+    const agentName = (process.env.ACN_AGENT_NAME || '').trim();
     if (agentName) {
-        const loaded = await loadAgent(agentName);
+        const loaded = await loadAgentCaseInsensitive(agentName);
         return loaded || undefined;
     }
 
@@ -195,17 +257,20 @@ export async function subAgent(name: string, config: {
     model: string;
 }): Promise<string> {
     const currentSubAgents = loadSubAgents();
+    const currentAgent = await getCallingAgent();
+    if (!currentAgent) {
+        return `Error: Unable to resolve calling agent context for sub-agent "${name}".`;
+    }
 
-    if (currentSubAgents.has(name)) {
+    const scopedKey = buildScopedSubAgentKey(name, currentAgent.config.name);
+    if (currentSubAgents.has(scopedKey)) {
         return `Sub-agent "${name}" already exists in this session.`;
     }
 
     // Resolve model description to actual model ID
-    const resolvedModel = await resolveModel(config.model);
+    const resolvedModel = await resolveModel(config.model, currentAgent);
 
     // Check if the current agent has a subagent base prompt defined
-    // Uses getCallingAgent() which works across process boundaries
-    const currentAgent = await getCallingAgent();
     const baseSystemPrompt = currentAgent?.subagentPromptContent;
     const parentAgentName = currentAgent?.config?.name;
 
@@ -218,7 +283,7 @@ export async function subAgent(name: string, config: {
         parentAgentName,
     };
 
-    currentSubAgents.set(name, subAgentConfig);
+    currentSubAgents.set(scopedKey, subAgentConfig);
     saveSubAgents(currentSubAgents);
 
     // Show creation in CLI
@@ -271,6 +336,7 @@ export async function newAgent(prompt: string): Promise<string> {
 export async function call(name: string, request: string): Promise<string> {
     const parentDepth = getAgentDepth(); // Will be 0 in child process
     const stream = isStreamingEnabled();
+    const currentAgent = await getCallingAgent();
     let sandbox = getAgentSandbox();
 
     // If no sandbox in context (running inside child process), try to attach 
@@ -291,13 +357,60 @@ export async function call(name: string, request: string): Promise<string> {
     }
 
     try {
-        // ── Check if it's a sub-agent ──────────────────────────────────
         const currentSubAgents = loadSubAgents();
-        if (currentSubAgents.has(name)) {
-            const subConfig = currentSubAgents.get(name)!;
+        const scopedKey = currentAgent ? buildScopedSubAgentKey(name, currentAgent.config.name) : name;
+        let resolvedKey: string | null = null;
+        let subConfig: SubAgentConfig | undefined;
 
-            // For sub-agents: load the PARENT agent that created it (not always CORE)
+        if (currentSubAgents.has(scopedKey)) {
+            resolvedKey = scopedKey;
+            subConfig = currentSubAgents.get(scopedKey);
+        } else if (currentSubAgents.has(name)) {
+            resolvedKey = name;
+            subConfig = currentSubAgents.get(name);
+        } else {
+            const matches = Array.from(currentSubAgents.entries()).filter(([, cfg]) => cfg.name === name);
+            if (matches.length === 1) {
+                resolvedKey = matches[0]![0];
+                subConfig = matches[0]![1];
+            } else if (matches.length > 1) {
+                const variants = matches.map(([, cfg]) => cfg.parentAgentName || 'unknown').join(', ');
+                return `Error: Sub-agent "${name}" is ambiguous in this session (parents: ${variants}).`;
+            }
+        }
+
+        if (subConfig && resolvedKey) {
+            // Self-heal legacy entries that had no parent metadata.
+            if (!subConfig.parentAgentName && currentAgent) {
+                subConfig.parentAgentName = currentAgent.config.name;
+                if (!subConfig.baseSystemPrompt) {
+                    subConfig.baseSystemPrompt = currentAgent.subagentPromptContent;
+                }
+
+                const migratedKey = buildScopedSubAgentKey(subConfig.name, subConfig.parentAgentName);
+                if (migratedKey !== resolvedKey) {
+                    currentSubAgents.delete(resolvedKey);
+                    currentSubAgents.set(migratedKey, subConfig);
+                    resolvedKey = migratedKey;
+                }
+                saveSubAgents(currentSubAgents);
+            }
+
             const baseAgent = subConfig.parentAgentName || 'CORE';
+            let modelOverride = subConfig.model;
+
+            const baseAgentConfig = currentAgent && currentAgent.config.name === baseAgent
+                ? currentAgent
+                : await loadAgentCaseInsensitive(baseAgent);
+            if (baseAgentConfig && !isModelAllowedForAgent(modelOverride, baseAgentConfig)) {
+                const safeFallback = getSafeFallbackModel(baseAgentConfig);
+                console.warn(`[agents] Sub-agent "${name}" model "${modelOverride}" is outside whitelist for ${baseAgent}. Using "${safeFallback}".`);
+                modelOverride = safeFallback;
+                subConfig.model = safeFallback;
+                currentSubAgents.set(resolvedKey, subConfig);
+                saveSubAgents(currentSubAgents);
+            }
+
             return await runAgent({
                 agent: baseAgent,
                 message: request,
@@ -305,12 +418,11 @@ export async function call(name: string, request: string): Promise<string> {
                 parentDepth,
                 extraSystemPrompt: subConfig.systemPrompt,
                 stream,
-                modelOverride: subConfig.model,
+                modelOverride,
                 systemPromptOverride: subConfig.baseSystemPrompt,
             });
         }
 
-        // ── Call a regular agent ───────────────────────────────────────
         return await runAgent({
             agent: name,
             message: request,
@@ -349,8 +461,9 @@ export async function list(): Promise<string> {
 
     // List session sub-agents
     const currentSubAgents = loadSubAgents();
-    for (const [name, config] of currentSubAgents) {
-        lines.push(`- ${name} [sub-agent]: ${config.description}`);
+    for (const [, config] of currentSubAgents) {
+        const parent = config.parentAgentName || 'unknown';
+        lines.push(`- ${config.name} [sub-agent by ${parent}]: ${config.description}`);
     }
 
     if (lines.length === 0) {

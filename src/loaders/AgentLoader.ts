@@ -9,10 +9,18 @@ import { existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { parse as parseYaml } from 'yaml';
 import { fileURLToPath } from 'url';
-import type { AgentConfig, LoadedAgent } from '../types/index.js';
 
-const PROJECT_ROOT = process.env['PROJECT_ROOT'] || 'G:\\agent0\\acn1.0';
+const __dirname = dirname(fileURLToPath(import.meta.url));
+// Use PROJECT_ROOT from environment if available (for sandbox context)
+// Fallback to __dirname calculation (src/loaders -> project root)
+const calculatedRoot = join(__dirname, '..', '..');
+const PROJECT_ROOT = process.env['PROJECT_ROOT']
+  || (existsSync(join(calculatedRoot, 'agents')) ? calculatedRoot : process.cwd());
 const DEFAULT_AGENTS_DIR = join(PROJECT_ROOT, 'agents');
+import type { AgentConfig, LoadedAgent } from '../types/index.js';
+import { resolveActionAutoFixConfig } from '../core/action-autofix/constants.js';
+
+
 
 export class AgentLoader {
   private agentsDir: string;
@@ -115,6 +123,7 @@ export class AgentLoader {
           config.loop = config.loop || 'accumulator';
           config.syntax = config.syntax || 'xml-tags';
           config.injectAgentsList = config.injectAgentsList ?? true;
+          config.actionAutoFix = resolveActionAutoFixConfig(config.actionAutoFix);
 
           // Load system prompt content
           let systemPromptContent = '';

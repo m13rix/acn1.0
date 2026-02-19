@@ -171,6 +171,7 @@ export interface AgentConfig {
   injectAgentsList?: boolean;  // Inject available agents list into system prompt (default: true)
   requireFinish?: boolean;     // Whether the agent must call FINISH to complete a task (default: true)
   subagentPrompt?: string;     // Optional: file to use as base system prompt for sub-agents (instead of CORE)
+  actionAutoFix?: ActionAutoFixConfig; // Optional: auto-heal failed action() code executions
 }
 
 export interface LoadedAgent {
@@ -206,6 +207,27 @@ export interface AgentMemoryConfig {
   searchMaxDepth?: number;
   searchMaxStartFacts?: number;
   searchMaxChains?: number;
+}
+
+export interface ActionAutoFixDeterministicConfig {
+  enabled?: boolean;
+  autoInstallMissingPackages?: boolean;
+}
+
+export interface ActionAutoFixModelConfig {
+  enabled?: boolean;
+  provider?: string;
+  model?: string;
+  temperature?: number;
+  maxTokens?: number;
+}
+
+export interface ActionAutoFixConfig {
+  enabled?: boolean;
+  maxAttempts?: number;
+  visibility?: 'brief' | 'silent' | 'verbose';
+  deterministic?: ActionAutoFixDeterministicConfig;
+  modelRepair?: ActionAutoFixModelConfig;
 }
 
 export interface ModelSwitchingConfig {

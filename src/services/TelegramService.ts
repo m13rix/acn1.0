@@ -11,6 +11,7 @@ import { ToolLoader } from '../loaders/ToolLoader.js';
 import { Session } from '../core/Session.js';
 import { Executor, ExecutorCallbacks } from '../core/Executor.js';
 import { actionContext } from '../core/ActionContext.js';
+import { runWithAgentContext } from '../core/AgentContext.js';
 import { getProvider } from '../providers/base.js';
 import { getSyntax } from '../syntax/base.js';
 import { getLoop } from '../loops/base.js';
@@ -683,7 +684,20 @@ export class TelegramService {
             };
 
             await actionContext.run({ chatId: routeKey, telegramService: this, sessionId: session.session?.id, env }, async () => {
-                await session.executor!.execute(combinedText);
+                const activeSession = session.session;
+                if (!activeSession) {
+                    throw new Error('Session is not initialized');
+                }
+
+                await runWithAgentContext(
+                    activeSession.agent.config.name,
+                    () => session.executor!.execute(combinedText),
+                    undefined,
+                    true,
+                    activeSession.sandbox,
+                    activeSession.agent.config.modelSwitching,
+                    activeSession.agent
+                );
             });
 
             await session.ui.queue;

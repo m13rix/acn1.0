@@ -10,7 +10,6 @@ modelSwitching:
   mode: whitelist
   whitelist:
     - moonshotai/kimi-k2.5
-    - x-ai/grok-4.1-fast
     - minimax/minimax-m2.5
     - deepseek/deepseek-v3.2
   selector:
@@ -29,4 +28,4 @@ loop: provider-tools
 syntax: markdown
 skillsTable: analyzer_skills
 injectAgentsList: true
-requireFinish: true
+requireFinish: false
