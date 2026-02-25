@@ -17,7 +17,7 @@ import type { Session } from '../core/Session.js';
 import type { ExecutorOptions } from '../core/Executor.js';
 import type { ToolExecutionEngine } from '../core/ToolExecutionEngine.js';
 
-const DEFAULT_MAX_ITERATIONS = 10;
+const DEFAULT_MAX_ITERATIONS = 500;
 
 interface ProviderToolsLoopContext {
   session: Session;

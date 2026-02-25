@@ -22,9 +22,10 @@ tools:
   - agents
   - srcAgent
   - heartbeat
+  - homework
 
 memory:
-  enabled: true
+  enabled: false
 
 loop: provider-tools
 syntax: markdown

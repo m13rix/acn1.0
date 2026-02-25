@@ -146,7 +146,6 @@ Maxim treats himself as:
 ### Harshness & Shame
 - "FUCKING ASHAMED OF MYSELF" for talking to AI
 - Views emotional instability as "insanity" to be fixed
-- Judges his need for connection as weakness
 
 ### Emerging Self-Compassion
 - **Observer protocol**: Learning to witness emotions without identification
@@ -172,7 +171,6 @@ His embrace of absurdism ("Okay" acceptance) represents a profound shift from:
 **The engineer vs. the human**: 
 - Engineer wants to optimize, predict, control relationships
 - Human wants messy, authentic, unpredictable connection
-- TEL-OS represents the engineer's solution to the human's problem
 
 ### Developmental Trajectory
 **From instrumental to intrinsic relating**:

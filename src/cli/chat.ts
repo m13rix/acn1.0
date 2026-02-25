@@ -143,7 +143,7 @@ async function runChat(session: Session, telegramService?: TelegramService): Pro
   let currentWord = '';
 
   const executorOptions = {
-    maxIterations: 10,
+    maxIterations: 500,
     stream: enableStreaming,
     requireFinish: session.agent.config.requireFinish,
     callbacks: {
@@ -502,15 +502,6 @@ async function main(): Promise<void> {
     console.log(COLORS.muted('Set GEMINI_KEY or OPENROUTER_API_KEY in your environment.\n'));
   }
 
-  // Initialize Heartbeat Service
-  try {
-    const heartbeat = HeartbeatService.getInstance();
-    await heartbeat.initialize();
-    await heartbeat.start();
-  } catch (error) {
-    console.error(COLORS.error('Failed to start Heartbeat Service:'), error);
-  }
-
   let telegramService: TelegramService | undefined;
 
   // Start Telegram Bot Service
@@ -520,6 +511,16 @@ async function main(): Promise<void> {
   } catch (error) {
     console.error(COLORS.error('Failed to start Telegram Service:'), error);
   }
+
+  // Initialize Heartbeat Service
+  try {
+    const heartbeat = HeartbeatService.getInstance();
+    await heartbeat.initialize();
+    await heartbeat.start();
+  } catch (error) {
+    console.error(COLORS.error('Failed to start Heartbeat Service:'), error);
+  }
+
 
   try {
     const agentName = await selectAgent();

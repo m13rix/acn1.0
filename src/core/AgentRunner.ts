@@ -46,6 +46,8 @@ export interface RunAgentOptions {
     modelOverride?: string;
     /** Completely replace system prompt (for sub-agents) */
     systemPromptOverride?: string;
+    /** Whether this agent is being run as a sub-agent (disables skills to prevent infinite loops) */
+    isSubagent?: boolean;
 }
 
 /**
@@ -131,6 +133,16 @@ export async function runAgent(options: RunAgentOptions): Promise<string> {
         agentForSession.config = { ...agentForSession.config, model: modelOverride };
     }
 
+    // Disable ALL skills systems for subagents to prevent infinite recursive loops.
+    // This covers BOTH:
+    //   1. The `skills` tool (manual calls to skills.search()/skills.add())
+    //   2. The SkillsService (automatic skill injection into LLM context via Executor)
+    // The SkillsService is created in Session constructor when skillsTable is set,
+    // so we must clear it from the config BEFORE creating the Session.
+    if (options.isSubagent) {
+        agentForSession.config = { ...agentForSession.config, skillsTable: undefined };
+    }
+
     // ── 3. Resolve components ──────────────────────────────────────────
 
     const provider = getProvider(agentForSession.config.provider || 'openrouter');
@@ -138,7 +150,7 @@ export async function runAgent(options: RunAgentOptions): Promise<string> {
     const loop = getLoop(agentForSession.config.loop);
 
     // Load tools (same logic as chat.ts)
-    const toolNames = [...(agentForSession.config.tools || [])];
+    let toolNames = [...(agentForSession.config.tools || [])];
     if (!toolNames.includes('files')) toolNames.push('files');
     if (agentForSession.config.skillsTable && !toolNames.includes('skills')) {
         toolNames.push('skills');
@@ -146,6 +158,7 @@ export async function runAgent(options: RunAgentOptions): Promise<string> {
     if (agentForSession.config.memory && agentForSession.config.memory.enabled !== false && !toolNames.includes('memory')) {
         toolNames.push('memory');
     }
+
     const tools = await toolLoader.loadByNames(toolNames);
 
     // ── 4. Create session with SHARED sandbox ──────────────────────────
@@ -200,7 +213,7 @@ export async function runAgent(options: RunAgentOptions): Promise<string> {
     display.showAgentStart(agentName, childDepth);
 
     const executor = new Executor(session, {
-        maxIterations: 10,
+        maxIterations: 500,
         stream,
         callbacks,
         requireFinish: agentForSession.config.requireFinish,

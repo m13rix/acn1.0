@@ -5,6 +5,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import { getAgentSandbox } from '../../src/core/AgentContext.js';
 import ffmpeg from 'fluent-ffmpeg';
 import ffmpegStatic from '@ffmpeg-installer/ffmpeg';
 import wav from 'wav';
@@ -347,10 +348,13 @@ export async function sendFiles(files: string[]): Promise<void> {
   if (apiUrl && chatId) {
     console.log(`[Message] Sending files via API for Chat ID: ${chatId}`);
     try {
+      const sandboxDir = getAgentSandbox()?.directory || process.cwd();
+      const absoluteFiles = files.map(f => path.resolve(sandboxDir, f));
+
       const response = await fetch(`${apiUrl}/api/sendFiles`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chatId, files })
+        body: JSON.stringify({ chatId, files: absoluteFiles })
       });
 
       if (!response.ok) {

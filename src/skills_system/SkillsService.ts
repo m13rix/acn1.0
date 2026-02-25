@@ -17,7 +17,7 @@ const DATA_DIR = join(__dirname, '..', '..', 'data', 'skills');
 /**
  * Default score threshold for automated skill retrieval (80%)
  */
-export const SCORE_THRESHOLD = 0.85;
+export const SCORE_THRESHOLD = 0.8;
 
 /**
  * Result from automatic skills search (returns multiple entries)

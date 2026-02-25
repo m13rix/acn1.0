@@ -1,0 +1,9 @@
+{
+  "name": "sandbox-60d8646c",
+  "version": "1.0.0",
+  "description": "ACN agent sandbox",
+  "private": true,
+  "dependencies": {
+    "xlsx": "^0.18.5"
+  }
+}

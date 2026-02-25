@@ -420,6 +420,7 @@ export async function call(name: string, request: string): Promise<string> {
                 stream,
                 modelOverride,
                 systemPromptOverride: subConfig.baseSystemPrompt,
+                isSubagent: true,
             });
         }
 
@@ -429,6 +430,7 @@ export async function call(name: string, request: string): Promise<string> {
             sandbox,
             parentDepth,
             stream,
+            isSubagent: true,
         });
 
     } catch (error) {

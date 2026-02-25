@@ -1,6 +1,6 @@
 /**
  * Pulse: The Heartbeat Logic Engine
- * 
+ *
  * Responsible for:
  * 1. Taking context from a sensor
  * 2. Evaluating a condition (Micro-LLM) or just extracting variables
@@ -15,7 +15,7 @@ export class Pulse {
 
     /**
      * Evaluate a condition against context using a specific Micro-LLM config.
-     * 
+     *
      * @param context - The sensor data (logs, time, etc.)
      * @param condition - The user's condition (e.g. "Is it urgent?"). If empty, treated as implicit TRUE.
      * @param actionTemplate - The action prompt string (used to extract required variables like {{sender}})
@@ -59,8 +59,12 @@ export class Pulse {
 
             const content = response.content.trim();
 
+            console.log(content);
+
+            const result = this.parseResponse(content, variablesToExtract)
+            console.log(result);
             // 4. Parse response
-            return this.parseResponse(content, variablesToExtract);
+            return result;
 
         } catch (error: any) {
             console.error('[Pulse] Evaluation failed:', error);

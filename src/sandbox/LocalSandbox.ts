@@ -279,8 +279,21 @@ The content of cli tags are shell commands executed in the sandbox directory.
 
         const toolRequires = requireStatements.join('\n');
 
+        // Build the set of tool names already auto-imported so we can strip duplicates
+        const autoImportedNames = new Set<string>(['files']);
+        if (this.skillsTable) autoImportedNames.add('skills');
+        for (const tool of this.tools) {
+            if (tool.config.name !== 'skills' && tool.config.name !== 'files') {
+                autoImportedNames.add(tool.config.name);
+            }
+        }
+
+        // Remove any require()/import lines the agent wrote for already-injected tools
+        // (prevents "Cannot redeclare" errors when an agent manually imports an auto-imported tool)
+        const strippedCode = this.stripDuplicateToolImports(code, autoImportedNames);
+
         // Extract all import/require statements from agent code and convert to require()
-        const { imports: agentRequires, codeWithoutImports } = this.extractImports(code);
+        const { imports: agentRequires, codeWithoutImports } = this.extractImports(strippedCode);
 
         // Tool requires stay at the top level (they're static relative requires)
         // Agent requires (npm packages) are converted to require() calls inside the IIFE
@@ -374,6 +387,50 @@ ${codeWithoutImports}
             imports: requires.join('\n'),
             codeWithoutImports: codeLines.join('\n'),
         };
+    }
+
+    /**
+     * Remove require()/import lines from agent code that reference already auto-imported tool names.
+     * Prevents "Cannot redeclare" errors when an agent manually imports a tool
+     * that the sandbox already injects automatically.
+     *
+     * Handles these patterns where `name` is a known tool name:
+     *   const/let/var name = require('...');
+     *   import name from '...';
+     *   import * as name from '...';
+     */
+    private stripDuplicateToolImports(code: string, autoImportedNames: Set<string>): string {
+        const lines = (code || '').split('\n');
+        const result: string[] = [];
+
+        for (const line of lines) {
+            const trimmed = line.trim();
+
+            // Match: const/let/var name = require('...');
+            const requireMatch = trimmed.match(/^(?:const|let|var)\s+(\w+)\s*=\s*require\s*\(/);
+            if (requireMatch) {
+                const name = requireMatch[1];
+                if (name && autoImportedNames.has(name)) {
+                    // Drop the line — this tool is already auto-imported at the top
+                    result.push(`// [auto-fix] removed duplicate require for already-injected tool: ${name}`);
+                    continue;
+                }
+            }
+
+            // Match: import name from '...' or import * as name from '...'
+            const importMatch = trimmed.match(/^import\s+(?:\*\s+as\s+)?(\w+)\s+from\s+['"]/);
+            if (importMatch) {
+                const name = importMatch[1];
+                if (name && autoImportedNames.has(name)) {
+                    result.push(`// [auto-fix] removed duplicate import for already-injected tool: ${name}`);
+                    continue;
+                }
+            }
+
+            result.push(line);
+        }
+
+        return result.join('\n');
     }
 
     /**

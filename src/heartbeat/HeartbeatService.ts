@@ -20,6 +20,7 @@ import { runAgent } from '../core/AgentRunner.js';
 import { getAgentSandbox, getParentAgentName } from '../core/AgentContext.js';
 import { ToolLoader } from '../loaders/ToolLoader.js';
 import { AgentLoader } from '../loaders/AgentLoader.js';
+import { actionContext } from '../core/ActionContext.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(__dirname, '..', '..');
@@ -416,6 +417,7 @@ export class HeartbeatService extends EventEmitter {
             // We use the list saved in the task
             // If task.tools is undefined (old tasks), use defaults
             const toolNames = task.tools || ['files', 'heartbeat'];
+
             const tools = await this.toolLoader.loadByNames(toolNames);
 
             // 3. Create Sandbox
@@ -433,12 +435,23 @@ export class HeartbeatService extends EventEmitter {
             `;
 
             // Run Agent with restored identity
-            await runAgent({
-                agent: task.agentName,
-                message: `\`\`\`obs\n${systemMsg}\n${actionPrompt}\n\`\`\``,
-                sandbox: sandbox,
-                stream: false // Background
-            });
+            await actionContext.run(
+                {
+                    chatId: 'HEARTBEAT_ROUTE',
+                    env: {
+                        ACN_API_URL: process.env.ACN_API_URL || '',
+                        ACN_CHAT_ID: 'HEARTBEAT_ROUTE'
+                    }
+                },
+                async () => {
+                    await runAgent({
+                        agent: task.agentName,
+                        message: `\`\`\`obs\n${systemMsg}\n${actionPrompt}\n\`\`\``,
+                        sandbox: sandbox,
+                        stream: false, // Background
+                    });
+                }
+            );
 
             // 5. Cleanup / TTL Update
             if (task.maxRepeats && task.maxRepeats > 0) {

@@ -56,8 +56,8 @@ export interface ExecutorOptions {
   requireFinish?: boolean;
 }
 
-const DEFAULT_MAX_ITERATIONS = 10;
-const SKILLS_SCORE_THRESHOLD = 0.85; // 80% minimum score for automated skill retrieval
+const DEFAULT_MAX_ITERATIONS = 500;
+const SKILLS_SCORE_THRESHOLD = 0.8; // 80% minimum score for automated skill retrieval
 
 // Regex to capture FINISH("message") output from sandbox
 // Matches: __ACN_FINISH_START__"message"__ACN_FINISH_END__
@@ -357,7 +357,7 @@ export class Executor {
           const finishMessage = JSON.parse(rawFinishPayload);
 
           // We found the finish signal!
-          // Remove the signal from observation to keep history clean? 
+          // Remove the signal from observation to keep history clean?
           // Or keep it as log? Let's keep it but maybe format it.
 
           // Commit the final state

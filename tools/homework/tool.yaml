@@ -1,0 +1,16 @@
+name: homework
+description: |
+  - `homework.ask(bookId: string, question: string): Promise<string>`
+    Позволяет получить информацию, текст заданий или параграфов из школьных учебников.
+    Допустимые bookId: 'algebra', 'geometry', 'social_studies', 'history', 'russian'.
+    Пример: `const result = await homework.ask("algebra", "Выведи полный текст задания номер 156");`
+
+  - `homework.generateSVG(taskText: string): Promise<string>`
+    Генерирует чистый, ручной SVG код рисунка по тексту геометрической задачи при помощи LLM. Возвращает строку с кодом <svg>...</svg>.
+    Пример: `const svg = await homework.generateSVG("В треугольнике ABC угол C равен 90 градусов...");`
+
+  - `homework.formatHomework(taskContent: string, fileName: string): Promise<string>`
+    Форматирует выполненное задание в нужный для принтера (пишущего почерком) формат и сохраняет его в .txt файл.
+    Пример: `const result = await homework.formatHomework("Дано: ... Решение: ... Ответ: ...", "task_156.txt");`
+
+module: index.ts

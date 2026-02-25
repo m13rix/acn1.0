@@ -38,7 +38,12 @@ export const agentContext = new AsyncLocalStorage<AgentContextData>();
  * Get current agent nesting depth
  */
 export function getAgentDepth(): number {
-    return agentContext.getStore()?.depth ?? 0;
+    const fromContext = agentContext.getStore()?.depth;
+    if (fromContext !== undefined) {
+        return fromContext;
+    }
+    const envDepth = parseInt(process.env.AGENT_DEPTH || '0', 10);
+    return isNaN(envDepth) ? 0 : envDepth;
 }
 
 /**

@@ -1000,7 +1000,79 @@ export class TelegramService {
         };
     }
 
-    private resolveRouteForApi(chatIdOrRouteKey: string): { routeKey: string; route: TelegramRoute; session?: ChatSession } {
+    private async getHeartbeatRouteAndSession(): Promise<{ routeKey: string; route: TelegramRoute; session?: ChatSession }> {
+        // Find owner ID
+        let ownerId: string | null = null;
+        if (this.authorizedUsers.size > 0) {
+            ownerId = Array.from(this.authorizedUsers)[0] ?? null;
+        }
+        if (!ownerId && process.env.ACN_CHAT_ID && process.env.ACN_CHAT_ID !== 'HEARTBEAT_ROUTE') {
+            ownerId = process.env.ACN_CHAT_ID;
+        }
+
+        if (!ownerId) {
+            try {
+                if (fs.existsSync(OWNER_FILE)) {
+                    const data = JSON.parse(fs.readFileSync(OWNER_FILE, 'utf-8')) as { id?: string };
+                    if (data.id) ownerId = data.id.toString();
+                }
+            } catch { }
+        }
+
+        if (!ownerId) {
+            throw new Error('No owner found to send heartbeat message to.');
+        }
+
+        const heartbeatTopicCacheFile = path.join(__dirname, '..', '..', 'tools', 'message', 'heartbeat_topic.json');
+        let messageThreadId: number | undefined;
+
+        try {
+            if (fs.existsSync(heartbeatTopicCacheFile)) {
+                const data = JSON.parse(fs.readFileSync(heartbeatTopicCacheFile, 'utf-8')) as { message_thread_id?: number };
+                if (typeof data.message_thread_id === 'number') {
+                    messageThreadId = data.message_thread_id;
+                }
+            }
+        } catch { }
+
+        if (messageThreadId === undefined) {
+            // Create the topic
+            try {
+                const topic = await this.bot.telegram.createForumTopic(ownerId, "💓Heartbeat");
+                messageThreadId = topic.message_thread_id;
+                try {
+                    const dir = path.dirname(heartbeatTopicCacheFile);
+                    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+                    fs.writeFileSync(heartbeatTopicCacheFile, JSON.stringify({ message_thread_id: messageThreadId }));
+                } catch { }
+            } catch (err: any) {
+                // Ignore if chat is not a forum or we don't have permission
+                console.warn('[Telegram] Could not create 💓Heartbeat topic:', err.message);
+            }
+        }
+
+        const route: TelegramRoute = {
+            chatId: ownerId,
+            messageThreadId,
+        };
+
+        const routeKey = this.routeKey(route);
+        let session = this.sessions.get(routeKey);
+        if (!session) {
+            session = this.createEmptySession(route);
+            session.agentName = 'core';
+            this.sessions.set(routeKey, session);
+            await this.initializeSession(routeKey, route, 'core');
+        }
+
+        return { routeKey, route, session };
+    }
+
+    private async resolveRouteForApi(chatIdOrRouteKey: string): Promise<{ routeKey: string; route: TelegramRoute; session?: ChatSession }> {
+        if (chatIdOrRouteKey === 'HEARTBEAT_ROUTE') {
+            return await this.getHeartbeatRouteAndSession();
+        }
+
         const direct = this.sessions.get(chatIdOrRouteKey);
         if (direct) {
             return { routeKey: chatIdOrRouteKey, route: direct.route, session: direct };
@@ -1059,6 +1131,18 @@ export class TelegramService {
         };
     }
 
+    private clearHeartbeatTopicCacheIfMatches(threadId: number) {
+        const heartbeatTopicCacheFile = path.join(__dirname, '..', '..', 'tools', 'message', 'heartbeat_topic.json');
+        try {
+            if (fs.existsSync(heartbeatTopicCacheFile)) {
+                const data = JSON.parse(fs.readFileSync(heartbeatTopicCacheFile, 'utf-8')) as { message_thread_id?: number };
+                if (data.message_thread_id === threadId) {
+                    fs.unlinkSync(heartbeatTopicCacheFile);
+                }
+            }
+        } catch { }
+    }
+
     private async sendMessageToRoute(route: TelegramRoute, text: string, extra: Record<string, unknown> = {}): Promise<any> {
         try {
             return await this.bot.telegram.sendMessage(
@@ -1071,6 +1155,7 @@ export class TelegramService {
             );
         } catch (error) {
             if (this.isMessageThreadNotFoundError(error) && route.messageThreadId !== undefined) {
+                this.clearHeartbeatTopicCacheIfMatches(route.messageThreadId);
                 const fallbackRoute = this.withoutMessageThread(route);
                 return this.bot.telegram.sendMessage(
                     fallbackRoute.chatId,
@@ -1094,6 +1179,7 @@ export class TelegramService {
             );
         } catch (error) {
             if (this.isMessageThreadNotFoundError(error) && route.messageThreadId !== undefined) {
+                this.clearHeartbeatTopicCacheIfMatches(route.messageThreadId);
                 const fallbackRoute = this.withoutMessageThread(route);
                 return this.bot.telegram.sendPhoto(
                     fallbackRoute.chatId,
@@ -1114,6 +1200,7 @@ export class TelegramService {
             );
         } catch (error) {
             if (this.isMessageThreadNotFoundError(error) && route.messageThreadId !== undefined) {
+                this.clearHeartbeatTopicCacheIfMatches(route.messageThreadId);
                 const fallbackRoute = this.withoutMessageThread(route);
                 return this.bot.telegram.sendDocument(
                     fallbackRoute.chatId,
@@ -1134,6 +1221,7 @@ export class TelegramService {
             );
         } catch (error) {
             if (this.isMessageThreadNotFoundError(error) && route.messageThreadId !== undefined) {
+                this.clearHeartbeatTopicCacheIfMatches(route.messageThreadId);
                 const fallbackRoute = this.withoutMessageThread(route);
                 return this.bot.telegram.sendVoice(
                     fallbackRoute.chatId,
@@ -1155,6 +1243,7 @@ export class TelegramService {
             await this.bot.telegram.sendChatAction(route.chatId, action, extra as any);
         } catch (error) {
             if (this.isMessageThreadNotFoundError(error) && route.messageThreadId !== undefined) {
+                this.clearHeartbeatTopicCacheIfMatches(route.messageThreadId);
                 await this.bot.telegram.sendChatAction(route.chatId, action).catch(() => {
                     // ignore typing status failures
                 });
@@ -1188,6 +1277,7 @@ export class TelegramService {
             await this.bot.telegram.callApi('sendMessageDraft' as any, payload as any);
         } catch (error) {
             if (this.isMessageThreadNotFoundError(error) && route.messageThreadId !== undefined) {
+                this.clearHeartbeatTopicCacheIfMatches(route.messageThreadId);
                 const fallbackPayload = { ...payload };
                 delete fallbackPayload['message_thread_id'];
                 await this.bot.telegram.callApi('sendMessageDraft' as any, fallbackPayload as any);
@@ -1223,7 +1313,7 @@ export class TelegramService {
     }
 
     public async ask(chatId: string, question: string): Promise<string> {
-        const { routeKey, route, session } = this.resolveRouteForApi(chatId);
+        const { routeKey, route, session } = await this.resolveRouteForApi(chatId);
         if (!session) throw new Error(`No session for route "${routeKey}"`);
 
         await this.sendMessageToRoute(route, `Question:\n${question}`);
@@ -1249,7 +1339,7 @@ export class TelegramService {
     }
 
     public async sendFiles(chatId: string, files: string[]): Promise<void> {
-        const { route, session } = this.resolveRouteForApi(chatId);
+        const { route, session } = await this.resolveRouteForApi(chatId);
 
         for (const file of files) {
             const fullPath = path.isAbsolute(file)
@@ -1277,7 +1367,7 @@ export class TelegramService {
     }
 
     public async sendVoice(chatId: string, filePath: string): Promise<void> {
-        const { route } = this.resolveRouteForApi(chatId);
+        const { route } = await this.resolveRouteForApi(chatId);
 
         if (!fs.existsSync(filePath)) {
             throw new Error(`Voice file not found: ${filePath}`);
@@ -1291,7 +1381,7 @@ export class TelegramService {
     }
 
     public async sendText(chatId: string, text: string): Promise<void> {
-        const { route } = this.resolveRouteForApi(chatId);
+        const { route } = await this.resolveRouteForApi(chatId);
         try {
             await this.sendMessageToRoute(route, text);
         } catch (e: any) {
@@ -1317,6 +1407,7 @@ export class TelegramService {
             this.server = this.app.listen(0, () => {
                 const addr = this.server?.address() as AddressInfo;
                 this.apiUrl = `http://localhost:${addr.port}`;
+                process.env.ACN_API_URL = this.apiUrl; // Provide globally to agents
                 console.log(chalk.gray(`Internal API listening on ${this.apiUrl}`));
                 resolve();
             });
