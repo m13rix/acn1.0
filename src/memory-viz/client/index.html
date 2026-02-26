@@ -1,53 +1,129 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ACN Core Memory</title>
     <link rel="stylesheet" href="styles/main.css">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
+        rel="stylesheet">
     <script src="https://d3js.org/d3.v7.min.js"></script>
 </head>
+
 <body>
+    <div class="grid-bg"></div>
+
     <div id="universe"></div>
-    
+
     <div class="hud">
         <header>
-            <h1>ACN MEMORY CORE</h1>
+            <div class="logo">
+                <span class="logo-text">ACN</span>
+                <span class="logo-sub">MEMORY CORE</span>
+            </div>
             <div class="stats">
-                <span id="fact-count">0 FACTS</span>
-                <span class="separator">|</span>
-                <span id="link-count">0 LINKS</span>
+                <div class="stat-box">
+                    <span id="fact-count" class="stat-value">0</span>
+                    <span class="stat-label">FACTS</span>
+                </div>
+                <div class="stat-box">
+                    <span id="link-count" class="stat-value">0</span>
+                    <span class="stat-label">LINKS</span>
+                </div>
             </div>
         </header>
 
-        <div class="controls">
-            <div class="control-group">
-                <label>Local Filter</label>
-                <input type="text" id="search-input" placeholder="Filter nodes on graph...">
+        <div class="controls-panel">
+            <div class="control-section">
+                <div class="section-title">GLOBAL FILTER</div>
+                <div class="input-wrapper">
+                    <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="11" cy="11" r="8"></circle>
+                        <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                    </svg>
+                    <input type="text" id="search-input" class="modern-input" placeholder="Filter active nodes...">
+                </div>
             </div>
-            <div class="control-group">
-                <label>Semantic Search</label>
-                <input type="text" id="semantic-query" placeholder="Why did X happen?">
-                <button id="run-search">Run memory.search</button>
+
+            <div class="control-section">
+                <div class="section-title">SEMANTIC SEARCH</div>
+                <div class="input-row">
+                    <div class="input-wrapper" style="flex:1;">
+                        <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                        </svg>
+                        <input type="text" id="semantic-query" class="modern-input" placeholder="Why did X happen?">
+                    </div>
+                    <button id="run-search" class="modern-btn primary-btn" title="Run Search">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <polyline points="9 18 15 12 9 6"></polyline>
+                        </svg>
+                    </button>
+                    <button id="copy-search" class="modern-btn secondary-btn" style="padding: 0 10px;"
+                        title="Copy Results">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                        </svg>
+                    </button>
+                </div>
+                <div class="semantic-params" style="display: flex; gap: 8px; margin-top: 10px;">
+                    <div class="input-wrapper" style="flex:1;" title="Max Search Depth">
+                        <input type="number" id="param-depth" class="modern-input" placeholder="Depth" min="1" max="10">
+                    </div>
+                    <div class="input-wrapper" style="flex:1;" title="Max Starting Facts">
+                        <input type="number" id="param-start" class="modern-input" placeholder="Starts" min="1"
+                            max="50">
+                    </div>
+                    <div class="input-wrapper" style="flex:1;" title="Max Chains">
+                        <input type="number" id="param-chains" class="modern-input" placeholder="Chains" min="1"
+                            max="20">
+                    </div>
+                </div>
                 <div id="search-status" class="status-text"></div>
-                <pre id="search-results" class="search-results"></pre>
+                <pre id="search-results" class="search-results hidden"></pre>
             </div>
-            <div class="control-group">
-                <label>Simulation</label>
-                <button id="toggle-sim">Pause</button>
+
+            <div class="control-section row-controls">
+                <div class="toggle-control">
+                    <span class="toggle-label">PHYSICS UI</span>
+                    <label class="switch">
+                        <input type="checkbox" id="toggle-sim" checked>
+                        <span class="slider"></span>
+                    </label>
+                </div>
+                <div class="toggle-control">
+                    <span class="toggle-label">LABELS</span>
+                    <label class="switch">
+                        <input type="checkbox" id="show-labels">
+                        <span class="slider"></span>
+                    </label>
+                </div>
             </div>
-             <div class="control-group">
-                <label>Visuals</label>
-                <label class="toggle">
-                    <input type="checkbox" id="show-labels" checked>
-                    <span>Labels</span>
-                </label>
+
+            <div class="control-section">
+                <div class="section-title">VIEW SETTINGS</div>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+                    <span class="toggle-label" style="font-size: 11px; opacity: 0.8;">FADE COEFFICIENT</span>
+                    <span id="fade-coeff-val"
+                        style="font-size: 11px; opacity: 0.8; font-family: 'JetBrains Mono'">0.3</span>
+                </div>
+                <input type="range" id="fade-coeff" min="0.05" max="1.0" step="0.05" value="0.3" style="width: 100%;">
             </div>
-            <div class="control-group">
-                <label>Import Document (.md/.txt)</label>
-                <input type="file" id="doc-file" accept=".md,.txt,text/markdown,text/plain">
-                <button id="import-doc">Add Doc</button>
+
+            <div class="control-section">
+                <div class="section-title">INGEST KNOWLEDGE</div>
+                <div class="file-upload-wrapper">
+                    <label for="doc-file" class="file-drop-area">
+                        <span class="file-msg" id="file-msg-text">Choose .md or .txt file</span>
+                        <input type="file" id="doc-file" class="file-input" accept=".md,.txt,text/markdown,text/plain">
+                    </label>
+                    <button id="import-doc" class="modern-btn secondary-btn">Ingest</button>
+                </div>
                 <div id="import-status" class="status-text"></div>
             </div>
         </div>
@@ -56,5 +132,13 @@
     <div id="tooltip" class="tooltip hidden"></div>
 
     <script type="module" src="app.js"></script>
+    <script>
+        // Simple file label update
+        document.getElementById('doc-file').addEventListener('change', function (e) {
+            const fileName = e.target.files[0] ? e.target.files[0].name : "Choose .md or .txt file";
+            document.getElementById('file-msg-text').innerText = fileName;
+        });
+    </script>
 </body>
+
 </html>

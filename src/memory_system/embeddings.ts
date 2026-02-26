@@ -16,6 +16,8 @@ function collectErrorCodes(err: unknown): string[] {
   const out: string[] = [];
   const anyErr = err as any;
   if (anyErr?.code) out.push(String(anyErr.code));
+  if (anyErr?.status_code) out.push(String(anyErr.status_code));
+  if (anyErr?.status) out.push(String(anyErr.status));
   if (anyErr?.cause?.code) out.push(String(anyErr.cause.code));
   if (Array.isArray(anyErr?.cause?.errors)) {
     for (const nested of anyErr.cause.errors) {
@@ -26,33 +28,37 @@ function collectErrorCodes(err: unknown): string[] {
 }
 
 function isTransientNetworkError(err: unknown): boolean {
-  const msg = String((err as any)?.message ?? err ?? '').toLowerCase();
+  const msg = String((err as any)?.message ?? (err as any)?.error ?? err ?? '').toLowerCase();
   const codes = collectErrorCodes(err).map(code => code.toUpperCase());
   if (msg.includes('fetch failed')) return true;
   if (msg.includes('network')) return true;
   if (msg.includes('timeout')) return true;
   if (msg.includes('socket hang up')) return true;
   if (msg.includes('temporar')) return true;
+  if (msg.includes('server busy')) return true;
+  if (msg.includes('maximum pending requests')) return true;
   return codes.some(code =>
     code === 'ECONNREFUSED' ||
     code === 'ECONNRESET' ||
     code === 'ETIMEDOUT' ||
     code === 'EAI_AGAIN' ||
     code === 'ENETUNREACH' ||
-    code === 'EHOSTUNREACH'
+    code === 'EHOSTUNREACH' ||
+    code === '503'
   );
 }
 
 async function withTransientRetry<T>(opName: string, fn: () => Promise<T>): Promise<T> {
-  for (;;) {
+  for (; ;) {
     try {
       return await fn();
     } catch (error) {
       if (!isTransientNetworkError(error)) {
         throw error;
       }
-      console.warn(`[memory.embeddings] ${opName} transient error, retrying in ${EMBED_RETRY_DELAY_MS}ms:`, error);
-      await sleep(EMBED_RETRY_DELAY_MS);
+      const delayMs = EMBED_RETRY_DELAY_MS + Math.floor(Math.random() * 2000);
+      console.warn(`[memory.embeddings] ${opName} transient error, retrying in ${delayMs}ms:`, (error as any)?.message || error);
+      await sleep(delayMs);
     }
   }
 }

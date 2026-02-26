@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="20 10 430 280" width="100%" height="100%">
+  <!-- Параллелограмм ABCD: AB = 243 (8.1*30), AC = 420 (14*30), Угол CAB = 30 градусов -->
+  <!-- Координаты: A(50,250), B(293,250), C(413.73,40), D(170.73,40) -->
+  <polygon points="50,250 293,250 413.73,40 170.73,40" fill="none" stroke="black" stroke-width="2" stroke-linejoin="round" />
+  
+  <!-- Диагональ AC -->
+  <line x1="50" y1="250" x2="413.73" y2="40" stroke="black" stroke-width="2" />
+  
+  <!-- Обозначения вершин -->
+  <text x="50" y="278" font-family="Arial, sans-serif" font-size="22" fill="black" text-anchor="middle">A</text>
+  <text x="293" y="278" font-family="Arial, sans-serif" font-size="22" fill="black" text-anchor="middle">B</text>
+  <text x="420" y="35" font-family="Arial, sans-serif" font-size="22" fill="black" text-anchor="start">C</text>
+  <text x="165" y="35" font-family="Arial, sans-serif" font-size="22" fill="black" text-anchor="end">D</text>
+</svg>

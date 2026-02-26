@@ -173,42 +173,47 @@ export async function parseDocumentToGraph(
     if (!factsTable) throw new Error('facts table not found in TOON output.');
     if (!linksTable) throw new Error('links table not found in TOON output.');
 
-    const facts: DocParsedFact[] = factsTable.rows.map((row, idx) => {
+    const facts: DocParsedFact[] = [];
+    const factIds = new Set<number>();
+
+    factsTable.rows.forEach((row, idx) => {
       const id = Number(row.id);
       const content = String(row.content ?? '').trim();
       if (!Number.isInteger(id)) {
-        throw new Error(`facts[${idx}].id must be an integer.`);
+        console.warn(`[memory.doc_parser] skipping facts[${idx}]: id must be an integer.`);
+        return;
       }
       if (!content) {
-        throw new Error(`facts[${idx}].content must be non-empty.`);
+        console.warn(`[memory.doc_parser] skipping facts[${idx}]: content must be non-empty.`);
+        return;
       }
-      return { id, content };
+      if (factIds.has(id)) {
+        console.warn(`[memory.doc_parser] skipping facts[${idx}]: Duplicate fact id ${id}.`);
+        return;
+      }
+      factIds.add(id);
+      facts.push({ id, content });
     });
 
-    const factIds = new Set<number>();
-    for (const fact of facts) {
-      if (factIds.has(fact.id)) throw new Error(`Duplicate fact id ${fact.id}.`);
-      factIds.add(fact.id);
-    }
-    const sorted = [...factIds].sort((a, b) => a - b);
-    for (let i = 0; i < sorted.length; i++) {
-      if (sorted[i] !== i) {
-        throw new Error(`Fact IDs must be sequential starting from 0. Missing ${i}.`);
-      }
-    }
-
-    const links: DocParsedLink[] = linksTable.rows.map((row, idx) => {
+    const links: DocParsedLink[] = [];
+    linksTable.rows.forEach((row, idx) => {
       const fromId = Number(row.fromId);
       const toId = Number(row.toId);
       const relation = String(row.relation ?? '').trim();
       const confidence = clamp01(Number(row.confidence ?? 0.7));
-      if (!Number.isInteger(fromId)) throw new Error(`links[${idx}].fromId must be integer.`);
-      if (!Number.isInteger(toId)) throw new Error(`links[${idx}].toId must be integer.`);
-      if (!relation) throw new Error(`links[${idx}].relation must be non-empty.`);
-      if (!factIds.has(fromId) || !factIds.has(toId)) {
-        throw new Error(`links[${idx}] references unknown fact id.`);
+      if (!Number.isInteger(fromId) || !Number.isInteger(toId)) {
+        console.warn(`[memory.doc_parser] skipping links[${idx}]: fromId/toId must be integer.`);
+        return;
       }
-      return { fromId, toId, relation, confidence };
+      if (!relation) {
+        console.warn(`[memory.doc_parser] skipping links[${idx}]: relation must be non-empty.`);
+        return;
+      }
+      if (!factIds.has(fromId) || !factIds.has(toId)) {
+        console.warn(`[memory.doc_parser] skipping links[${idx}]: references unknown fact id (${fromId} -> ${toId}).`);
+        return;
+      }
+      links.push({ fromId, toId, relation, confidence });
     });
 
     return { facts, links, rawResponse: fullContent };

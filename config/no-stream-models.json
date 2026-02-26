@@ -1,0 +1,15 @@
+{
+  "_description": "Models listed here will always use non-streaming mode for tool calls. Auto-populated when streaming fails due to provider bugs. You can also add models manually. Format: { \"provider\": { \"model-id\": { \"reason\": \"...\", \"addedAt\": \"ISO date\" } } }",
+  "openrouter": {
+    "moonshotai/kimi-k2.5": {
+      "reason": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"data\",\n      \"choices\",\n      0,\n      \"delta\",\n      \"tool_calls\",\n      0,\n      \"id\"\n    ],\n    \"message\": \"Invalid input: expected string, received null\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"data\",\n      \"choices\",\n      0,\n      \"delta\",\n      \"tool_calls\",\n      0,\n      \"function\",\n      \"name\"\n    ],\n    \"message\": \"Invalid input: expected string, received null\"\n  }\n]",
+      "addedAt": "2026-02-26T05:46:23.024Z",
+      "failCount": 1
+    },
+    "deepseek/deepseek-v3.2": {
+      "reason": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"data\",\n      \"choices\",\n      0,\n      \"delta\",\n      \"tool_calls\",\n      0,\n      \"function\",\n      \"arguments\"\n    ],\n    \"message\": \"Invalid input: expected string, received null\"\n  }\n]",
+      "addedAt": "2026-02-26T05:47:07.702Z",
+      "failCount": 1
+    }
+  }
+}

@@ -16,6 +16,7 @@ import type {
 import type { Session } from '../core/Session.js';
 import type { ExecutorOptions } from '../core/Executor.js';
 import type { ToolExecutionEngine } from '../core/ToolExecutionEngine.js';
+import { NoStreamRegistry } from '../providers/NoStreamRegistry.js';
 
 const DEFAULT_MAX_ITERATIONS = 500;
 
@@ -209,7 +210,17 @@ export class ProviderToolsLoop extends BaseLoop {
     const callbacks = context.options.callbacks ?? {};
     const provider = context.session.provider;
 
-    if (config.stream && provider.streamEventsWithTools) {
+    // Check if this model is registered as no-stream (known streaming bugs)
+    const noStreamRegistry = NoStreamRegistry.getInstance();
+    const forceNoStream = noStreamRegistry.isNoStream(provider.name, config.model);
+
+    if (forceNoStream && config.stream) {
+      console.log(
+        `[ProviderToolsLoop] Model "${config.model}" is in no-stream registry for "${provider.name}", using non-streaming mode.`
+      );
+    }
+
+    if (config.stream && provider.streamEventsWithTools && !forceNoStream) {
       let reasoning = '';
       let text = '';
       const toolCalls: ProviderToolCall[] = [];
@@ -247,6 +258,10 @@ export class ProviderToolsLoop extends BaseLoop {
         }
       } catch (streamError) {
         console.warn(`[ProviderToolsLoop] Streaming with tools failed for provider "${provider.name}", falling back to non-stream tool completion.`, streamError);
+
+        // Auto-register this model in the no-stream registry so future calls skip streaming
+        const errorMsg = streamError instanceof Error ? streamError.message : String(streamError);
+        noStreamRegistry.recordFailure(provider.name, config.model, errorMsg);
         if (!provider.completeWithTools) {
           throw streamError;
         }

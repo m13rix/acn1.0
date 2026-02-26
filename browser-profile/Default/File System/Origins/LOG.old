@@ -1,3 +1,2 @@
-2026/01/19-21:11:48.252 8c70 Reusing MANIFEST G:\agent0\acn1.0\browser-profile\Default\File System\Origins/MANIFEST-000001
-2026/01/19-21:11:48.253 8c70 Recovering log #3
-2026/01/19-21:11:48.253 8c70 Reusing old log G:\agent0\acn1.0\browser-profile\Default\File System\Origins/000003.log 
+2026/02/25-12:35:20.872 56a4 Archiving G:\agent0\acn1.0\browser-profile\Default\File System\Origins/MANIFEST-000001: OK
+2026/02/25-12:35:20.951 56a4 **** Repaired leveldb G:\agent0\acn1.0\browser-profile\Default\File System\Origins; recovered 0 files; 0 bytes. Some data may have been lost. ****

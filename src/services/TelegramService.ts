@@ -102,6 +102,8 @@ export class TelegramService {
     private apiUrl = '';
     private display: StreamDisplay;
     private draftCounter = Date.now();
+    private pendingQuestions = new Map<string, { answer?: string; resolver?: (response: string) => void }>();
+    private questionCounter = 0;
 
     constructor() {
         this.bot = new Telegraf(BOT_TOKEN);
@@ -138,10 +140,55 @@ export class TelegramService {
             }
 
             try {
-                const answer = await this.ask(chatId, question);
-                res.json({ response: answer });
+                const questionId = `q_${++this.questionCounter}_${Date.now()}`;
+
+                // Create pending question entry
+                const entry: { answer?: string; resolver?: (response: string) => void } = {};
+                this.pendingQuestions.set(questionId, entry);
+
+                // Start the ask flow (non-blocking — answer will be stored when user replies)
+                this.ask(chatId, question).then((answer) => {
+                    const pending = this.pendingQuestions.get(questionId);
+                    if (pending) {
+                        pending.answer = answer;
+                    }
+                }).catch((e) => {
+                    // Store error as answer so poll can return it
+                    const pending = this.pendingQuestions.get(questionId);
+                    if (pending) {
+                        pending.answer = `[ERROR] ${e.message}`;
+                    }
+                });
+
+                // Return immediately with questionId
+                res.json({ questionId });
             } catch (e: any) {
                 res.status(500).json({ error: e.message });
+            }
+        });
+
+        // Poll for answer to a previously asked question
+        this.app.get('/api/ask/poll', async (req, res): Promise<void> => {
+            const questionId = req.query.questionId as string;
+            if (!questionId) {
+                res.status(400).json({ error: 'Missing questionId parameter' });
+                return;
+            }
+
+            const pending = this.pendingQuestions.get(questionId);
+            if (!pending) {
+                res.status(404).json({ error: 'Question not found or already completed' });
+                return;
+            }
+
+            if (pending.answer !== undefined) {
+                // Answer is ready — return it and clean up
+                const answer = pending.answer;
+                this.pendingQuestions.delete(questionId);
+                res.json({ status: 'answered', response: answer });
+            } else {
+                // Still waiting
+                res.json({ status: 'waiting' });
             }
         });
 

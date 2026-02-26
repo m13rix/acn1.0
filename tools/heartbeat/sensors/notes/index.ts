@@ -129,6 +129,12 @@ async function checkNewNotes() {
                         continue;
                     }
 
+                    // Only trigger when the note is "finished" — content must end with a period
+                    if (!text.trimEnd().endsWith('.')) {
+                        console.log(`[Notes Sensor] Skipping unfinished note: "${page.title}" (does not end with '.')`);
+                        continue;
+                    }
+
                     // Deduplication: skip if content hash is identical to last processed
                     const contentHash = hashContent(text);
                     const prevHash = processedContentHashes.get(page.id);

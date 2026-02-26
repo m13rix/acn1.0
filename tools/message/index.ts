@@ -219,20 +219,41 @@ export async function ask(question: string): Promise<string> {
   if (apiUrl && chatId) {
     console.log(`[Message] Asking via API for Chat ID: ${chatId}`);
     try {
-      const response = await fetch(`${apiUrl}/api/ask`, {
+      // Step 1: Send the question — returns immediately with a questionId
+      const askResponse = await fetch(`${apiUrl}/api/ask`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ chatId, question })
       });
 
-      if (!response.ok) {
-        const err = await response.json();
+      if (!askResponse.ok) {
+        const err = await askResponse.json();
         throw new Error(err.error || 'API request failed');
       }
 
-      const data = await response.json();
-      console.log("[Message] User Response: " + data.response);
-      return data.response;
+      const { questionId } = await askResponse.json() as { questionId: string };
+      console.log(`[Message] Question sent (id: ${questionId}). Polling for answer...`);
+
+      // Step 2: Poll for the answer — no timeout, waits indefinitely
+      const POLL_INTERVAL_MS = 2000;
+      while (true) {
+        await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
+
+        const pollResponse = await fetch(`${apiUrl}/api/ask/poll?questionId=${encodeURIComponent(questionId)}`);
+
+        if (!pollResponse.ok) {
+          const err = await pollResponse.json();
+          throw new Error(err.error || 'Poll request failed');
+        }
+
+        const pollData = await pollResponse.json() as { status: string; response?: string };
+
+        if (pollData.status === 'answered') {
+          console.log("[Message] User Response: " + pollData.response);
+          return pollData.response!;
+        }
+        // status === 'waiting' → continue polling
+      }
     } catch (e: any) {
       console.error('[Message] API error:', e.message);
       throw e;
