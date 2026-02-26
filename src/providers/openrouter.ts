@@ -20,6 +20,8 @@ import type {
 // @ts-ignore - mime-types doesn't have perfect TypeScript types
 import { lookup } from 'mime-types';
 
+const EMPTY_CHOICES_RETRY_DELAYS_MS = [250, 750];
+
 export class OpenRouterProvider extends BaseProvider {
   name = 'openrouter';
   private client: OpenRouter;
@@ -58,31 +60,11 @@ export class OpenRouterProvider extends BaseProvider {
     const cfg = this.withDefaults(config);
 
     const request = this.buildOpenRouterRequest(messages, cfg);
-
-    const response = await this.client.chat.send(request);
-
-    // OpenRouter returns OpenAI-compatible format
-    const choice = response.choices?.[0];
-    if (!choice) {
-      throw new Error('No response choices returned from OpenRouter');
-    }
+    const response = await this.sendWithEmptyChoiceRetry(request);
+    const choice = this.getPrimaryChoiceOrThrow(response);
 
     // Handle content which can be string or array of content items
-    const messageContent = choice.message?.content;
-    const content = typeof messageContent === 'string'
-      ? messageContent
-      : Array.isArray(messageContent)
-        ? messageContent
-          .map(item => {
-            if (typeof item === 'string') return item;
-            // Extract text from text content items
-            if (item && typeof item === 'object' && 'type' in item && item.type === 'text' && 'text' in item) {
-              return item.text ?? '';
-            }
-            return '';
-          })
-          .join('')
-        : '';
+    const content = this.extractMessageText(choice.message);
 
     const reasoning = (choice.message as any)?.reasoning_content || (choice.message as any)?.reasoning || '';
     const finishReason = this.mapFinishReason(choice.finishReason);
@@ -109,28 +91,11 @@ export class OpenRouterProvider extends BaseProvider {
     this.validateConfig(config);
     const cfg = this.withDefaults(config);
     const request = this.buildOpenRouterRequest(messages, cfg, toolRequest);
-    const response = await this.client.chat.send(request);
-
-    const choice = response.choices?.[0];
-    if (!choice) {
-      throw new Error('No response choices returned from OpenRouter');
-    }
+    const response = await this.sendWithEmptyChoiceRetry(request);
+    const choice = this.getPrimaryChoiceOrThrow(response);
 
     const parsedToolCalls = this.parseToolCalls((choice as any)?.message);
-    const messageContent = choice.message?.content;
-    const content = typeof messageContent === 'string'
-      ? messageContent
-      : Array.isArray(messageContent)
-        ? messageContent
-          .map(item => {
-            if (typeof item === 'string') return item;
-            if (item && typeof item === 'object' && 'type' in item && item.type === 'text' && 'text' in item) {
-              return item.text ?? '';
-            }
-            return '';
-          })
-          .join('')
-        : '';
+    const content = this.extractMessageText(choice.message);
 
     const reasoning = (choice.message as any)?.reasoning_content || (choice.message as any)?.reasoning || '';
     const finishReason = this.mapFinishReason(choice.finishReason);
@@ -580,6 +545,79 @@ export class OpenRouterProvider extends BaseProvider {
     } catch {
       return { content: rawArgs };
     }
+  }
+
+  private async sendWithEmptyChoiceRetry(request: any): Promise<any> {
+    let lastResponse: any;
+
+    for (let attempt = 0; attempt <= EMPTY_CHOICES_RETRY_DELAYS_MS.length; attempt++) {
+      const response = await this.client.chat.send(request);
+      lastResponse = response;
+
+      if (this.getPrimaryChoice(response)) {
+        return response;
+      }
+
+      if (attempt < EMPTY_CHOICES_RETRY_DELAYS_MS.length) {
+        const delay = EMPTY_CHOICES_RETRY_DELAYS_MS[attempt];
+        if (typeof delay === 'number' && delay > 0) {
+          await this.sleep(delay);
+        }
+      }
+    }
+
+    throw new Error(`No response choices returned from OpenRouter (${this.summarizeUnexpectedResponse(lastResponse)})`);
+  }
+
+  private getPrimaryChoice(response: any): any | undefined {
+    if (!response || typeof response !== 'object') return undefined;
+    const choices = (response as any).choices;
+    if (!Array.isArray(choices) || choices.length === 0) return undefined;
+    return choices[0];
+  }
+
+  private getPrimaryChoiceOrThrow(response: any): any {
+    const choice = this.getPrimaryChoice(response);
+    if (!choice) {
+      throw new Error(`No response choices returned from OpenRouter (${this.summarizeUnexpectedResponse(response)})`);
+    }
+    return choice;
+  }
+
+  private extractMessageText(message: any): string {
+    const messageContent = message?.content;
+    if (typeof messageContent === 'string') return messageContent;
+    if (!Array.isArray(messageContent)) return '';
+
+    return messageContent
+      .map(item => {
+        if (typeof item === 'string') return item;
+        if (item && typeof item === 'object' && 'type' in item && item.type === 'text' && 'text' in item) {
+          return item.text ?? '';
+        }
+        return '';
+      })
+      .join('');
+  }
+
+  private summarizeUnexpectedResponse(response: any): string {
+    if (!response || typeof response !== 'object') return 'empty response object';
+    const id = typeof response.id === 'string' ? response.id : undefined;
+    const hasError = Boolean((response as any).error);
+    const hasChoicesField = Object.prototype.hasOwnProperty.call(response, 'choices');
+    const constructorName = response?.constructor?.name || 'unknown';
+    const hasAsyncIterator = typeof response?.[Symbol.asyncIterator] === 'function';
+    return [
+      id ? `id=${id}` : 'id=unknown',
+      `hasChoicesField=${hasChoicesField}`,
+      `hasError=${hasError}`,
+      `constructor=${constructorName}`,
+      `hasAsyncIterator=${hasAsyncIterator}`,
+    ].join(', ');
+  }
+
+  private async sleep(ms: number): Promise<void> {
+    await new Promise(resolve => setTimeout(resolve, ms));
   }
 }
 

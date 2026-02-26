@@ -25,7 +25,7 @@ test('falls back to model repair only after deterministic attempt fails', async 
     if (code.includes('fixed')) {
       return { success: true, output: 'ok' };
     }
-    return { success: false, output: '', error: 'still broken' };
+    return { success: false, output: '', error: 'SyntaxError: Unexpected token' };
   });
 
   let modelCalls = 0;
@@ -55,14 +55,54 @@ test('falls back to model repair only after deterministic attempt fails', async 
   });
 
   const result = await engine.repairAndRetry({
-    originalCode: 'doBrokenThing()',
-    initialResult: { success: false, output: '', error: 'ReferenceError: doBrokenThing is not defined' },
+    originalCode: 'if (true) {',
+    initialResult: { success: false, output: '', error: 'SyntaxError: Unexpected end of input' },
     env: {},
   });
 
   assert.equal(modelCalls, 1);
   assert.equal(result.result.success, true);
   assert.ok(result.summaryLines.some((line) => line.includes('attempt 2/2 model-repair')));
+});
+
+test('skips model repair for missing runtime identifiers', async () => {
+  const sandbox = new MockSandbox(() => ({ success: false, output: '', error: 'still broken' }));
+
+  let modelCalls = 0;
+  const session = {
+    agent: {
+      config: {
+        sandbox: 'local',
+        actionAutoFix: {
+          enabled: true,
+          maxAttempts: 2,
+          deterministic: { enabled: true, autoInstallMissingPackages: true },
+          modelRepair: { enabled: true, provider: 'openrouter', model: 'openai/gpt-oss-20b' },
+        },
+      },
+    },
+    sandbox,
+  } as any;
+
+  const engine = new ActionAutoFixEngine(session, {
+    repairWithModel: async () => {
+      modelCalls++;
+      return {
+        repairedCode: "console.log('fixed');",
+        note: 'model repair generated updated code (openrouter/openai/gpt-oss-20b)',
+      };
+    },
+  });
+
+  const result = await engine.repairAndRetry({
+    originalCode: 'task557',
+    initialResult: { success: false, output: '', error: 'ReferenceError: task557 is not defined' },
+    env: {},
+  });
+
+  assert.equal(modelCalls, 0);
+  assert.equal(result.result.success, false);
+  assert.ok(result.summaryLines.some((line) => line.includes('model repair skipped (missing runtime identifier "task557")')));
 });
 
 test('respects maxAttempts and does not call model when limit is 1', async () => {

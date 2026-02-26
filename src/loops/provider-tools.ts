@@ -219,13 +219,16 @@ export class ProviderToolsLoop extends BaseLoop {
         `[ProviderToolsLoop] Model "${config.model}" is in no-stream registry for "${provider.name}", using non-streaming mode.`
       );
     }
+    const effectiveConfig: ProviderConfig = forceNoStream && config.stream
+      ? { ...config, stream: false }
+      : config;
 
-    if (config.stream && provider.streamEventsWithTools && !forceNoStream) {
+    if (effectiveConfig.stream && provider.streamEventsWithTools && !forceNoStream) {
       let reasoning = '';
       let text = '';
       const toolCalls: ProviderToolCall[] = [];
       try {
-        for await (const event of provider.streamEventsWithTools(messages, config, toolRequest)) {
+        for await (const event of provider.streamEventsWithTools(messages, effectiveConfig, toolRequest)) {
           switch (event.type) {
             case 'reasoning.delta':
               if (event.delta) {
@@ -268,7 +271,7 @@ export class ProviderToolsLoop extends BaseLoop {
 
         const fallbackResponse = await provider.completeWithTools(
           messages,
-          { ...config, stream: false },
+          { ...effectiveConfig, stream: false },
           toolRequest
         );
         callbacks.onTextDone?.(fallbackResponse.content || '');
@@ -286,7 +289,7 @@ export class ProviderToolsLoop extends BaseLoop {
       throw new Error(`Provider "${provider.name}" does not support native tools`);
     }
 
-    const response = await provider.completeWithTools(messages, config, toolRequest);
+    const response = await provider.completeWithTools(messages, effectiveConfig, toolRequest);
     callbacks.onTextDone?.(response.content || '');
     return {
       text: response.content || '',

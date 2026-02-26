@@ -1,6 +1,7 @@
 import type { ExecutionResult } from '../types/index.js';
 import { applyDeterministicFixes } from './action-autofix/deterministic.js';
-import { resolveActionAutoFixConfig } from './action-autofix/constants.js';
+import { BUILTIN_IDENTIFIER_TO_MODULE, resolveActionAutoFixConfig } from './action-autofix/constants.js';
+import { classifyActionError } from './action-autofix/error-classifier.js';
 import { repairCodeWithModel } from './action-autofix/model-repair.js';
 import type { Session } from './Session.js';
 
@@ -91,33 +92,42 @@ export class ActionAutoFixEngine {
     }
 
     if (config.modelRepair.enabled && attemptsUsed < config.maxAttempts) {
-      attemptsUsed++;
-      const modelRepair = this.deps.repairWithModel || repairCodeWithModel;
-      this.addSummary(
-        summaryLines,
-        config.visibility,
-        `AUTO-FIX: attempt ${attemptsUsed}/${config.maxAttempts} model-repair via ${config.modelRepair.provider}/${config.modelRepair.model}`
-      );
-
-      const repairResult = await modelRepair({
-        code: currentCode,
-        errorText: this.buildFailureText(currentResult),
-        provider: config.modelRepair.provider,
-        model: config.modelRepair.model,
-        temperature: config.modelRepair.temperature,
-        maxTokens: config.modelRepair.maxTokens,
-      });
-
-      if (!repairResult.repairedCode) {
-        this.addSummary(summaryLines, config.visibility, `AUTO-FIX: model repair skipped (${repairResult.note})`);
+      const modelRepairEligibility = this.canUseModelRepair(this.buildFailureText(currentResult));
+      if (!modelRepairEligibility.allowed) {
+        this.addSummary(
+          summaryLines,
+          config.visibility,
+          `AUTO-FIX: model repair skipped (${modelRepairEligibility.reason})`
+        );
       } else {
-        currentCode = repairResult.repairedCode;
-        currentResult = await this.session.sandbox.execute(currentCode, undefined, input.env, input.onStderr);
-        this.addSummary(summaryLines, config.visibility, `AUTO-FIX: ${repairResult.note}`);
+        attemptsUsed++;
+        const modelRepair = this.deps.repairWithModel || repairCodeWithModel;
+        this.addSummary(
+          summaryLines,
+          config.visibility,
+          `AUTO-FIX: attempt ${attemptsUsed}/${config.maxAttempts} model-repair via ${config.modelRepair.provider}/${config.modelRepair.model}`
+        );
 
-        if (currentResult.success) {
-          this.addSummary(summaryLines, config.visibility, `AUTO-FIX: succeeded on attempt ${attemptsUsed}`);
-          return { result: currentResult, code: currentCode, summaryLines };
+        const repairResult = await modelRepair({
+          code: currentCode,
+          errorText: this.buildFailureText(currentResult),
+          provider: config.modelRepair.provider,
+          model: config.modelRepair.model,
+          temperature: config.modelRepair.temperature,
+          maxTokens: config.modelRepair.maxTokens,
+        });
+
+        if (!repairResult.repairedCode) {
+          this.addSummary(summaryLines, config.visibility, `AUTO-FIX: model repair skipped (${repairResult.note})`);
+        } else {
+          currentCode = repairResult.repairedCode;
+          currentResult = await this.session.sandbox.execute(currentCode, undefined, input.env, input.onStderr);
+          this.addSummary(summaryLines, config.visibility, `AUTO-FIX: ${repairResult.note}`);
+
+          if (currentResult.success) {
+            this.addSummary(summaryLines, config.visibility, `AUTO-FIX: succeeded on attempt ${attemptsUsed}`);
+            return { result: currentResult, code: currentCode, summaryLines };
+          }
         }
       }
     }
@@ -144,6 +154,33 @@ export class ActionAutoFixEngine {
   private addSummary(lines: string[], visibility: 'brief' | 'silent' | 'verbose', message: string): void {
     if (visibility === 'silent') return;
     lines.push(message);
+  }
+
+  private canUseModelRepair(errorText: string): { allowed: boolean; reason: string } {
+    const normalizedError = (errorText || '').trim();
+    if (!normalizedError) {
+      return { allowed: false, reason: 'empty error output' };
+    }
+
+    if (/No response choices returned from OpenRouter/i.test(normalizedError)) {
+      return { allowed: false, reason: 'provider returned empty response (not a code issue)' };
+    }
+
+    const classification = classifyActionError(normalizedError);
+    if (classification.hasSyntaxError || Boolean(classification.missingPackage)) {
+      return { allowed: true, reason: 'syntax or package issue detected' };
+    }
+
+    if (classification.missingIdentifier) {
+      const id = classification.missingIdentifier;
+      const moduleName = BUILTIN_IDENTIFIER_TO_MODULE[id] || BUILTIN_IDENTIFIER_TO_MODULE[id.toLowerCase()];
+      if (moduleName) {
+        return { allowed: true, reason: `missing builtin identifier "${id}"` };
+      }
+      return { allowed: false, reason: `missing runtime identifier "${id}"` };
+    }
+
+    return { allowed: false, reason: 'non-syntax runtime/tool failure' };
   }
 }
 

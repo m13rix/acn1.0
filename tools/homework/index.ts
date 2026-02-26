@@ -246,7 +246,7 @@ export async function generateSVG(taskText: string): Promise<string> {
 
         const response = await ai.models.generateContent({
             model: model,
-            contents: [{ role: 'user', parts: [{ text: taskText }] }],
+            contents: taskText,
             config: {
                 systemInstruction: systemInstruction,
             }
@@ -284,13 +284,11 @@ export async function formatHomework(taskContent: string, fileName: string): Pro
     const promptPath = path.join(__dirname, 'prompts', 'format_homework.md');
     try {
         const systemInstruction = await fs.readFile(promptPath, 'utf-8');
+        const requestText = "Форматируй этот текст как ученик: " + taskContent;
 
         const response = await ai.models.generateContent({
             model: model,
-            contents: [{
-                role: 'user',
-                parts: [{ text: `Теперь, СЛЕДУЯ ВСЕМ ПРАВИЛАМ, форматируйте данный текст:\n${taskContent}` }]
-            }],
+            contents: requestText,
             config: {
                 systemInstruction: systemInstruction,
             }

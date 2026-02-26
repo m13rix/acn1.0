@@ -22,5 +22,6 @@ description: |
   search.research(topic, options?): { output, status, costDollars? }
   - Deep research with exa-research-fast model
   - options: { stream? } - streams progress (default: true)
+  Returns .output -> the result of the research
 
 module: index.ts

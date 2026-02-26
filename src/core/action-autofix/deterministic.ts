@@ -41,6 +41,10 @@ export function applyDeterministicFixes(input: DeterministicFixInput): Determini
       code = injectRequireAtTop(code, missingIdentifier, moduleName);
       didChange = true;
       notes.push(`injected require('${moduleName}') for "${missingIdentifier}"`);
+    } else if (!moduleName) {
+      notes.push(
+        `identifier "${missingIdentifier}" is undefined (action runs are isolated; re-declare it or persist it to a file first)`
+      );
     }
   }
 

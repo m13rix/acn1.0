@@ -6,7 +6,7 @@
  */
 
 import { mkdir, writeFile } from 'fs/promises';
-import { dirname, join } from 'path';
+import { dirname, isAbsolute, join, relative, resolve } from 'path';
 import type { ProviderToolCall } from '../types/index.js';
 import { actionContext } from './ActionContext.js';
 import { agentContext } from './AgentContext.js';
@@ -96,7 +96,14 @@ export class ToolExecutionEngine {
     this.callbacks.onFile?.(path, content);
 
     try {
-      const fullPath = join(this.session.sandbox.directory, path);
+      const sandboxRoot = resolve(this.session.sandbox.directory);
+      const fullPath = resolve(join(sandboxRoot, path));
+      const rel = relative(sandboxRoot, fullPath);
+      if (rel.startsWith('..') || isAbsolute(rel)) {
+        return {
+          observation: `Error writing file ${path}: path resolves outside sandbox`,
+        };
+      }
       await mkdir(dirname(fullPath), { recursive: true });
       await writeFile(fullPath, content, 'utf-8');
       return {
