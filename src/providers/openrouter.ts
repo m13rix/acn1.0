@@ -7,6 +7,7 @@
 
 import { OpenRouter } from '@openrouter/sdk';
 import { BaseProvider, registerProvider } from './base.js';
+import { OAuthOnlyModelSelectedViaApiProviderError } from './openai-codex/errors.js';
 import type {
   Message,
   ProviderConfig,
@@ -40,6 +41,7 @@ export class OpenRouterProvider extends BaseProvider {
    */
   override buildRequest(messages: Message[], config: ProviderConfig): any {
     this.validateConfig(config);
+    this.ensureSupportedModel(config.model);
     const cfg = this.withDefaults(config);
 
     return this.buildOpenRouterRequest(messages, cfg);
@@ -51,12 +53,14 @@ export class OpenRouterProvider extends BaseProvider {
     toolRequest: ProviderToolRequest
   ): any {
     this.validateConfig(config);
+    this.ensureSupportedModel(config.model);
     const cfg = this.withDefaults(config);
     return this.buildOpenRouterRequest(messages, cfg, toolRequest);
   }
 
   override async complete(messages: Message[], config: ProviderConfig): Promise<ProviderResponse> {
     this.validateConfig(config);
+    this.ensureSupportedModel(config.model);
     const cfg = this.withDefaults(config);
 
     const request = this.buildOpenRouterRequest(messages, cfg);
@@ -89,6 +93,7 @@ export class OpenRouterProvider extends BaseProvider {
     toolRequest: ProviderToolRequest
   ): Promise<ProviderToolResponse> {
     this.validateConfig(config);
+    this.ensureSupportedModel(config.model);
     const cfg = this.withDefaults(config);
     const request = this.buildOpenRouterRequest(messages, cfg, toolRequest);
     const response = await this.sendWithEmptyChoiceRetry(request);
@@ -134,6 +139,7 @@ export class OpenRouterProvider extends BaseProvider {
    */
   override async *streamEvents(messages: Message[], config: ProviderConfig): AsyncIterable<ProviderStreamEvent> {
     this.validateConfig(config);
+    this.ensureSupportedModel(config.model);
     const cfg = this.withDefaults(config);
 
     const request = this.buildOpenRouterRequest(messages, {
@@ -193,6 +199,7 @@ export class OpenRouterProvider extends BaseProvider {
     toolRequest: ProviderToolRequest
   ): AsyncIterable<ProviderStreamEvent> {
     this.validateConfig(config);
+    this.ensureSupportedModel(config.model);
     const cfg = this.withDefaults(config);
     const request = this.buildOpenRouterRequest(messages, { ...cfg, stream: true }, toolRequest);
 
@@ -400,6 +407,12 @@ export class OpenRouterProvider extends BaseProvider {
     });
 
     return request;
+  }
+
+  private ensureSupportedModel(model: string): void {
+    if (String(model || '').startsWith('openai-codex/')) {
+      throw new OAuthOnlyModelSelectedViaApiProviderError();
+    }
   }
 
   /**

@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ACN Imported Tools Studio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;700;800&family=IBM+Plex+Mono:wght@400;500&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles/main.css">
+</head>
+<body>
+  <div id="app">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">ACN System UI</p>
+        <h1>Imported Tools Studio</h1>
+        <p class="lede">Inspect MCP servers and executable ClawHub skills, review the generated namespace, and activate them as first-class ACN tools.</p>
+      </div>
+      <button class="ghost-button" id="refresh-installed">Refresh Installed</button>
+    </header>
+
+    <nav class="tabs">
+      <button class="tab is-active" data-tab="installed">Installed</button>
+      <button class="tab" data-tab="mcp">MCP</button>
+      <button class="tab" data-tab="clawhub">ClawHub</button>
+    </nav>
+
+    <main class="layout">
+      <section class="panel panel-wide">
+        <div class="panel-header">
+          <h2 id="panel-title">Installed Imports</h2>
+          <p id="panel-subtitle">Your generated ACN tool namespaces and their runtime status.</p>
+        </div>
+        <div id="panel-content"></div>
+      </section>
+
+      <aside class="panel panel-side">
+        <div class="panel-header">
+          <h2>Review</h2>
+          <p>Inspection details, risks, method mapping, and staged approval.</p>
+        </div>
+        <div id="review-content" class="review-empty">Nothing inspected yet.</div>
+      </aside>
+    </main>
+  </div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

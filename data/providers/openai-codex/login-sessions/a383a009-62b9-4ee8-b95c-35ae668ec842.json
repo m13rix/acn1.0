@@ -1,0 +1,20 @@
+{
+  "id": "a383a009-62b9-4ee8-b95c-35ae668ec842",
+  "state": "nHWaROKrQoFVJ-VvnwP-oATuFnObSSY7O2UxshkmjTg",
+  "codeVerifier": "Zr4x4LIawBu7lc9lwwKTTPhlQ8YhnZ88_M8Vnwaj5hE",
+  "codeChallenge": "oQUO_61sez7ihyDFsWH4hUujP0A6Xf4ZpMiRENFd8nI",
+  "authorizeUrl": "https://auth.openai.com/oauth/authorize",
+  "tokenUrl": "https://auth.openai.com/oauth/token",
+  "redirectUri": "http://localhost:1455/auth/callback",
+  "clientId": "app_EMoamEEZ73f0CkXaXp7hrann",
+  "scopes": [
+    "openid",
+    "profile",
+    "email",
+    "offline_access",
+    "api.connectors.read",
+    "api.connectors.invoke"
+  ],
+  "createdAt": 1773500707411,
+  "expiresAt": 1773501307411
+}

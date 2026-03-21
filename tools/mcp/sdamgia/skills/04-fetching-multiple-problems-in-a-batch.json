@@ -1,0 +1,10 @@
+{
+  "title": "Fetching multiple problems in a batch",
+  "content": "Use the 'batchGetProblems' method to retrieve full details for multiple problem IDs simultaneously. This is more efficient than calling 'getProblem' individually. Provide the 'subject' and an array of 'problem_ids'. Note that all problems must belong to the same subject and the batch size is limited to 10 IDs.",
+  "examples": [
+    "Fetch the full content for these math problems: 101, 102, and 103.",
+    "Get all details for chemistry problem IDs 500, 501, 502, 503, and 504.",
+    "I need the full solutions for these physics problems: 777, 788, 799."
+  ],
+  "scoreThreshold": 0.8
+}

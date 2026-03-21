@@ -1,0 +1,10 @@
+{
+  "title": "Retrieving problems within a category",
+  "content": "Use the 'getCategoryProblems' method to get a list of problem IDs belonging to a specific category. You must first obtain the correct 'category_id' by using the 'getCatalog' method. Provide the 'subject' and 'category_id' to retrieve the list of problem IDs.",
+  "examples": [
+    "Show me all problem IDs under the 'Trigonometry' category in math.",
+    "List all problems in category 12345 for history.",
+    "Give me the first 20 problems from the 'Mechanics' category in physics."
+  ],
+  "scoreThreshold": 0.85
+}

@@ -1,0 +1,10 @@
+{
+  "title": "Retrieving specific problem details",
+  "content": "Use the 'getProblem' method when you have a specific problem identifier and require the complete problem statement, solution, answer, and metadata. You must provide the 'subject' and the 'problem_id' (a numeric string). You can optionally set 'response_format' to 'json' or 'markdown'.",
+  "examples": [
+    "Give me the solution for math problem 12345.",
+    "Show me the full content of physics problem 9876.",
+    "Fetch details for informatics problem ID 55432 in markdown format."
+  ],
+  "scoreThreshold": 0.8
+}

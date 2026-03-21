@@ -8,7 +8,7 @@ description: |
   - `skills.add(content: string, examples: string[], scoreThreshold?: number): Promise<{ success: boolean; id: string }>`
     Add a new entry to the agent's knowledge base. Requires examples that describe when this entry should be retrieved.
     Examples should be queries or descriptions of user requests when this entry is relevant.
-    Example: `const result = await skills.add("Always be polite", ["Hello", "User greets me"], 0.8);`
+  Example: `const result = await skills.add("Always be polite", ["Hello", "User greets me"], 0.85);`
   
   - `skills.search(query: string): Promise<{ content: string; score: number } | null>`
     Search the knowledge base using direct content comparison. Always returns the top result.

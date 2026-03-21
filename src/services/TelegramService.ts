@@ -33,6 +33,7 @@ const CODE_CHUNK_LIMIT = 1800;
 const PREVIEW_INTERVAL_MIN_MS = 80;
 const PREVIEW_INTERVAL_MAX_MS = 1500;
 const PREVIEW_INTERVAL_DEFAULT_MS = 180;
+const ROOT_UI_SCOPE_ID = 'root';
 
 interface PendingMessage {
     text?: string;
@@ -50,7 +51,6 @@ type StreamingTransport = 'draft' | 'message';
 
 interface TelegramUiState {
     transport: StreamingTransport;
-    queue: Promise<void>;
     currentDraftId: number;
     livePreviewMessageId: number | null;
     reasoningAccumulated: string;
@@ -76,7 +76,8 @@ interface ChatSession {
     isProcessing: boolean;
     waitingForQuestionResponse: boolean;
     questionResolver: ((response: string) => void) | null;
-    ui: TelegramUiState;
+    uiQueue: Promise<void>;
+    uiScopes: Map<string, TelegramUiState>;
 }
 
 interface TelegramApiErrorLike {
@@ -133,7 +134,7 @@ export class TelegramService {
 
     private setupApiRoutes(): void {
         this.app.post('/api/ask', async (req, res): Promise<void> => {
-            const { chatId, question } = req.body as { chatId?: string; question?: string };
+            const { chatId, question, agentName } = req.body as { chatId?: string; question?: string; agentName?: string };
             if (!chatId || !question) {
                 res.status(400).json({ error: 'Missing parameters' });
                 return;
@@ -147,7 +148,7 @@ export class TelegramService {
                 this.pendingQuestions.set(questionId, entry);
 
                 // Start the ask flow (non-blocking — answer will be stored when user replies)
-                this.ask(chatId, question).then((answer) => {
+                this.ask(chatId, question, agentName).then((answer) => {
                     const pending = this.pendingQuestions.get(questionId);
                     if (pending) {
                         pending.answer = answer;
@@ -193,14 +194,14 @@ export class TelegramService {
         });
 
         this.app.post('/api/sendFiles', async (req, res): Promise<void> => {
-            const { chatId, files } = req.body as { chatId?: string; files?: string[] };
+            const { chatId, files, agentName } = req.body as { chatId?: string; files?: string[]; agentName?: string };
             if (!chatId || !files) {
                 res.status(400).json({ error: 'Missing parameters' });
                 return;
             }
 
             try {
-                await this.sendFiles(chatId, files);
+                await this.sendFiles(chatId, files, agentName);
                 res.json({ success: true });
             } catch (e: any) {
                 res.status(500).json({ error: e.message });
@@ -208,14 +209,14 @@ export class TelegramService {
         });
 
         this.app.post('/api/sendVoice', async (req, res): Promise<void> => {
-            const { chatId, file } = req.body as { chatId?: string; file?: string };
+            const { chatId, file, agentName } = req.body as { chatId?: string; file?: string; agentName?: string };
             if (!chatId || !file) {
                 res.status(400).json({ error: 'Missing parameters' });
                 return;
             }
 
             try {
-                await this.sendVoice(chatId, file);
+                await this.sendVoice(chatId, file, agentName);
                 res.json({ success: true });
             } catch (e: any) {
                 res.status(500).json({ error: e.message });
@@ -223,14 +224,103 @@ export class TelegramService {
         });
 
         this.app.post('/api/sendText', async (req, res): Promise<void> => {
-            const { chatId, text } = req.body as { chatId?: string; text?: string };
+            const { chatId, text, agentName } = req.body as { chatId?: string; text?: string; agentName?: string };
             if (!chatId || !text) {
                 res.status(400).json({ error: 'Missing parameters' });
                 return;
             }
 
             try {
-                await this.sendText(chatId, text);
+                await this.sendText(chatId, text, agentName);
+                res.json({ success: true });
+            } catch (e: any) {
+                res.status(500).json({ error: e.message });
+            }
+        });
+
+        this.app.post('/api/sendAuthLink', async (req, res): Promise<void> => {
+            const { chatId, text, url, label, agentName } = req.body as { chatId?: string; text?: string; url?: string; label?: string; agentName?: string };
+            if (!chatId || !text || !url) {
+                res.status(400).json({ error: 'Missing parameters' });
+                return;
+            }
+
+            try {
+                await this.sendAuthLink(chatId, text, url, label || 'Open Login', agentName);
+                res.json({ success: true });
+            } catch (e: any) {
+                res.status(500).json({ error: e.message });
+            }
+        });
+
+        this.app.post('/api/ui/event', async (req, res): Promise<void> => {
+            const {
+                chatId,
+                scopeId,
+                event,
+                agentName,
+                accumulated,
+                text,
+                code,
+                command,
+                filename,
+                content,
+            } = req.body as {
+                chatId?: string;
+                scopeId?: string;
+                event?: string;
+                agentName?: string;
+                accumulated?: string;
+                text?: string;
+                code?: string;
+                command?: string;
+                filename?: string;
+                content?: string;
+            };
+
+            if (!chatId || !scopeId || !event) {
+                res.status(400).json({ error: 'Missing parameters' });
+                return;
+            }
+
+            try {
+                const { routeKey, session } = await this.resolveRouteForApi(chatId, agentName);
+                if (!session) {
+                    throw new Error(`No session for route "${routeKey}"`);
+                }
+
+                switch (event) {
+                    case 'executor.before_provider_call':
+                        this.resetUiScope(routeKey, scopeId);
+                        break;
+                    case 'executor.reasoning_delta':
+                        this.pushReasoningPreview(routeKey, scopeId, accumulated || '');
+                        break;
+                    case 'executor.text_delta':
+                        this.pushTextPreview(routeKey, scopeId, accumulated || '');
+                        break;
+                    case 'executor.text_done':
+                        this.finalizeScopeText(routeKey, scopeId, text || '');
+                        break;
+                    case 'executor.action':
+                        this.showExecutionForScope(routeKey, scopeId, 'Executing action...', code || '');
+                        break;
+                    case 'executor.cli':
+                        this.showExecutionForScope(routeKey, scopeId, 'Executing action...', command || '');
+                        break;
+                    case 'executor.file':
+                        this.showExecutionForScope(routeKey, scopeId, 'Executing action...', `// file: ${filename || '(unknown)'}\n${content || ''}`);
+                        break;
+                    case 'executor.observation':
+                        this.showObservationForScope(routeKey, scopeId, content || '');
+                        break;
+                    case 'executor.response':
+                        this.finalizeUiScope(routeKey, scopeId, content || text || '');
+                        break;
+                    default:
+                        throw new Error(`Unsupported UI event "${event}"`);
+                }
+
                 res.json({ success: true });
             } catch (e: any) {
                 res.status(500).json({ error: e.message });
@@ -315,9 +405,11 @@ export class TelegramService {
                 current.pendingTimer = null;
             }
 
-            await this.cleanupTurnArtifacts(current);
-            await this.clearLivePreview(current);
-            await this.clearDraftBestEffort(current.route, current.ui.currentDraftId);
+            for (const ui of current.uiScopes.values()) {
+                await this.cleanupTurnArtifacts(current, ui);
+                await this.clearLivePreview(current, ui);
+                await this.clearDraftBestEffort(current.route, ui.currentDraftId);
+            }
 
             if (current.session) {
                 await current.session.cleanup().catch((err) => {
@@ -331,7 +423,8 @@ export class TelegramService {
             current.waitingForQuestionResponse = false;
             current.questionResolver = null;
             current.isProcessing = false;
-            current.ui = this.createUiState();
+            current.uiQueue = Promise.resolve();
+            current.uiScopes = new Map([[ROOT_UI_SCOPE_ID, this.createUiState()]]);
 
             await this.sendMessageToRoute(route, 'Session cleared.');
             if (current.agentName) {
@@ -425,7 +518,6 @@ export class TelegramService {
     private createUiState(): TelegramUiState {
         return {
             transport: 'draft',
-            queue: Promise.resolve(),
             currentDraftId: this.nextDraftId(),
             livePreviewMessageId: null,
             reasoningAccumulated: '',
@@ -453,7 +545,8 @@ export class TelegramService {
             isProcessing: false,
             waitingForQuestionResponse: false,
             questionResolver: null,
-            ui: this.createUiState(),
+            uiQueue: Promise.resolve(),
+            uiScopes: new Map([[ROOT_UI_SCOPE_ID, this.createUiState()]]),
         };
     }
 
@@ -470,11 +563,19 @@ export class TelegramService {
         existing.route = route;
         existing.agentName = agentName;
 
-        const agent = await this.agentLoader.loadByName(agentName);
+        let agent = await this.agentLoader.loadByName(agentName);
+        if (!agent) {
+            const availableAgents = await this.agentLoader.getAvailableAgents();
+            const match = availableAgents.find(name => name.toLowerCase() === agentName.toLowerCase());
+            if (match) {
+                agent = await this.agentLoader.loadByName(match);
+            }
+        }
         if (!agent) {
             await this.sendMessageToRoute(route, 'Agent not found.');
             return;
         }
+        existing.agentName = agent.config.name;
 
         const provider = getProvider(agent.config.provider || 'gemini');
         const syntax = getSyntax(agent.config.syntax);
@@ -500,7 +601,7 @@ export class TelegramService {
 
         await existing.session.initialize();
 
-        const callbacks = this.createExecutorCallbacks(routeKey);
+        const callbacks = this.createExecutorCallbacks(routeKey, ROOT_UI_SCOPE_ID);
         existing.executor = new Executor(existing.session, {
             stream: true,
             callbacks,
@@ -509,39 +610,34 @@ export class TelegramService {
 
         this.sessions.set(routeKey, existing);
 
-        console.log(COLORS.secondary(`\n${SYMBOLS.assistant} Session started with agent: ${agentName}`));
+        console.log(COLORS.secondary(`\n${SYMBOLS.assistant} Session started with agent: ${existing.agentName}`));
         console.log(COLORS.muted(`Route: ${routeKey}`));
         console.log(COLORS.muted('--------------------------------------------------'));
 
-        await this.sendMessageToRoute(route, `Session started with ${agentName}.`, {
+        await this.sendMessageToRoute(route, `Session started with ${existing.agentName}.`, {
             ...Markup.removeKeyboard(),
         });
     }
 
-    private createExecutorCallbacks(routeKey: string): ExecutorCallbacks {
+    private getOrCreateUiState(session: ChatSession, scopeId: string): TelegramUiState {
+        let ui = session.uiScopes.get(scopeId);
+        if (!ui) {
+            ui = this.createUiState();
+            session.uiScopes.set(scopeId, ui);
+        }
+        return ui;
+    }
+
+    private createExecutorCallbacks(routeKey: string, scopeId: string): ExecutorCallbacks {
         return {
             onBeforeProviderCall: () => {
                 this.display.reset();
-                this.enqueueUiTask(routeKey, async (session) => {
-                    await this.cleanupTurnArtifacts(session);
-                    await this.clearLivePreview(session);
-                    session.ui.currentDraftId = this.nextDraftId();
-                    session.ui.reasoningAccumulated = '';
-                    session.ui.textAccumulated = '';
-                    session.ui.previewText = '';
-                    session.ui.previewItalic = false;
-                    session.ui.previewDirty = false;
-                    session.ui.previewIntervalMs = PREVIEW_INTERVAL_DEFAULT_MS;
-                    session.ui.previewNextAllowedAtMs = 0;
-                });
+                this.resetUiScope(routeKey, scopeId);
             },
             onReasoningDelta: (delta, accumulated) => {
                 this.display.startReasoning();
                 this.display.writeReasoning(delta);
-                const session = this.sessions.get(routeKey);
-                if (!session) return;
-                session.ui.reasoningAccumulated = accumulated;
-                this.updatePreviewState(routeKey, accumulated, true);
+                this.pushReasoningPreview(routeKey, scopeId, accumulated);
             },
             onReasoningDone: () => {
                 this.display.endReasoning();
@@ -549,73 +645,32 @@ export class TelegramService {
             onTextDelta: (delta, accumulated) => {
                 this.display.startText();
                 this.display.writeText(delta);
-                const session = this.sessions.get(routeKey);
-                if (!session) return;
-                session.ui.textAccumulated = accumulated;
-                this.updatePreviewState(routeKey, accumulated, false);
+                this.pushTextPreview(routeKey, scopeId, accumulated);
             },
             onTextDone: (fullText) => {
                 this.display.endText();
-
-                this.enqueueUiTask(routeKey, async (session) => {
-                    if (fullText.trim()) {
-                        await this.sendPersistentText(session.route, fullText);
-                    }
-                    await this.clearLivePreview(session);
-                    await this.clearDraftBestEffort(session.route, session.ui.currentDraftId);
-                });
+                this.finalizeScopeText(routeKey, scopeId, fullText);
             },
             onAction: (code) => {
                 this.display.showAction(code);
-
-                this.enqueueUiTask(routeKey, async (session) => {
-                    await this.clearLivePreview(session);
-                    await this.clearDraftBestEffort(session.route, session.ui.currentDraftId);
-
-                    const ids = await this.sendExecutionBlock(session.route, 'Executing action...', code);
-                    session.ui.currentTurnActionMessageIds.push(...ids);
-                });
+                this.showExecutionForScope(routeKey, scopeId, 'Executing action...', code);
             },
             onCli: (command) => {
                 this.display.showAction(command);
-
-                this.enqueueUiTask(routeKey, async (session) => {
-                    await this.clearLivePreview(session);
-                    await this.clearDraftBestEffort(session.route, session.ui.currentDraftId);
-
-                    const ids = await this.sendExecutionBlock(session.route, 'Executing action...', command);
-                    session.ui.currentTurnActionMessageIds.push(...ids);
-                });
+                this.showExecutionForScope(routeKey, scopeId, 'Executing action...', command);
             },
             onFile: (filename, content) => {
                 this.display.showAction(`file: ${filename}`);
-
-                this.enqueueUiTask(routeKey, async (session) => {
-                    await this.clearLivePreview(session);
-                    await this.clearDraftBestEffort(session.route, session.ui.currentDraftId);
-
-                    const payload = `// file: ${filename}\n${content}`;
-                    const ids = await this.sendExecutionBlock(session.route, 'Executing action...', payload);
-                    session.ui.currentTurnActionMessageIds.push(...ids);
-                });
+                this.showExecutionForScope(routeKey, scopeId, 'Executing action...', `// file: ${filename}\n${content}`);
             },
             onObservation: (content) => {
                 this.display.showObservation(content);
-
-                this.enqueueUiTask(routeKey, async (session) => {
-                    const ids = await this.sendObservationBlock(session.route, content);
-                    session.ui.currentTurnObservationMessageIds.push(...ids);
-                });
+                this.showObservationForScope(routeKey, scopeId, content);
             },
-            onResponse: () => {
+            onResponse: (content) => {
                 this.display.finalize();
                 console.log('');
-
-                this.enqueueUiTask(routeKey, async (session) => {
-                    await this.cleanupTurnArtifacts(session);
-                    await this.clearLivePreview(session);
-                    await this.clearDraftBestEffort(session.route, session.ui.currentDraftId);
-                });
+                this.finalizeUiScope(routeKey, scopeId, content);
             },
             onThinking: (content) => {
                 console.log(COLORS.reasoning(`\n${SYMBOLS.thinking} Thinking...`));
@@ -633,11 +688,94 @@ export class TelegramService {
         const session = this.sessions.get(routeKey);
         if (!session) return;
 
-        session.ui.queue = session.ui.queue
+        session.uiQueue = session.uiQueue
             .then(async () => task(session))
             .catch((error) => {
                 console.error(`[Telegram UI] ${routeKey}:`, error);
             });
+    }
+
+    private resetUiScope(routeKey: string, scopeId: string): void {
+        this.enqueueUiTask(routeKey, async (session) => {
+            const ui = this.getOrCreateUiState(session, scopeId);
+            await this.cleanupTurnArtifacts(session, ui);
+            await this.clearLivePreview(session, ui);
+            ui.currentDraftId = this.nextDraftId();
+            ui.reasoningAccumulated = '';
+            ui.textAccumulated = '';
+            ui.previewText = '';
+            ui.previewItalic = false;
+            ui.previewDirty = false;
+            ui.previewIntervalMs = PREVIEW_INTERVAL_DEFAULT_MS;
+            ui.previewNextAllowedAtMs = 0;
+        });
+    }
+
+    private pushReasoningPreview(routeKey: string, scopeId: string, accumulated: string): void {
+        const session = this.sessions.get(routeKey);
+        if (!session) return;
+        const ui = this.getOrCreateUiState(session, scopeId);
+        ui.reasoningAccumulated = accumulated;
+        this.updatePreviewState(routeKey, scopeId, accumulated, true);
+    }
+
+    private pushTextPreview(routeKey: string, scopeId: string, accumulated: string): void {
+        const session = this.sessions.get(routeKey);
+        if (!session) return;
+        const ui = this.getOrCreateUiState(session, scopeId);
+        ui.textAccumulated = accumulated;
+        this.updatePreviewState(routeKey, scopeId, accumulated, false);
+    }
+
+    private finalizeScopeText(routeKey: string, scopeId: string, fullText: string): void {
+        this.enqueueUiTask(routeKey, async (session) => {
+            const ui = this.getOrCreateUiState(session, scopeId);
+            ui.textAccumulated = fullText;
+            if (fullText.trim()) {
+                await this.sendPersistentText(session.route, fullText);
+            }
+            await this.clearLivePreview(session, ui);
+            await this.clearDraftBestEffort(session.route, ui.currentDraftId);
+        });
+    }
+
+    private showExecutionForScope(routeKey: string, scopeId: string, header: string, payload: string): void {
+        this.enqueueUiTask(routeKey, async (session) => {
+            const ui = this.getOrCreateUiState(session, scopeId);
+            await this.clearLivePreview(session, ui);
+            await this.clearDraftBestEffort(session.route, ui.currentDraftId);
+
+            const ids = await this.sendExecutionBlock(session.route, header, payload);
+            ui.currentTurnActionMessageIds.push(...ids);
+        });
+    }
+
+    private showObservationForScope(routeKey: string, scopeId: string, content: string): void {
+        this.enqueueUiTask(routeKey, async (session) => {
+            const ui = this.getOrCreateUiState(session, scopeId);
+            const ids = await this.sendObservationBlock(session.route, content);
+            ui.currentTurnObservationMessageIds.push(...ids);
+        });
+    }
+
+    private finalizeUiScope(routeKey: string, scopeId: string, content?: string): void {
+        this.enqueueUiTask(routeKey, async (session) => {
+            const ui = this.getOrCreateUiState(session, scopeId);
+            const completionText = (content || '').trim();
+            const streamedText = ui.textAccumulated.trim();
+
+            if (completionText && completionText !== streamedText) {
+                await this.sendPersistentText(session.route, completionText);
+            }
+
+            await this.cleanupTurnArtifacts(session, ui);
+            await this.clearLivePreview(session, ui);
+            await this.clearDraftBestEffort(session.route, ui.currentDraftId);
+
+            if (scopeId !== ROOT_UI_SCOPE_ID) {
+                session.uiScopes.delete(scopeId);
+            }
+        });
     }
 
     private async handleUserActivity(routeKey: string, route: TelegramRoute, activity: PendingMessage): Promise<void> {
@@ -747,7 +885,7 @@ export class TelegramService {
                 );
             });
 
-            await session.ui.queue;
+            await session.uiQueue;
         } catch (e: any) {
             console.error(`Error executing agent for ${routeKey}:`, e);
             await this.sendMessageToRoute(session.route, `Error: ${e.message}`);
@@ -760,132 +898,137 @@ export class TelegramService {
         }
     }
 
-    private updatePreviewState(routeKey: string, content: string, italic: boolean): void {
+    private updatePreviewState(routeKey: string, scopeId: string, content: string, italic: boolean): void {
         const session = this.sessions.get(routeKey);
         if (!session) return;
 
-        session.ui.previewText = this.clipForStream(content, STREAM_PREVIEW_LIMIT);
-        session.ui.previewItalic = italic;
-        session.ui.previewDirty = true;
-        this.schedulePreviewFlush(routeKey);
+        const ui = this.getOrCreateUiState(session, scopeId);
+        ui.previewText = this.clipForStream(content, STREAM_PREVIEW_LIMIT);
+        ui.previewItalic = italic;
+        ui.previewDirty = true;
+        this.schedulePreviewFlush(routeKey, scopeId);
     }
 
-    private schedulePreviewFlush(routeKey: string, forceDelayMs?: number): void {
+    private schedulePreviewFlush(routeKey: string, scopeId: string, forceDelayMs?: number): void {
         const session = this.sessions.get(routeKey);
         if (!session) return;
+        const ui = this.getOrCreateUiState(session, scopeId);
 
-        if (session.ui.previewFlushTimer) {
+        if (ui.previewFlushTimer) {
             return;
         }
 
         const now = Date.now();
         const dueIn = Math.max(
-            forceDelayMs ?? session.ui.previewIntervalMs,
-            session.ui.previewNextAllowedAtMs - now,
+            forceDelayMs ?? ui.previewIntervalMs,
+            ui.previewNextAllowedAtMs - now,
             0
         );
 
-        session.ui.previewFlushTimer = setTimeout(() => {
+        ui.previewFlushTimer = setTimeout(() => {
             const s = this.sessions.get(routeKey);
             if (!s) return;
-            s.ui.previewFlushTimer = null;
+            const liveUi = s.uiScopes.get(scopeId);
+            if (!liveUi) return;
+            liveUi.previewFlushTimer = null;
             this.enqueueUiTask(routeKey, async (liveSession) => {
-                await this.flushPreview(liveSession, routeKey);
+                await this.flushPreview(liveSession, scopeId, routeKey);
             });
         }, dueIn);
     }
 
-    private async flushPreview(session: ChatSession, routeKey: string): Promise<void> {
-        if (!session.ui.previewDirty) return;
-        if (session.ui.previewFlushInFlight) {
-            this.schedulePreviewFlush(routeKey, session.ui.previewIntervalMs);
+    private async flushPreview(session: ChatSession, scopeId: string, routeKey: string): Promise<void> {
+        const ui = session.uiScopes.get(scopeId);
+        if (!ui || !ui.previewDirty) return;
+        if (ui.previewFlushInFlight) {
+            this.schedulePreviewFlush(routeKey, scopeId, ui.previewIntervalMs);
             return;
         }
 
         const now = Date.now();
-        if (session.ui.previewNextAllowedAtMs > now) {
-            this.schedulePreviewFlush(routeKey, session.ui.previewNextAllowedAtMs - now);
+        if (ui.previewNextAllowedAtMs > now) {
+            this.schedulePreviewFlush(routeKey, scopeId, ui.previewNextAllowedAtMs - now);
             return;
         }
 
-        const preview = session.ui.previewText;
-        const italic = session.ui.previewItalic;
-        session.ui.previewDirty = false;
-        session.ui.previewFlushInFlight = true;
+        const preview = ui.previewText;
+        const italic = ui.previewItalic;
+        ui.previewDirty = false;
+        ui.previewFlushInFlight = true;
         const startedAt = Date.now();
 
         try {
-            if (session.ui.transport === 'draft') {
-                await this.sendDraftToRoute(session.route, session.ui.currentDraftId, preview, italic);
+            if (ui.transport === 'draft') {
+                await this.sendDraftToRoute(session.route, ui.currentDraftId, preview, italic);
             } else {
-                await this.upsertLivePreviewMessage(session, preview, italic);
+                await this.upsertLivePreviewMessage(session, ui, preview, italic);
             }
 
             const elapsed = Date.now() - startedAt;
-            if (elapsed < session.ui.previewIntervalMs * 0.8) {
-                session.ui.previewIntervalMs = Math.max(PREVIEW_INTERVAL_MIN_MS, Math.floor(session.ui.previewIntervalMs * 0.9));
-            } else if (elapsed > session.ui.previewIntervalMs * 1.6) {
-                session.ui.previewIntervalMs = Math.min(PREVIEW_INTERVAL_MAX_MS, Math.floor(session.ui.previewIntervalMs * 1.2));
+            if (elapsed < ui.previewIntervalMs * 0.8) {
+                ui.previewIntervalMs = Math.max(PREVIEW_INTERVAL_MIN_MS, Math.floor(ui.previewIntervalMs * 0.9));
+            } else if (elapsed > ui.previewIntervalMs * 1.6) {
+                ui.previewIntervalMs = Math.min(PREVIEW_INTERVAL_MAX_MS, Math.floor(ui.previewIntervalMs * 1.2));
             }
         } catch (error) {
             if (this.isRateLimitError(error)) {
                 const retryMs = this.getRetryAfterMs(error);
-                session.ui.previewNextAllowedAtMs = Date.now() + retryMs;
-                session.ui.previewIntervalMs = Math.min(PREVIEW_INTERVAL_MAX_MS, Math.floor(session.ui.previewIntervalMs * 1.5));
-                session.ui.previewDirty = true;
-                this.schedulePreviewFlush(routeKey, retryMs);
+                ui.previewNextAllowedAtMs = Date.now() + retryMs;
+                ui.previewIntervalMs = Math.min(PREVIEW_INTERVAL_MAX_MS, Math.floor(ui.previewIntervalMs * 1.5));
+                ui.previewDirty = true;
+                this.schedulePreviewFlush(routeKey, scopeId, retryMs);
                 return;
             }
 
-            if (session.ui.transport === 'draft') {
+            if (ui.transport === 'draft') {
                 console.warn(`[Telegram] sendMessageDraft failed for ${this.routeKey(session.route)}. Falling back to send/edit:`, error);
-                session.ui.transport = 'message';
-                session.ui.previewDirty = true;
-                this.schedulePreviewFlush(routeKey, 0);
+                ui.transport = 'message';
+                ui.previewDirty = true;
+                this.schedulePreviewFlush(routeKey, scopeId, 0);
                 return;
             }
 
             throw error;
         } finally {
-            session.ui.previewFlushInFlight = false;
+            ui.previewFlushInFlight = false;
         }
 
-        if (session.ui.previewDirty) {
-            this.schedulePreviewFlush(routeKey);
+        if (ui.previewDirty) {
+            this.schedulePreviewFlush(routeKey, scopeId);
         }
     }
 
-    private async upsertLivePreviewMessage(session: ChatSession, text: string, italic: boolean): Promise<void> {
+    private async upsertLivePreviewMessage(session: ChatSession, ui: TelegramUiState, text: string, italic: boolean): Promise<void> {
         const route = session.route;
         const content = italic ? `<i>${this.escapeHtml(text)}</i>` : text;
         const extra = italic
             ? ({ parse_mode: 'HTML', disable_web_page_preview: true } as const)
             : ({ disable_web_page_preview: true } as const);
 
-        if (!session.ui.livePreviewMessageId) {
+        if (!ui.livePreviewMessageId) {
             const sent = await this.sendMessageToRoute(route, content, extra as any);
-            session.ui.livePreviewMessageId = sent.message_id;
+            ui.livePreviewMessageId = sent.message_id;
             return;
         }
 
-        const edited = await this.editMessageSafe(route.chatId, session.ui.livePreviewMessageId, content, extra as any);
+        const edited = await this.editMessageSafe(route.chatId, ui.livePreviewMessageId, content, extra as any);
         if (!edited) {
             const sent = await this.sendMessageToRoute(route, content, extra as any);
-            session.ui.livePreviewMessageId = sent.message_id;
+            ui.livePreviewMessageId = sent.message_id;
         }
     }
 
-    private async clearLivePreview(session: ChatSession): Promise<void> {
-        if (session.ui.previewFlushTimer) {
-            clearTimeout(session.ui.previewFlushTimer);
-            session.ui.previewFlushTimer = null;
+    private async clearLivePreview(session: ChatSession, ui: TelegramUiState): Promise<void> {
+        if (ui.previewFlushTimer) {
+            clearTimeout(ui.previewFlushTimer);
+            ui.previewFlushTimer = null;
         }
-        session.ui.previewDirty = false;
-        session.ui.previewFlushInFlight = false;
+        ui.previewDirty = false;
+        ui.previewFlushInFlight = false;
 
-        if (session.ui.livePreviewMessageId) {
-            await this.deleteMessageSafe(session.route.chatId, session.ui.livePreviewMessageId);
-            session.ui.livePreviewMessageId = null;
+        if (ui.livePreviewMessageId) {
+            await this.deleteMessageSafe(session.route.chatId, ui.livePreviewMessageId);
+            ui.livePreviewMessageId = null;
         }
     }
 
@@ -897,13 +1040,13 @@ export class TelegramService {
         }
     }
 
-    private async cleanupTurnArtifacts(session: ChatSession): Promise<void> {
-        const ids = [...session.ui.currentTurnActionMessageIds, ...session.ui.currentTurnObservationMessageIds];
+    private async cleanupTurnArtifacts(session: ChatSession, ui: TelegramUiState): Promise<void> {
+        const ids = [...ui.currentTurnActionMessageIds, ...ui.currentTurnObservationMessageIds];
         for (const id of ids) {
             await this.deleteMessageSafe(session.route.chatId, id);
         }
-        session.ui.currentTurnActionMessageIds = [];
-        session.ui.currentTurnObservationMessageIds = [];
+        ui.currentTurnActionMessageIds = [];
+        ui.currentTurnObservationMessageIds = [];
     }
 
     private async sendExecutionBlock(route: TelegramRoute, header: string, code: string): Promise<number[]> {
@@ -1047,7 +1190,33 @@ export class TelegramService {
         };
     }
 
-    private async getHeartbeatRouteAndSession(): Promise<{ routeKey: string; route: TelegramRoute; session?: ChatSession }> {
+    private normalizePreferredAgentName(agentName?: string): string | undefined {
+        const normalized = String(agentName || '').trim();
+        return normalized || undefined;
+    }
+
+    private async ensureSessionAgent(routeKey: string, route: TelegramRoute, preferredAgentName?: string): Promise<ChatSession | undefined> {
+        const session = this.sessions.get(routeKey);
+        if (!session) {
+            return undefined;
+        }
+
+        const preferred = this.normalizePreferredAgentName(preferredAgentName);
+        if (!preferred) {
+            return session;
+        }
+
+        const current = String(session.agentName || '').trim();
+        if (current && current.toLowerCase() === preferred.toLowerCase()) {
+            return session;
+        }
+
+        session.agentName = preferred;
+        await this.initializeSession(routeKey, route, preferred);
+        return this.sessions.get(routeKey);
+    }
+
+    private async getHeartbeatRouteAndSession(preferredAgentName?: string): Promise<{ routeKey: string; route: TelegramRoute; session?: ChatSession }> {
         // Find owner ID
         let ownerId: string | null = null;
         if (this.authorizedUsers.size > 0) {
@@ -1107,17 +1276,20 @@ export class TelegramService {
         let session = this.sessions.get(routeKey);
         if (!session) {
             session = this.createEmptySession(route);
-            session.agentName = 'core';
+            session.agentName = this.normalizePreferredAgentName(preferredAgentName) || 'CORE';
             this.sessions.set(routeKey, session);
-            await this.initializeSession(routeKey, route, 'core');
+            await this.initializeSession(routeKey, route, session.agentName);
+            session = this.sessions.get(routeKey);
+        } else {
+            session = await this.ensureSessionAgent(routeKey, route, preferredAgentName);
         }
 
         return { routeKey, route, session };
     }
 
-    private async resolveRouteForApi(chatIdOrRouteKey: string): Promise<{ routeKey: string; route: TelegramRoute; session?: ChatSession }> {
+    private async resolveRouteForApi(chatIdOrRouteKey: string, preferredAgentName?: string): Promise<{ routeKey: string; route: TelegramRoute; session?: ChatSession }> {
         if (chatIdOrRouteKey === 'HEARTBEAT_ROUTE') {
-            return await this.getHeartbeatRouteAndSession();
+            return await this.getHeartbeatRouteAndSession(preferredAgentName);
         }
 
         const direct = this.sessions.get(chatIdOrRouteKey);
@@ -1359,8 +1531,8 @@ export class TelegramService {
         return this.draftCounter;
     }
 
-    public async ask(chatId: string, question: string): Promise<string> {
-        const { routeKey, route, session } = await this.resolveRouteForApi(chatId);
+    public async ask(chatId: string, question: string, preferredAgentName?: string): Promise<string> {
+        const { routeKey, route, session } = await this.resolveRouteForApi(chatId, preferredAgentName);
         if (!session) throw new Error(`No session for route "${routeKey}"`);
 
         await this.sendMessageToRoute(route, `Question:\n${question}`);
@@ -1385,8 +1557,8 @@ export class TelegramService {
         });
     }
 
-    public async sendFiles(chatId: string, files: string[]): Promise<void> {
-        const { route, session } = await this.resolveRouteForApi(chatId);
+    public async sendFiles(chatId: string, files: string[], preferredAgentName?: string): Promise<void> {
+        const { route, session } = await this.resolveRouteForApi(chatId, preferredAgentName);
 
         for (const file of files) {
             const fullPath = path.isAbsolute(file)
@@ -1413,8 +1585,8 @@ export class TelegramService {
         }
     }
 
-    public async sendVoice(chatId: string, filePath: string): Promise<void> {
-        const { route } = await this.resolveRouteForApi(chatId);
+    public async sendVoice(chatId: string, filePath: string, preferredAgentName?: string): Promise<void> {
+        const { route } = await this.resolveRouteForApi(chatId, preferredAgentName);
 
         if (!fs.existsSync(filePath)) {
             throw new Error(`Voice file not found: ${filePath}`);
@@ -1427,12 +1599,25 @@ export class TelegramService {
         }
     }
 
-    public async sendText(chatId: string, text: string): Promise<void> {
-        const { route } = await this.resolveRouteForApi(chatId);
+    public async sendText(chatId: string, text: string, preferredAgentName?: string): Promise<void> {
+        const { route } = await this.resolveRouteForApi(chatId, preferredAgentName);
         try {
             await this.sendMessageToRoute(route, text);
         } catch (e: any) {
             throw new Error(`Failed to send text message: ${e.message}`);
+        }
+    }
+
+    public async sendAuthLink(chatId: string, text: string, url: string, label = 'Open Login', preferredAgentName?: string): Promise<void> {
+        const { route } = await this.resolveRouteForApi(chatId, preferredAgentName);
+        try {
+            await this.sendMessageToRoute(route, text, {
+                reply_markup: Markup.inlineKeyboard([
+                    [Markup.button.url(label, url)]
+                ]).reply_markup
+            });
+        } catch (e: any) {
+            throw new Error(`Failed to send auth link: ${e.message}`);
         }
     }
 

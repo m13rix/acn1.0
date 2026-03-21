@@ -1,0 +1,53 @@
+{
+  "name": "sdamgia-mcp-server",
+  "version": "1.0.3",
+  "description": "MCP server for СДАМ ГИА educational platform - search and retrieve problems, tests, and solutions",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "sdamgia-mcp-server": "dist/index.js"
+  },
+  "files": [
+    "dist/**/*",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc && chmod +x dist/index.js",
+    "prepare": "npm run build",
+    "watch": "tsc --watch",
+    "dev": "node --watch dist/index.js",
+    "inspector": "npx @modelcontextprotocol/inspector dist/index.js"
+  },
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "sdamgia",
+    "education",
+    "exam",
+    "ege",
+    "oge",
+    "russia",
+    "problems"
+  ],
+  "author": "artkortotkov <artkortotkov@gmail.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/art22017/claude.git"
+  },
+  "bugs": {
+    "url": "https://github.com/art22017/claude/issues"
+  },
+  "homepage": "https://github.com/art22017/claude#readme",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "axios": "^1.7.9",
+    "cheerio": "^1.0.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "typescript": "^5.7.2"
+  }
+}

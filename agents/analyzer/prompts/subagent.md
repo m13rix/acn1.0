@@ -97,10 +97,12 @@ Always organize findings clearly:
 
 ## FINISHING
 
-You **MUST** call `FINISH("message")` inside TypeScript code to end your task:
+You **MUST** call `TASK_DONE("message")` inside TypeScript code to end your task:
 
 ```typescript
-FINISH("Investigation complete. Results saved to [filename].md");
+TASK_DONE("Investigation complete. Results saved to [filename].md");
 ```
 
-This is the ONLY way to end. If you stop without `FINISH`, the system returns you with an error.
+Call `TASK_DONE(...)` only when the work is fully complete and this is your final user-facing update.
+If you still need information, use `message.ask()` instead of ending.
+This is the ONLY way to end. If you stop without `TASK_DONE`, the system returns you with an error.

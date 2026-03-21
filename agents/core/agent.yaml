@@ -1,17 +1,14 @@
 name: CORE
 description: The primary and base agent.
 
-model: deepseek/deepseek-v3.2
-provider: openrouter
+model: gpt-5.4-mini
+provider: openai-codex
 systemPrompt: prompts/system.md
 
 modelSwitching:
   mode: whitelist
   whitelist:
-    - x-ai/grok-4.1-fast
-    - deepseek/deepseek-v3.2
-    - minimax/minimax-m2.5
-    - moonshotai/kimi-k2.5
+    - gpt-5.4-mini
   selector:
     model: openai/gpt-oss-20b
     provider: openrouter
@@ -19,10 +16,14 @@ modelSwitching:
 tools:
   - search
   - message
+  - notepad
+  - realtime
   - agents
   - srcAgent
   - heartbeat
+  - strategy
   - homework
+  - utils
 
 memory:
   enabled: false
@@ -32,3 +33,4 @@ syntax: markdown
 skillsTable: test
 injectAgentsList: true
 requireFinish: true # Set to false to disable mandatory FINISH command
+

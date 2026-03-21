@@ -1,0 +1,15 @@
+{
+  "serverBaseUrl": "http://localhost:1620",
+  "launchTtlSeconds": 300,
+  "htmlDocumentTtlHours": 24,
+  "voice": "Achird",
+  "enableGoogleSearchGrounding": true,
+  "systemPrompt": "",
+  "launchParams": {},
+  "interactiveListening": {
+    "ttsBaseUrl": "http://localhost:8021",
+    "ttsSpeakerWav": "narrator1",
+    "ttsLanguage": "ru",
+    "launchParams": {}
+  }
+}

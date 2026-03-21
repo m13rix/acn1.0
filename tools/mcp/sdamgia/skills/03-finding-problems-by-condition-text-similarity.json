@@ -1,0 +1,10 @@
+{
+  "title": "Finding problems by condition text similarity",
+  "content": "Use the 'searchByText' method to find problems that match a specific piece of condition text using fuzzy matching. This is ideal when you have the problem wording but not its ID. Provide the 'subject' and 'condition_text'. You can adjust the 'threshold' (0.0 to 1.0) to change how strict the matching is.",
+  "examples": [
+    "Find a math problem that has this condition: 'Calculate the area of a circle with radius 5'.",
+    "Search for a biology problem similar to this: 'Describe the process of photosynthesis in plants'.",
+    "Are there any physics problems matching this description: 'A ball is thrown vertically upwards with initial velocity...'?"
+  ],
+  "scoreThreshold": 0.85
+}

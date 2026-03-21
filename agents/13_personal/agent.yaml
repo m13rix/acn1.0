@@ -18,6 +18,11 @@ modelSwitching:
 tools:
   - search
   - message
+  - notepad
+  - memory
+  - heartbeat
+  - agents
+  - utils
 
 injectAgentsList: true
 requireFinish: false

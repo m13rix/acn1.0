@@ -384,8 +384,8 @@
               Score Threshold (0-1):
             </label>
             <input type="number" class="input" id="thresholdInput" 
-                   min="0" max="1" step="0.05" value="0.8"
-                   placeholder="0.8" style="width: 100%;">
+                  min="0" max="1" step="0.05" value="0.85"
+                  placeholder="0.85" style="width: 100%;">
             <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 4px;">
               Entries with similarity ≥ threshold will be marked as MATCHED
             </div>
@@ -726,7 +726,7 @@
         return;
       }
       
-      const thresholdText = prompt('Score threshold (optional, default: 0.8, press Cancel for default):');
+      const thresholdText = prompt('Score threshold (optional, default: 0.85, press Cancel for default):');
       const scoreThreshold = thresholdText ? parseFloat(thresholdText) : undefined;
       
       if (scoreThreshold !== undefined && (isNaN(scoreThreshold) || scoreThreshold < 0 || scoreThreshold > 1)) {
@@ -785,7 +785,7 @@
       try {
         // Get threshold from input or use default
         const thresholdInput = document.getElementById('thresholdInput');
-        const minThreshold = thresholdInput ? parseFloat(thresholdInput.value) || 0.8 : 0.8;
+      const minThreshold = thresholdInput ? parseFloat(thresholdInput.value) || 0.85 : 0.85;
         
         if (isNaN(minThreshold) || minThreshold < 0 || minThreshold > 1) {
           alert('Threshold must be between 0 and 1');
@@ -830,7 +830,7 @@
       
       const totalEntries = result.totalEntries || 0;
       const matchedEntries = result.matchedEntries || 0;
-      const minThreshold = result.minThreshold || 0.8;
+      const minThreshold = result.minThreshold || 0.85;
       const tableName = result.table || getSelectedTable();
       
       let html = `

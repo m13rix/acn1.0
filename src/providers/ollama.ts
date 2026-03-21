@@ -7,6 +7,7 @@
 
 import { Ollama } from 'ollama';
 import { BaseProvider, registerProvider } from './base.js';
+import { OAuthOnlyModelSelectedViaApiProviderError } from './openai-codex/errors.js';
 import type {
     Message,
     ProviderConfig,
@@ -35,6 +36,7 @@ export class OllamaProvider extends BaseProvider {
      */
     override buildRequest(messages: Message[], config: ProviderConfig): any {
         this.validateConfig(config);
+        this.ensureSupportedModel(config.model);
         const cfg = this.withDefaults(config);
 
         return this.buildOllamaRequest(messages, cfg);
@@ -46,12 +48,14 @@ export class OllamaProvider extends BaseProvider {
         toolRequest: ProviderToolRequest
     ): any {
         this.validateConfig(config);
+        this.ensureSupportedModel(config.model);
         const cfg = this.withDefaults(config);
         return this.buildOllamaRequest(messages, cfg, toolRequest);
     }
 
     override async complete(messages: Message[], config: ProviderConfig): Promise<ProviderResponse> {
         this.validateConfig(config);
+        this.ensureSupportedModel(config.model);
         const cfg = this.withDefaults(config);
 
         const request = this.buildOllamaRequest(messages, cfg);
@@ -85,6 +89,7 @@ export class OllamaProvider extends BaseProvider {
         toolRequest: ProviderToolRequest
     ): Promise<ProviderToolResponse> {
         this.validateConfig(config);
+        this.ensureSupportedModel(config.model);
         const cfg = this.withDefaults(config);
         const request = this.buildOllamaRequest(messages, cfg, toolRequest);
 
@@ -116,6 +121,7 @@ export class OllamaProvider extends BaseProvider {
      */
     override async *streamEvents(messages: Message[], config: ProviderConfig): AsyncIterable<ProviderStreamEvent> {
         this.validateConfig(config);
+        this.ensureSupportedModel(config.model);
         const cfg = this.withDefaults(config);
 
         const request = this.buildOllamaRequest(messages, {
@@ -177,6 +183,7 @@ export class OllamaProvider extends BaseProvider {
         toolRequest: ProviderToolRequest
     ): AsyncIterable<ProviderStreamEvent> {
         this.validateConfig(config);
+        this.ensureSupportedModel(config.model);
         const cfg = this.withDefaults(config);
         const request = this.buildOllamaRequest(messages, { ...cfg, stream: true }, toolRequest);
 
@@ -187,6 +194,7 @@ export class OllamaProvider extends BaseProvider {
 
         let hasEmittedReasoningDone = false;
         let inThinking = false;
+        const toolCallState = new Map<number, { id: string; name: string; argumentsRaw: string }>();
 
         for await (const chunk of stream) {
             if (chunk.message?.thinking) {
@@ -203,14 +211,37 @@ export class OllamaProvider extends BaseProvider {
                 yield { type: 'text.delta', delta: chunk.message.content };
             }
 
-            const toolCalls = this.parseToolCalls(chunk.message?.tool_calls);
-            for (const call of toolCalls) {
-                yield {
-                    type: 'tool_call.done',
-                    toolCallId: call.id,
-                    toolName: call.name,
-                    toolCall: call,
-                };
+            // Ollama streaming chunk usually gives the entire tool call object at once when done
+            // or delta. We must handle merging them if it's delta.
+            // As of latest ollama, chunk.message.tool_calls contains an array of fully or partially populated objects.
+            const rawCalls = chunk.message?.tool_calls;
+            if (Array.isArray(rawCalls) && rawCalls.length > 0) {
+                for (const raw of rawCalls) {
+                    if (!raw || typeof raw !== 'object') continue;
+                    // Ollama might not provide 'index', so we auto-assign based on position in map or function name
+                    // Since Ollama might just yield the whole tool_calls list at the end of the stream, 
+                    // we just parse them directly.
+                    const name = raw.function?.name;
+                    if (!name) continue;
+                    // Hash the name as an index just to keep track, assuming Ollama returns them in full chunks
+                    const argsObj = raw.function?.arguments || {};
+                    // Convert back to raw string for delta logic if we want, or just yield it as a done call immediately
+                    // The simplest is to just yield them as done since Ollama currently bursts tool calls.
+                    const index = toolCallState.size;
+                    if (!toolCallState.has(index)) {
+                        toolCallState.set(index, { id: `tool_${index}`, name, argumentsRaw: '' });
+                        yield {
+                            type: 'tool_call.done',
+                            toolCallId: `tool_${index}`,
+                            toolName: name,
+                            toolCall: {
+                                id: `tool_${index}`,
+                                name,
+                                arguments: argsObj
+                            }
+                        };
+                    }
+                }
             }
 
             if (chunk.done) {
@@ -266,8 +297,10 @@ export class OllamaProvider extends BaseProvider {
                     content: m.content,
                 };
                 if (m.role === 'assistant' && m.toolCalls && m.toolCalls.length > 0) {
-                    baseMessage.tool_calls = m.toolCalls.map(call => ({
+                    baseMessage.tool_calls = m.toolCalls.map((call, index) => ({
+                        type: 'function',
                         function: {
+                            index: index, // some ollama models expect index
                             name: call.name,
                             arguments: call.arguments,
                         },
@@ -340,6 +373,12 @@ export class OllamaProvider extends BaseProvider {
             });
         }
         return out;
+    }
+
+    private ensureSupportedModel(model: string): void {
+        if (String(model || '').startsWith('openai-codex/')) {
+            throw new OAuthOnlyModelSelectedViaApiProviderError();
+        }
     }
 }
 

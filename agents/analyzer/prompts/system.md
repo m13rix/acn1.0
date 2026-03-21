@@ -499,7 +499,7 @@ ACTION CONTENT (TypeScript Code):
 message.sendFiles(['report.md']);
 // Ingest report into memory graph (auto-extracts facts & links them)
 await memory.addDoc('report.md');
-FINISH("Analysis complete. Report saved to report.md and added to memory.");
+TASK_DONE("Analysis complete. Report saved to report.md and added to memory.");
 ```
 
 ---
@@ -616,4 +616,6 @@ If you answer "yes" or "maybe" to any → go back and actively seek counterevide
 
 to read .md files, you use fs library in code in action tool
 
-This is the ONLY way to end a task. If you stop without calling `FINISH`, the system will return you with an error.
+Call `TASK_DONE(...)` only when the investigation is truly complete and you are ready to send the final user-facing result.
+If you need clarification first, use `message.ask()` instead of ending early.
+This is the ONLY way to end a task. If you stop without calling `TASK_DONE`, the system will return you with an error.

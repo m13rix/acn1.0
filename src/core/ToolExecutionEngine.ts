@@ -11,6 +11,12 @@ import type { ProviderToolCall } from '../types/index.js';
 import { actionContext } from './ActionContext.js';
 import { agentContext } from './AgentContext.js';
 import { ActionAutoFixEngine } from './ActionAutoFixEngine.js';
+import {
+  COMPLETION_SIGNAL_REGEX,
+  isCompletionToolName,
+  LEGACY_COMPLETION_FUNCTION,
+  PRIMARY_COMPLETION_FUNCTION,
+} from './completion.js';
 import type { Session } from './Session.js';
 
 export interface ToolExecutionCallbacks {
@@ -26,7 +32,12 @@ export interface ToolExecutionResult {
   finishParseError?: string;
 }
 
-const FINISH_REGEX = /__ACN_FINISH_START__(.*?)__ACN_FINISH_END__/s;
+const CONTENT_ARG_KEYS = ['content', 'text', 'body', 'data', 'value'] as const;
+const FILE_ARG_KEYS = ['filename', 'fileName', 'path', 'filepath', 'target', 'file'] as const;
+const FINISH_ARG_KEYS = ['message', ...CONTENT_ARG_KEYS] as const;
+const SUPPORTED_TOOLS = `action, cli, file, ${PRIMARY_COMPLETION_FUNCTION}`;
+
+type ToolArguments = Record<string, unknown>;
 
 export class ToolExecutionEngine {
   constructor(
@@ -134,6 +145,25 @@ export class ToolExecutionEngine {
       };
     }
 
+    if (this.isMissingFileError(result.error)) {
+      const recoveredContent = this.buildRecoveryContentFromEdits(edits);
+      if (recoveredContent !== null) {
+        const recovered = await this.writeFileToSandbox(filename, recoveredContent);
+        if (!recovered.observation.startsWith('Error')) {
+          return {
+            observation: `${result.error || 'File not found.'}\nRecovered by creating "${filename}" from edit payload.`,
+          };
+        }
+        return recovered;
+      }
+
+      const base = `${result.output}\n${result.error || ''}`.trim();
+      return {
+        observation: `${base}\nRecovery hint: for missing files, use one edit block or ensure all SEARCH blocks are empty so content can be created automatically.`,
+        filename: result.filename,
+      };
+    }
+
     return {
       observation: `${result.output}\n${result.error || ''}`.trim(),
       filename: result.filename,
@@ -144,27 +174,40 @@ export class ToolExecutionEngine {
    * Execute provider-native tool call (`action`, `cli`, `file`).
    */
   async executeProviderToolCall(toolCall: ProviderToolCall): Promise<ToolExecutionResult> {
-    const args = toolCall.arguments || {};
+    const toolName = this.normalizeToolName(toolCall.name);
+    const args = this.toRecord(toolCall.arguments);
 
-    if (toolCall.name === 'action') {
-      const content = typeof args['content'] === 'string' ? args['content'] : '';
+    if (isCompletionToolName(toolName)) {
+      const finishMessage = this.extractFirstString(args, FINISH_ARG_KEYS) || this.extractEmbeddedFinishMessage(args);
+      if (!finishMessage.trim()) {
+        return { observation: `Error: ${PRIMARY_COMPLETION_FUNCTION} requires a non-empty "message" argument.` };
+      }
+      return {
+        observation: `${PRIMARY_COMPLETION_FUNCTION} accepted.`,
+        finishMessage: finishMessage.trim(),
+      };
+    }
+
+    if (toolName === 'action') {
+      const content = this.extractFirstString(args, CONTENT_ARG_KEYS);
       if (!content.trim()) {
         return { observation: 'Error: action requires a non-empty "content" argument.' };
       }
       return this.executeAction(content);
     }
 
-    if (toolCall.name === 'cli') {
-      const content = typeof args['content'] === 'string' ? args['content'] : '';
+    if (toolName === 'cli') {
+      const content = this.extractFirstString(args, CONTENT_ARG_KEYS);
       if (!content.trim()) {
         return { observation: 'Error: cli requires a non-empty "content" argument.' };
       }
       return this.executeCli(content);
     }
 
-    if (toolCall.name === 'file') {
-      const filename = typeof args['filename'] === 'string' ? args['filename'] : '';
-      const content = typeof args['content'] === 'string' ? args['content'] : '';
+    if (toolName === 'file') {
+      const payload = this.extractFilePayload(args);
+      const filename = this.normalizeFilename(payload.filename);
+      const content = payload.content;
 
       if (!filename.trim()) {
         return { observation: 'Error: file requires a non-empty "filename" argument.' };
@@ -180,19 +223,161 @@ export class ToolExecutionEngine {
     }
 
     return {
-      observation: `Error: Unsupported tool "${toolCall.name}". Supported tools: action, cli, file.`,
+      observation: `Error: Unsupported tool "${toolCall.name}". Supported tools: ${SUPPORTED_TOOLS}. Legacy alias: ${LEGACY_COMPLETION_FUNCTION}.`,
     };
   }
 
+  private isMissingFileError(error?: string): boolean {
+    if (!error) return false;
+    return /file not found/i.test(error) || /enoent/i.test(error);
+  }
+
+  private buildRecoveryContentFromEdits(edits: Array<{ search: string; replace: string }>): string | null {
+    if (edits.length === 0) return null;
+    if (edits.length === 1) {
+      return edits[0]?.replace ?? '';
+    }
+    const allSearchEmpty = edits.every(edit => !(edit.search || '').trim());
+    if (!allSearchEmpty) return null;
+    return edits.map(edit => edit.replace ?? '').join('\n');
+  }
+
+  private normalizeToolName(name: unknown): string {
+    return String(name ?? '').trim().toLowerCase();
+  }
+
+  private toRecord(value: unknown): ToolArguments {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return {};
+    }
+    return value as ToolArguments;
+  }
+
+  private extractFirstString(args: ToolArguments, keys: readonly string[]): string {
+    for (const key of keys) {
+      if (!(key in args)) continue;
+      const value = args[key];
+      const text = this.coerceToString(value);
+      if (text.trim()) return text;
+    }
+    return '';
+  }
+
+  private coerceToString(value: unknown): string {
+    if (typeof value === 'string') return value;
+    if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+    return '';
+  }
+
+  private extractEmbeddedObject(candidate: unknown): ToolArguments | null {
+    if (!candidate) return null;
+    if (typeof candidate === 'object' && !Array.isArray(candidate)) {
+      return candidate as ToolArguments;
+    }
+    if (typeof candidate !== 'string') return null;
+
+    let text = candidate.trim();
+    for (let depth = 0; depth < 3; depth++) {
+      if (!text) return null;
+      try {
+        const parsed = JSON.parse(text);
+        if (!parsed) return null;
+        if (typeof parsed === 'string') {
+          text = parsed.trim();
+          continue;
+        }
+        if (typeof parsed === 'object' && !Array.isArray(parsed)) {
+          return parsed as ToolArguments;
+        }
+        return null;
+      } catch {
+        return null;
+      }
+    }
+
+    return null;
+  }
+
+  private extractFilePayload(args: ToolArguments): { filename: string; content: string } {
+    let filename = this.extractFirstString(args, FILE_ARG_KEYS);
+    let content = this.extractFirstString(args, CONTENT_ARG_KEYS);
+    const directContentRaw = this.extractFirstRaw(args, CONTENT_ARG_KEYS);
+    const embeddedFromContent = this.extractEmbeddedObject(directContentRaw);
+    if (embeddedFromContent) {
+      if (!filename.trim()) {
+        filename = this.extractFirstString(embeddedFromContent, FILE_ARG_KEYS);
+      }
+      const embeddedContent = this.extractFirstString(embeddedFromContent, CONTENT_ARG_KEYS);
+      if (embeddedContent.trim()) {
+        content = embeddedContent;
+      }
+    }
+
+    const candidates: unknown[] = [];
+    for (const key of CONTENT_ARG_KEYS) {
+      if (key in args) candidates.push(args[key]);
+    }
+    for (const value of Object.values(args)) {
+      candidates.push(value);
+    }
+
+    for (const candidate of candidates) {
+      const embedded = this.extractEmbeddedObject(candidate);
+      if (!embedded) continue;
+      if (!filename.trim()) {
+        filename = this.extractFirstString(embedded, FILE_ARG_KEYS);
+      }
+      if (!content.trim()) {
+        content = this.extractFirstString(embedded, CONTENT_ARG_KEYS);
+      }
+      if (filename.trim() && content.trim()) break;
+    }
+
+    return { filename, content };
+  }
+
+  private extractFirstRaw(args: ToolArguments, keys: readonly string[]): unknown {
+    for (const key of keys) {
+      if (key in args) return args[key];
+    }
+    return undefined;
+  }
+
+  private extractEmbeddedFinishMessage(args: ToolArguments): string {
+    for (const value of Object.values(args)) {
+      const embedded = this.extractEmbeddedObject(value);
+      if (!embedded) continue;
+      const finish = this.extractFirstString(embedded, FINISH_ARG_KEYS);
+      if (finish.trim()) return finish;
+    }
+    return '';
+  }
+
+  private normalizeFilename(rawFilename: string): string {
+    let filename = rawFilename.trim();
+    filename = filename.replace(/^[`'"]+|[`'"]+$/g, '').trim();
+    filename = filename.replace(/\\/g, '/');
+
+    // Heal typo pattern like ".documentation/file.md" -> "./documentation/file.md"
+    const typoMatch = filename.match(/^\.([A-Za-z0-9_-][^/]*)\/(.+)$/);
+    if (typoMatch) {
+      const dir = typoMatch[1];
+      const rest = typoMatch[2];
+      filename = `./${dir}/${rest}`;
+    }
+
+    return filename;
+  }
+
   private parseFinishSignal(observation: string): { finishMessage?: string; finishParseError?: string } {
-    const finishMatch = observation.match(FINISH_REGEX);
+    const finishMatch = observation.match(COMPLETION_SIGNAL_REGEX);
     if (!finishMatch) {
       return {};
     }
 
     const raw = finishMatch[1];
     if (!raw) {
-      return { finishParseError: 'FINISH signal was found but payload is empty.' };
+      return { finishParseError: `${PRIMARY_COMPLETION_FUNCTION} signal was found but payload is empty.` };
     }
 
     try {
@@ -200,9 +385,9 @@ export class ToolExecutionEngine {
       if (typeof finishMessage === 'string') {
         return { finishMessage };
       }
-      return { finishParseError: 'FINISH payload must be a JSON string.' };
+      return { finishParseError: `${PRIMARY_COMPLETION_FUNCTION} payload must be a JSON string.` };
     } catch (error: any) {
-      return { finishParseError: `Failed to parse FINISH payload: ${error.message}` };
+      return { finishParseError: `Failed to parse ${PRIMARY_COMPLETION_FUNCTION} payload: ${error.message}` };
     }
   }
 }

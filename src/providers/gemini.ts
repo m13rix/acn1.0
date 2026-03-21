@@ -6,6 +6,7 @@
 
 import { GoogleGenAI } from '@google/genai';
 import { BaseProvider, registerProvider } from './base.js';
+import { OAuthOnlyModelSelectedViaApiProviderError } from './openai-codex/errors.js';
 import type { Message, ProviderConfig, ProviderResponse, ProviderStreamChunk, ProviderStreamEvent } from '../types/index.js';
 // @ts-ignore - mime-types doesn't have perfect TypeScript types
 import { lookup } from 'mime-types';
@@ -36,6 +37,7 @@ export class GeminiProvider extends BaseProvider {
    */
   override buildRequest(messages: Message[], config: ProviderConfig): any {
     this.validateConfig(config);
+    this.ensureSupportedModel(config.model);
     const cfg = this.withDefaults(config);
 
     // Extract system message if present
@@ -52,6 +54,7 @@ export class GeminiProvider extends BaseProvider {
 
   override async complete(messages: Message[], config: ProviderConfig): Promise<ProviderResponse> {
     this.validateConfig(config);
+    this.ensureSupportedModel(config.model);
     const cfg = this.withDefaults(config);
 
     // Extract system message if present
@@ -96,6 +99,7 @@ export class GeminiProvider extends BaseProvider {
    */
   override async *streamEvents(messages: Message[], config: ProviderConfig): AsyncIterable<ProviderStreamEvent> {
     this.validateConfig(config);
+    this.ensureSupportedModel(config.model);
     const cfg = this.withDefaults(config);
 
     const systemMessage = messages.find(m => m.role === 'system');
@@ -254,6 +258,12 @@ export class GeminiProvider extends BaseProvider {
     };
 
     return req;
+  }
+
+  private ensureSupportedModel(model: string): void {
+    if (String(model || '').startsWith('openai-codex/')) {
+      throw new OAuthOnlyModelSelectedViaApiProviderError();
+    }
   }
 
   /**

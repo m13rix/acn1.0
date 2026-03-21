@@ -16,8 +16,10 @@ modelSwitching:
 tools:
   - search
   - message
+  - utils
 
 loop: message-passthrough
 syntax: markdown
 skillsTable: pptx_skills
 injectAgentsList: false
+

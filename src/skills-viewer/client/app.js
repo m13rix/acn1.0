@@ -418,10 +418,10 @@ const pages = {
                       rows="4"></textarea>
           </div>
           <div class="input-group" style="margin-top: 16px;">
-            <label class="input-label">Score Threshold (optional, default: 0.8)</label>
+            <label class="input-label">Score Threshold (optional, default: 0.85)</label>
             <input type="number" class="input" id="entry-threshold-input" 
-                   min="0" max="1" step="0.05" value="0.8"
-                   placeholder="0.8">
+                   min="0" max="1" step="0.05" value="0.85"
+                   placeholder="0.85">
             <p style="font-size: 0.75rem; color: var(--color-text-muted); margin-top: 4px;">
               Not recommended to change. Minimum similarity score (0-1) to retrieve this entry.
             </p>
@@ -595,11 +595,11 @@ const pages = {
                           rows="4">${entry.examples ? entry.examples.join('\n') : ''}</textarea>
               </div>
               <div class="input-group" style="margin-top: 16px;">
-                <label class="input-label">Score Threshold (optional, default: 0.8)</label>
+                <label class="input-label">Score Threshold (optional, default: 0.85)</label>
                 <input type="number" class="input" id="entry-threshold-input" 
                        min="0" max="1" step="0.05" 
-                       value="${entry.scoreThreshold !== undefined ? entry.scoreThreshold : '0.8'}"
-                       placeholder="0.8">
+                       value="${entry.scoreThreshold !== undefined ? entry.scoreThreshold : '0.85'}"
+                       placeholder="0.85">
               </div>
             `,
             submitText: 'Save Changes',

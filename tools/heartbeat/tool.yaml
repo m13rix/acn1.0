@@ -1,12 +1,13 @@
 name: heartbeat
 description: |
-  Proactive automation and sensors.
+  Persistent event bindings and structured sensors.
   API:
-  - heartbeat.tasks.create(name, { trigger, condition?, action, maxRepeats? })
-  - heartbeat.tasks.list() -> active/inactive
-  - heartbeat.tasks.edit(name, options)
-  - heartbeat.tasks.setActive(name, boolean)
-  - heartbeat.tasks.delete(name)
-  - heartbeat.sensors.list() -> capabilities/docs
-  - heartbeat.sensors.ask(name, query) -> Dynamic llm-based state check
-  - heartbeat.sensors.create(prompt) -> Scaffolds new sensor
+  - heartbeat.bind(eventRef, handler, options?) -> BindingRecord
+  - heartbeat.bindings.list(query?) -> BindingRecord[]
+  - heartbeat.bindings.get(id, query?) -> BindingRecord | null
+  - heartbeat.bindings.unbind(id) -> { ok: true }
+  - heartbeat.bindings.rebind(id, patch) -> BindingRecord
+  - heartbeat.sensors.list() -> SensorDescriptor[]
+  - heartbeat.sensors.<sensor>.events.<event>(...args) -> HeartbeatEventRef
+  - heartbeat.sensors.<sensor>.ask(prompt, schema, imagePath?) -> structured JSON
+  - heartbeat.sensors.create(prompt) -> scaffold a new V2 sensor

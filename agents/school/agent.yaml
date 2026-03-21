@@ -1,0 +1,36 @@
+name: school
+description: Personal school orchestrator and adaptive tutor for Maxim. Coordinates school prep, risks, and low-friction study support without owning the homework pipeline.
+
+model: gpt-5.4-mini
+provider: openai-codex
+systemPrompt: prompts/system.md
+
+modelSwitching:
+  mode: whitelist
+  whitelist:
+    - gpt-5.4-mini
+  selector:
+    model: openai/gpt-oss-20b
+    provider: openrouter
+
+tools:
+  - search
+  - message
+  - notepad
+  - realtime
+  - agents
+  - heartbeat
+  - homework
+  - skills
+  - srcAgent
+  - sdamgia
+  - utils
+
+memory:
+  enabled: false
+
+loop: provider-tools
+syntax: markdown
+skillsTable: school
+injectAgentsList: true
+requireFinish: true

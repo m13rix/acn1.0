@@ -6,17 +6,17 @@
 
 import { readdir, readFile, stat } from 'fs/promises';
 import { existsSync } from 'fs';
-import { join, dirname } from 'path';
+import { join, dirname, relative } from 'path';
 import { parse as parseYaml } from 'yaml';
 import { fileURLToPath } from 'url';
-import type { ToolConfig, LoadedTool } from '../types/index.js';
+import type { ToolConfig, LoadedTool, ToolSkillEntry } from '../types/index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // Use PROJECT_ROOT from environment if available (for sandbox context)
-// Fallback to __dirname calculation, then to hardcoded path
+// Fallback to __dirname calculation, then to cwd
 const calculatedRoot = join(__dirname, '..', '..');
 const PROJECT_ROOT = process.env['PROJECT_ROOT']
-  || (existsSync(join(calculatedRoot, 'tools')) ? calculatedRoot : 'G:\\agent0\\acn1.0');
+  || (existsSync(join(calculatedRoot, 'tools')) ? calculatedRoot : process.cwd());
 const DEFAULT_TOOLS_DIR = join(PROJECT_ROOT, 'tools');
 
 export class ToolLoader {
@@ -93,14 +93,13 @@ export class ToolLoader {
         const fullPath = join(dir, entry.name);
 
         if (entry.isDirectory()) {
-          // Check if this directory contains a tool config
           const toolConfig = await this.tryLoadToolConfig(fullPath);
           if (toolConfig) {
             tools.push(toolConfig);
-          } else {
-            // Recurse into subdirectory
-            await this.scanDirectory(fullPath, tools);
           }
+
+          // Always recurse so nested tool trees remain discoverable.
+          await this.scanDirectory(fullPath, tools);
         }
       }
     } catch (error) {
@@ -138,11 +137,13 @@ export class ToolLoader {
 
           // Resolve the absolute path to the module
           const absolutePath = join(dir, config.module);
+          const skillEntries = await this.loadToolSkillEntries(config, dir);
 
           return {
             config,
             directory: dir,
             absolutePath,
+            skillEntries,
           };
         }
       } catch {
@@ -164,6 +165,97 @@ export class ToolLoader {
     }
   }
 
+  private async loadToolSkillEntries(config: ToolConfig, toolDir: string): Promise<ToolSkillEntry[]> {
+    if (!config.skills?.enabled) {
+      return [];
+    }
+
+    const skillsDir = join(toolDir, config.skills.directory || 'skills');
+    const entries: ToolSkillEntry[] = [];
+    await this.scanSkillDirectory(config.name, skillsDir, entries);
+    return entries;
+  }
+
+  private async scanSkillDirectory(toolName: string, dir: string, entries: ToolSkillEntry[]): Promise<void> {
+    try {
+      const dirEntries = await readdir(dir, { withFileTypes: true });
+      for (const entry of dirEntries) {
+        const fullPath = join(dir, entry.name);
+        if (entry.isDirectory()) {
+          await this.scanSkillDirectory(toolName, fullPath, entries);
+          continue;
+        }
+        if (!entry.isFile() || !/\.(json|ya?ml)$/i.test(entry.name)) {
+          continue;
+        }
+
+        const fileStats = await stat(fullPath);
+        const raw = await readFile(fullPath, 'utf8');
+        const parsed = this.parseConfig(raw, entry.name);
+        const normalizedEntries = this.normalizeSkillEntries(toolName, fullPath, parsed, fileStats.mtimeMs);
+        entries.push(...normalizedEntries);
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        console.warn(`Warning: Could not load tool skills from ${dir}:`, error);
+      }
+    }
+  }
+
+  private normalizeSkillEntries(
+    toolName: string,
+    filePath: string,
+    value: unknown,
+    updatedAt: number
+  ): ToolSkillEntry[] {
+    const payloads = Array.isArray(value)
+      ? value
+      : value && typeof value === 'object' && Array.isArray((value as { entries?: unknown[] }).entries)
+        ? (value as { entries: unknown[] }).entries
+        : [value];
+
+    const relativePath = relative(this.toolsDir, filePath).replace(/\\/g, '/');
+    const result: ToolSkillEntry[] = [];
+
+    for (let index = 0; index < payloads.length; index += 1) {
+      const payload = payloads[index];
+      if (!payload || typeof payload !== 'object') {
+        continue;
+      }
+      const content = typeof (payload as { content?: unknown }).content === 'string'
+        ? (payload as { content: string }).content.trim()
+        : '';
+      const examples = Array.isArray((payload as { examples?: unknown[] }).examples)
+        ? (payload as { examples: unknown[] }).examples
+          .map((example) => typeof example === 'string' ? example.trim() : '')
+          .filter(Boolean)
+        : [];
+      if (!content || examples.length === 0) {
+        continue;
+      }
+
+      const title = typeof (payload as { title?: unknown }).title === 'string'
+        ? (payload as { title: string }).title.trim()
+        : undefined;
+      const scoreThreshold = typeof (payload as { scoreThreshold?: unknown }).scoreThreshold === 'number'
+        ? (payload as { scoreThreshold: number }).scoreThreshold
+        : undefined;
+
+      result.push({
+        id: `${toolName}:${relativePath}:${index}`,
+        toolName,
+        title,
+        content,
+        examples,
+        scoreThreshold,
+        updatedAt,
+        filePath,
+      });
+    }
+
+    return result;
+  }
+
   /**
    * Get tool documentation for prompt building
    */
@@ -173,7 +265,10 @@ export class ToolLoader {
     }
 
     const toolDocs = tools.map(tool => {
-      return `### ${tool.config.name}\n\n${tool.config.description}`;
+      const embeddedSkillsNote = tool.skillEntries && tool.skillEntries.length > 0
+        ? `\n\nThis tool also ships embedded retrieval skills for detailed usage guidance.`
+        : '';
+      return `### ${tool.config.name}\n\n${tool.config.description}${embeddedSkillsNote}`;
     }).join('\n\n');
 
     return `## Tools.

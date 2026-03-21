@@ -1,0 +1,28 @@
+name: browser-operator
+description: Browser-native agent for reliable web navigation, data extraction, form interaction, and step-by-step task execution inside a real browser session.
+
+model: minimax/minimax-m2.5
+provider: openrouter
+systemPrompt: prompts/system.md
+
+modelSwitching:
+  mode: whitelist
+  whitelist:
+    - minimax/minimax-m2.5
+    - moonshotai/kimi-k2.5
+    - x-ai/grok-4.1-fast
+    - deepseek/deepseek-v3.2
+  selector:
+    model: openai/gpt-oss-20b
+    provider: openrouter
+
+tools: []
+
+memory:
+  enabled: false
+
+loop: provider-tools
+syntax: markdown
+sandbox: browser
+injectAgentsList: false
+requireFinish: true

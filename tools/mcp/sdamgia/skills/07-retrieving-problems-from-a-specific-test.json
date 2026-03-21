@@ -1,0 +1,10 @@
+{
+  "title": "Retrieving problems from a specific test",
+  "content": "Use the 'getTest' method to fetch all problem IDs associated with a specific, curated test or exam variant. Specify the 'subject' and the 'test_id'. This returns the problems in their original test order, which is useful for mock exam simulations.",
+  "examples": [
+    "Get all problem IDs for EGE math test variant 5.",
+    "What are the problems in physics practice exam 123?",
+    "List all questions included in the 2023 chemistry mock test."
+  ],
+  "scoreThreshold": 0.8
+}

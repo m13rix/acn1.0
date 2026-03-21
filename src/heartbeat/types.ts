@@ -1,84 +1,87 @@
-/**
- * Core Types for ACN Heartbeat System
- */
+import type { AgentMemoryConfig } from '../types/index.js';
+import type { JsonSchema } from '../utils/structuredLlm.js';
+import type { ZodTypeAny } from 'zod';
 
-export interface HeartbeatTask {
-    id: string;
-    /** Human readable name for the task */
-    name: string;
-
-    /** 
-     * The trigger event signature.
-     * e.g. "clock:every:10m" or "telegram:batch:5"
-     * Matches what sensors emit.
-     */
-    trigger: string;
-
-    /**
-     * Optional condition prompt for Micro-LLM.
-     * If omitted, Pulse logic treats it as "ALWAYS TRUE" 
-     * but still performs variable extraction from context.
-     */
-    condition?: string;
-
-    /**
-     * The instruction prompt for the agent.
-     * Can contain {{variables}} extracted by Pulse.
-     */
-    action: string;
-
-    active: boolean;
-
-    /**
-     * Maximum number of times this task can fire.
-     * -1 = infinite.
-     * > 0 = reduces by 1 on each fire. 
-     * When reaches 0, task is DELETED.
-     */
-    maxRepeats?: number;
-    remainingRepeats?: number;
-
-    /** The agent that created this task */
-    agentName: string;
-
-    /** The tools available to the agent when task was created */
-    tools: string[];
+export interface HeartbeatEventRef {
+  sensor: string;
+  event: string;
+  args: unknown[];
 }
 
-export interface SensorConfig {
-    name: string;
-    description: string;
-    minillm: {
-        model: string;
-        provider: string;
-    };
-    [key: string]: any; // Allow other config props
+export interface HeartbeatSensorEvent {
+  sensor: string;
+  event: string;
+  args: unknown[];
+  payload?: unknown;
+  occurredAt: string;
 }
 
-export interface PulseResult {
-    success: boolean;
-    variables?: Record<string, string>;
-    error?: string;
+export interface HeartbeatBindingRecord {
+  id: string;
+  eventRef: HeartbeatEventRef;
+  handlerSource: string;
+  ownerAgent: string;
+  toolNames: string[];
+  skillsTable?: string;
+  memoryConfig?: AgentMemoryConfig;
+  metadata?: Record<string, unknown>;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface HeartbeatBindingOptions {
+  id?: string;
+  enabled?: boolean;
+  metadata?: Record<string, unknown>;
+}
+
+export interface HeartbeatBindingPatch {
+  eventRef?: HeartbeatEventRef;
+  handler?: Function;
+  handlerSource?: string;
+  metadata?: Record<string, unknown>;
+  enabled?: boolean;
+}
+
+export interface HeartbeatBindingQuery {
+  ids?: string[];
+  sensor?: string;
+  event?: string;
+  ownerAgent?: string;
+  includeCode?: boolean;
+  fields?: Array<keyof HeartbeatBindingRecord>;
+}
+
+export interface HeartbeatSensorEventDescriptor {
+  name: string;
+  description: string;
+  argsSchema?: JsonSchema;
+  payloadSchema?: JsonSchema;
+}
+
+export interface HeartbeatSensorDescriptor {
+  name: string;
+  description: string;
+  events: HeartbeatSensorEventDescriptor[];
+}
+
+export interface SensorAskInput {
+  prompt: string;
+  schema: ZodTypeAny | JsonSchema;
+  imagePath?: string;
 }
 
 export interface Sensor {
-    /** Initialize sensor and start listening/polling */
-    start(emit: (event: string, payload?: any) => void): Promise<void>;
+  start(emit: (event: Omit<HeartbeatSensorEvent, 'sensor'>) => void): Promise<void>;
+  stop(): Promise<void>;
+  getContext?(): Promise<string>;
+  ask?(input: SensorAskInput): Promise<unknown>;
+}
 
-    /** Stop sensor and cleanup resources */
-    stop(): Promise<void>;
-
-    /** Get current context for Micro-LLM (e.g. valid variables, recent logs) */
-    getContext(): Promise<string>;
-
-    /** 
-     * Called after a task was successfully executed by an agent.
-     * Useful for clearing buffers (Telegram) or resetting states.
-     */
-    onTaskExecuted?(taskId: string): Promise<void>;
-
-    /**
-     * Direct query interface for Agent (RAG, search, etc)
-     */
-    ask?(query: string): Promise<string>;
+export interface SensorConfig {
+  name: string;
+  description: string;
+  events: HeartbeatSensorEventDescriptor[];
+  [key: string]: unknown;
 }

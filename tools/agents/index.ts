@@ -9,6 +9,7 @@ import * as fs from 'fs';
 import { join } from 'path';
 
 import { runAgent, listAgents, loadAgent } from '../../src/core/AgentRunner.js';
+import { runInSandboxCallQueue } from '../../src/core/AgentCallQueue.js';
 import {
     getAgentDepth,
     getAgentSandbox,
@@ -20,6 +21,7 @@ import { getGlobalDisplay } from '../../src/core/GlobalDisplay.js';
 import type { LoadedAgent } from '../../src/types/index.js';
 
 const SUBAGENT_SCOPE_SEPARATOR = '::';
+const AGENT_CALL_QUEUE_NOTICE = 'Parallel agents.call detected; call was queued and executed sequentially.';
 
 function normaliseModelId(model: string): string {
     return String(model || '').trim().toLowerCase();
@@ -73,6 +75,14 @@ function getSafeFallbackModel(agent: LoadedAgent): string {
     }
 
     return agent.config.model;
+}
+
+function summarizeAgentResult(result: string): string {
+    const text = String(result || '').trim().replace(/\s+/g, ' ');
+    if (!text) {
+        return '(empty response)';
+    }
+    return text.length > 160 ? `${text.slice(0, 160)}...` : text;
 }
 /**
  * Resolve a model name or description to a valid model ID using the registry.
@@ -136,6 +146,7 @@ async function resolveModel(modelNameOrDescription: string, callingAgent: Loaded
 import { sendRequest } from '../srcAgent/index.js';
 import { LocalSandbox } from '../../src/sandbox/LocalSandbox.js';
 import { selectModel, SelectorConfig } from '../../src/services/model-selection/ModelSelector.js';
+import { normalizeAgentRequest } from './request.js';
 
 /**
  * Get the calling agent's LoadedAgent — works across process boundaries.
@@ -173,6 +184,50 @@ interface SubAgentConfig {
 
 const SUBAGENTS_FILE = '.acn-subagents.json';
 let subAgentsCache: Map<string, SubAgentConfig> | null = null;
+
+async function resolveActiveSandbox(): Promise<LocalSandbox | undefined> {
+    let sandbox = getAgentSandbox();
+
+    if (!sandbox && process.env.SANDBOX_DIR) {
+        sandbox = new LocalSandbox({ existingPath: process.env.SANDBOX_DIR });
+        await sandbox.initialize([], undefined);
+    }
+
+    return sandbox as LocalSandbox | undefined;
+}
+
+async function runNamedAgentInCurrentSandbox(options: {
+    agent: string | LoadedAgent;
+    request: string;
+    parentDepth: number;
+    stream: boolean;
+    extraSystemPrompt?: string;
+    modelOverride?: string;
+    systemPromptOverride?: string;
+    isSubagent?: boolean;
+    queueNotice?: string;
+}): Promise<string> {
+    const sandbox = await resolveActiveSandbox();
+    if (!sandbox) {
+        const label = typeof options.agent === 'string' ? options.agent : options.agent.config.name;
+        return `Error: No sandbox available. Cannot call agent "${label}" outside of an active session.`;
+    }
+
+    const sandboxKey = sandbox.directory;
+    const queued = await runInSandboxCallQueue(sandboxKey, async () => runAgent({
+        agent: options.agent,
+        message: options.request,
+        sandbox,
+        parentDepth: options.parentDepth,
+        extraSystemPrompt: options.extraSystemPrompt,
+        stream: options.stream,
+        modelOverride: options.modelOverride,
+        systemPromptOverride: options.systemPromptOverride,
+        isSubagent: options.isSubagent,
+    }));
+
+    return queued.waited ? `${options.queueNotice || AGENT_CALL_QUEUE_NOTICE}\n\n${queued.value}` : queued.value;
+}
 
 /**
  * Get the path to the subagents storage file (in sandbox dir)
@@ -333,28 +388,11 @@ export async function newAgent(prompt: string): Promise<string> {
  * @param request - Message to send to the agent
  * @returns Agent's response
  */
-export async function call(name: string, request: string): Promise<string> {
+export async function call(name: string, request: unknown): Promise<string> {
     const parentDepth = getAgentDepth(); // Will be 0 in child process
     const stream = isStreamingEnabled();
     const currentAgent = await getCallingAgent();
-    let sandbox = getAgentSandbox();
-
-    // If no sandbox in context (running inside child process), try to attach 
-    // to the sandbox directory from environment variable
-    if (!sandbox && process.env.SANDBOX_DIR) {
-        // Hydrate sandbox from environment (parent already created it)
-        sandbox = new LocalSandbox({ existingPath: process.env.SANDBOX_DIR });
-
-        // Mark it as initialized since it's an existing attached sandbox
-        // We need to call initialize() to set the flag true, but with empty tools
-        // since we are just using it to execute, not to install new tools
-        // (Shared sandbox already has tools installed)
-        await sandbox.initialize([], undefined);
-    }
-
-    if (!sandbox) {
-        return `Error: No sandbox available. Cannot call agent "${name}" outside of an active session.`;
-    }
+    const normalizedRequest = normalizeAgentRequest(request, 'call');
 
     try {
         const currentSubAgents = loadSubAgents();
@@ -411,31 +449,64 @@ export async function call(name: string, request: string): Promise<string> {
                 saveSubAgents(currentSubAgents);
             }
 
-            return await runAgent({
+            const result = await runNamedAgentInCurrentSandbox({
                 agent: baseAgent,
-                message: request,
-                sandbox,
+                request: normalizedRequest,
                 parentDepth,
-                extraSystemPrompt: subConfig.systemPrompt,
                 stream,
+                extraSystemPrompt: subConfig.systemPrompt,
                 modelOverride,
                 systemPromptOverride: subConfig.baseSystemPrompt,
                 isSubagent: true,
             });
+            console.error(`[agents] call("${name}") completed: ${summarizeAgentResult(result)}`);
+            return result;
         }
 
-        return await runAgent({
+        const result = await runNamedAgentInCurrentSandbox({
             agent: name,
-            message: request,
-            sandbox,
+            request: normalizedRequest,
             parentDepth,
             stream,
             isSubagent: true,
         });
+        console.error(`[agents] call("${name}") completed: ${summarizeAgentResult(result)}`);
+        return result;
 
     } catch (error) {
         const errorMsg = error instanceof Error ? error.message : 'Unknown error';
         return `Error calling agent "${name}": ${errorMsg}`;
+    }
+}
+
+/**
+ * Call the current agent again using the same execution pipeline as agents.call().
+ * Falls back to ACN_AGENT_NAME when running from heartbeat/background action code.
+ */
+export async function callSelf(request: unknown): Promise<string> {
+    const currentAgent = await getCallingAgent();
+    const selfName = currentAgent?.config.name || (process.env.ACN_AGENT_NAME || '').trim();
+    const normalizedRequest = normalizeAgentRequest(request, 'callSelf');
+
+    if (!selfName) {
+        return 'Error: Unable to resolve the current agent for agents.callSelf().';
+    }
+
+    try {
+        console.error(`[agents] callSelf invoked for "${selfName}" from heartbeat/background context.`);
+        const result = await runNamedAgentInCurrentSandbox({
+            agent: currentAgent || selfName,
+            request: normalizedRequest,
+            parentDepth: getAgentDepth(),
+            stream: isStreamingEnabled(),
+            isSubagent: false,
+            queueNotice: 'Parallel agents.callSelf detected; call was queued and executed sequentially.',
+        });
+        console.error(`[agents] callSelf completed for "${selfName}": ${summarizeAgentResult(result)}`);
+        return result;
+    } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+        return `Error calling self agent "${selfName}": ${errorMsg}`;
     }
 }
 

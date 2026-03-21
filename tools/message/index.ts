@@ -101,6 +101,7 @@ export async function sendVoice(text: string, voiceName: string = 'Orus'): Promi
   // Determine Chat ID (Try API env first, then owner file)
   const chatId = process.env.ACN_CHAT_ID || getOwner();
   const apiUrl = process.env.ACN_API_URL;
+  const agentName = process.env.ACN_AGENT_NAME;
 
   console.log(`[Message-Debug] Chat ID: ${chatId} (Env: ${process.env.ACN_CHAT_ID}, Owner: ${getOwner()})`);
   console.log(`[Message-Debug] API URL: ${apiUrl}`);
@@ -174,7 +175,7 @@ export async function sendVoice(text: string, voiceName: string = 'Orus'): Promi
         const apiResponse = await fetch(`${apiUrl}/api/sendVoice`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ chatId, file: oggPath })
+          body: JSON.stringify({ chatId, file: oggPath, agentName })
         });
 
         if (!apiResponse.ok) {
@@ -215,6 +216,7 @@ export async function ask(question: string): Promise<string> {
   // 1. Check if running in a managed context with API access
   const apiUrl = process.env.ACN_API_URL;
   const chatId = process.env.ACN_CHAT_ID;
+  const agentName = process.env.ACN_AGENT_NAME;
 
   if (apiUrl && chatId) {
     console.log(`[Message] Asking via API for Chat ID: ${chatId}`);
@@ -223,7 +225,7 @@ export async function ask(question: string): Promise<string> {
       const askResponse = await fetch(`${apiUrl}/api/ask`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chatId, question })
+        body: JSON.stringify({ chatId, question, agentName })
       });
 
       if (!askResponse.ok) {
@@ -365,6 +367,7 @@ export async function ask(question: string): Promise<string> {
 export async function sendFiles(files: string[]): Promise<void> {
   const apiUrl = process.env.ACN_API_URL;
   const chatId = process.env.ACN_CHAT_ID;
+  const agentName = process.env.ACN_AGENT_NAME;
 
   if (apiUrl && chatId) {
     console.log(`[Message] Sending files via API for Chat ID: ${chatId}`);
@@ -375,7 +378,7 @@ export async function sendFiles(files: string[]): Promise<void> {
       const response = await fetch(`${apiUrl}/api/sendFiles`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chatId, files: absoluteFiles })
+        body: JSON.stringify({ chatId, files: absoluteFiles, agentName })
       });
 
       if (!response.ok) {
@@ -417,6 +420,7 @@ export async function sendFiles(files: string[]): Promise<void> {
 export async function sendText(text: string): Promise<void> {
   const apiUrl = process.env.ACN_API_URL;
   const chatId = process.env.ACN_CHAT_ID;
+  const agentName = process.env.ACN_AGENT_NAME;
 
   if (apiUrl && chatId) {
     console.log(`[Message] Sending text via API for Chat ID: ${chatId}`);
@@ -424,7 +428,7 @@ export async function sendText(text: string): Promise<void> {
       const response = await fetch(`${apiUrl}/api/sendText`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chatId, text })
+        body: JSON.stringify({ chatId, text, agentName })
       });
 
       if (!response.ok) {

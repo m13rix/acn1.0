@@ -56,7 +56,7 @@ const cases: Case[] = [
   {
     name: 'json object fallback',
     input: JSON.stringify({
-      links: [{ fromFactId: 'a', toFactId: 'b', relation: 'CAUSES', confidence: 0.8 }],
+      links: [{ fromFactId: 'a', toFactId: 'b', relation: 'CAUSES', confidence: 0.82 }],
     }),
     expectedRows: 1,
   },

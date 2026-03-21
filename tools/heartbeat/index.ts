@@ -1,138 +1,156 @@
-/**
- * Heartbeat Tool
- * 
- * Allows agents to interact with the ACN Heartbeat System.
- * - Create, List, Manage Tasks
- * - Explore and Use Sensors
- */
-
 import { HeartbeatService } from '../../src/heartbeat/HeartbeatService.js';
+import type {
+  HeartbeatBindingOptions,
+  HeartbeatBindingPatch,
+  HeartbeatBindingQuery,
+  HeartbeatEventRef,
+} from '../../src/heartbeat/types.js';
 import { sendRequest } from '../srcAgent/index.js';
 
 const service = HeartbeatService.getInstance();
 
-// Auto-initialize when tool is loaded in sandbox
 let initPromise: Promise<void> | null = null;
 
-async function ensureInitialized() {
-    if (initPromise) return initPromise;
-    // console.log("[Heartbeat Tool] Starting initialization...");
-    initPromise = service.initialize({ enableWatcher: false })
-        // .then(() => console.log("[Heartbeat Tool] Initialization complete."))
-        .catch(e => {
-            console.error("[Heartbeat Tool] Init failed:", e);
-            initPromise = null; // Retry on next call?
-            throw e;
-        });
+async function ensureInitialized(): Promise<void> {
+  if (initPromise) {
     return initPromise;
+  }
+
+  initPromise = service.initialize({ enableWatcher: false }).catch((error) => {
+    initPromise = null;
+    throw error;
+  });
+  return initPromise;
 }
 
-// Start immediately but don't await
-ensureInitialized();
+function createEventProxy(sensorName: string): Record<string, unknown> {
+  return new Proxy({}, {
+    get(_target, property) {
+      if (property === 'then') {
+        return undefined;
+      }
+      if (typeof property !== 'string') {
+        return undefined;
+      }
 
-export const tasks = {
-    /**
-     * Create a new heartbeat task.
-     * 
-     * @param name - Unique name/ID for the task.
-     * @param options - Task configuration.
-     * @param options.trigger - The event signature (e.g. "clock.events.every(10m)")
-     * @param options.condition - Optional logic prompt (e.g. "Is it urgent?")
-     * @param options.action - The prompt for the agent to execute when triggered.
-     * @param options.maxRepeats - Optional. Number of times to run. -1 for infinite.
-     */
-    create: async (name: string, options: {
-        trigger: string;
-        condition?: string;
-        action: string;
-        maxRepeats?: number;
-    }) => {
-        return service.createTask(name, options);
+      return (...args: unknown[]): HeartbeatEventRef => ({
+        sensor: sensorName,
+        event: property,
+        args,
+      });
     },
+  });
+}
 
-    /**
-     * List all tasks (active and inactive).
-     */
-    list: async () => {
-        return service.listTasks();
+function createSensorProxy(sensorName: string): Record<string, unknown> {
+  return new Proxy({}, {
+    get(_target, property) {
+      if (property === 'then') {
+        return undefined;
+      }
+      if (property === 'events') {
+        return createEventProxy(sensorName);
+      }
+
+      if (property === 'ask') {
+        return async (prompt: string, schema: unknown, imagePath?: string) => {
+          await ensureInitialized();
+          return service.askSensor(sensorName, {
+            prompt,
+            schema: schema as any,
+            imagePath,
+          });
+        };
+      }
+
+      if (property === 'descriptor') {
+        return async () => {
+          await ensureInitialized();
+          return service.getSensorDescriptor(sensorName);
+        };
+      }
+
+      return undefined;
     },
+  });
+}
 
-    /**
-     * Edit an existing task.
-     */
-    edit: async (name: string, options: {
-        trigger?: string;
-        condition?: string;
-        action?: string;
-        maxRepeats?: number;
-    }) => {
-        return service.editTask(name, options);
-    },
+export async function bind(
+  eventRef: HeartbeatEventRef,
+  handler: Function,
+  options?: HeartbeatBindingOptions
+) {
+  await ensureInitialized();
+  return service.bind(eventRef, handler, options);
+}
 
-    /**
-     * Toggle a task's active state.
-     */
-    setActive: async (name: string, active: boolean) => {
-        return service.setActive(name, active);
-    },
-
-    /**
-     * Delete a task permanently.
-     */
-    delete: async (name: string) => {
-        return service.deleteTask(name);
-    }
+export const bindings = {
+  list: async (query?: HeartbeatBindingQuery) => {
+    await ensureInitialized();
+    return service.listBindings(query);
+  },
+  get: async (id: string, query?: HeartbeatBindingQuery) => {
+    await ensureInitialized();
+    return service.getBinding(id, query);
+  },
+  unbind: async (id: string) => {
+    await ensureInitialized();
+    return service.unbind(id);
+  },
+  rebind: async (id: string, patch: HeartbeatBindingPatch) => {
+    await ensureInitialized();
+    return service.rebind(id, patch);
+  },
 };
 
-export const sensors = {
-    /**
-     * List available sensors and their documentation.
-     */
-    list: async () => {
-        await ensureInitialized();
-        const docs = service.getSensorDocs();
-        if (!docs) return "No sensors loaded.";
-        return docs;
-    },
-
-    /**
-     * Ask a specific sensor a question using its internal logic/data.
-     */
-    ask: async (name: string, query: string) => {
-        return service.askSensor(name, query);
-    },
-
-    /**
-     * Create a new sensor using srcAgent (Gemini CLI).
-     * @param prompt - Description of the sensor to build.
-     */
-    create: async (prompt: string) => {
-        const geminiPrompt = `
-You act as an expert developer creating a new ACN Sensor module.
+export const sensors = new Proxy({
+  list: async () => {
+    await ensureInitialized();
+    return service.getSensorDescriptors();
+  },
+  create: async (prompt: string) => {
+    const geminiPrompt = `
+You act as an expert developer creating a new ACN Heartbeat V2 sensor module.
 User Request: ${prompt}
 
-Standard Sensor Structure:
+Create a sensor in:
 tools/heartbeat/sensors/[name]/
-  - index.ts (Logic)
-  - sensor.yaml (Config)
+  - index.ts
+  - sensor.yaml
 
-API Requirements for index.ts:
-- export async function start(emit: (event: string, payload?: any) => void)
-- export async function stop()
-- export async function getContext(): Promise<string>
-- export async function ask(query: string): Promise<string> (Optional but recommended)
-- export const events = { ... } (Helper factories for triggers)
+Contract:
+- index.ts exports:
+  - start(emit)
+  - stop()
+  - getContext?()
+  - ask?(input)
+- Sensors emit structured events:
+  emit({ event: "name", args: [...], payload: {...}, occurredAt?: ISOString })
+- sensor.yaml must define:
+  - name
+  - description
+  - events[] with description, argsSchema, payloadSchema
 
-Config Requirements for sensor.yaml:
-name: [name]
-description: [docs]
-minillm:
-  model: openai/gpt-oss-20b
-  provider: openrouter
+The generated sensor should be elegant, LLM-friendly, and compatible with persistent heartbeat bindings.
+`.trim();
 
-Please generate the necessary files and code to implement this sensor.
-        `.trim();
-
-        return await sendRequest(geminiPrompt);
+    return sendRequest(geminiPrompt);
+  },
+}, {
+  get(target, property, receiver) {
+    if (property === 'then') {
+      return undefined;
     }
-};
+    if (Reflect.has(target, property)) {
+      return Reflect.get(target, property, receiver);
+    }
+
+    if (typeof property !== 'string') {
+      return undefined;
+    }
+
+    return createSensorProxy(property);
+  },
+});
+
+void ensureInitialized();

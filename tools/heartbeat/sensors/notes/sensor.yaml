@@ -1,10 +1,38 @@
 name: notes
 description: >
-  Microsoft OneNote sensor.
-  
-  Triggers:
-  - heartbeat.sensors.notes.events.newNote() -> Fires when a new note is added to the user's OneNote.
-  
-minillm:
-  model: openai/gpt-oss-20b
-  provider: openrouter
+  Microsoft OneNote heartbeat sensor for rich note-ingest events.
+events:
+  - name: newNote
+    description: Fires when a newly finished OneNote page is detected.
+    argsSchema:
+      type: array
+      items: []
+      minItems: 0
+      maxItems: 0
+    payloadSchema:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        text:
+          type: string
+        createdAt:
+          type:
+            - string
+            - 'null'
+        modifiedAt:
+          type:
+            - string
+            - 'null'
+        contentUrl:
+          type: string
+      required:
+        - id
+        - title
+        - text
+        - createdAt
+        - modifiedAt
+        - contentUrl

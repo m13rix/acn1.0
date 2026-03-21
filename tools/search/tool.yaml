@@ -10,6 +10,7 @@ description: |
   - type: 'auto' | 'keyword' | 'neural'
   - category: 'company' | 'research paper' | 'news' | 'pdf' | 'github' | 'tweet' | 'personal site' | 'people' | 'financial report'
   - content: 'none' | 'snippet' | 'summary' | 'full' (default: 'snippet')
+  - returns: an array of objects with fields "url", "title", "author", "summary" if enabled, etc.
 
   search.getContent(urls, options?): SearchResult[]
   - options: { content? } - same as above, default: 'full'

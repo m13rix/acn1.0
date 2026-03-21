@@ -17,8 +17,10 @@ modelSwitching:
 tools:
   - search
   - message
+  - utils
 
 loop: provider_tools
 syntax: markdown
 skillsTable: researcher_skills
 injectAgentsList: false
+

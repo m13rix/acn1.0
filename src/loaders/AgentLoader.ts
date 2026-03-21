@@ -78,14 +78,13 @@ export class AgentLoader {
         const fullPath = join(dir, entry.name);
 
         if (entry.isDirectory()) {
-          // Check if this directory contains an agent config
           const agentConfig = await this.tryLoadAgentConfig(fullPath);
           if (agentConfig) {
             agents.push(agentConfig);
-          } else {
-            // Recurse into subdirectory
-            await this.scanDirectory(fullPath, agents);
           }
+
+          // Always recurse so nested agent trees remain discoverable.
+          await this.scanDirectory(fullPath, agents);
         }
       }
     } catch (error) {

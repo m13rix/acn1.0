@@ -1,0 +1,10 @@
+{
+  "title": "Searching for problems by topic or keywords",
+  "content": "Use the 'searchProblems' method to discover relevant problem IDs when you have a topic or keyword in mind but not a specific ID. Specify the 'subject' and a 'query' string of at least 3 characters. You can use 'limit' to control the number of results returned.",
+  "examples": [
+    "Find me problems about quadratic equations in math.",
+    "Search for chemistry problems involving oxidation reactions.",
+    "List 10 problems related to Newton's laws in physics."
+  ],
+  "scoreThreshold": 0.7
+}

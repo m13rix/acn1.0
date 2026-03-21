@@ -1,7 +1,14 @@
 import { sendRequest } from "./index.ts"
 
 async function run(){
-    const response = await sendRequest(`Create an agent that would be really good and efficient at research. So that we could give it a topic, a simple, a really complicated one - and it should conduct really high-quality expert research, but it should depend on the topic or requirements. For example, if the topic is not that complicated or the requirement is not that high we can use search.answer or less number of queries, even just one to answer it. It should be really efficient and know when to use .answer, .search or .research as heavy artillery. [GUIDE: HOW TO CREATE AGENTS IN THE SYSTEM. Every agent should be based on the 'core' agent - with the exact same prompts and config, so just duplicate that. After, you need to change the name, description, and most importantly - models. You need to pick the most fitting (in price and capabilities) for base models, as well as for model switching systems (it will allow the agent to pick the most fitting for some of the use cases. Important: basically the more varied this list - the better, and this list should also include the default model). To learn about the current models read ./current_models.md file. You also need to pick the 'skillsTable' - it is basically a dynamic library of advice that the agent can fill and later use. It is recommended to use for each of the agents ITS OWN TABLE. However, if you think that the agent may benefit from the learnings of other agents in the system, you can use their tables. You also need to specify tools the agent will be able to use. As you can see, there is a large variety of them. You need to choose only the ones the agent will actually use without missing anything. And - the most important - THE SYSTEM PROMPT. You should of course use the 'core' prompt as a foundation and change it or add new details and instructions as you wish, for example keeping the core directives and adding something new. This prompt will basically dictate all of the agents' behaviour, so design it as high-quality as possible]`)
+    const response = await sendRequest("Привет! Я готовлю всеобъемлющую документацию по ACN/TELOS системе. " +
+        "Пожалуйста, предоставь максимально подробную информацию о:\n\n" +
+        "1. Общей архитектуре системы\n" +
+        "2. Как работает The Loop и код-как-действие парадигма\n" +
+        "3. Всех модулях и их взаимодействии\n" +
+        "4. Особенностях реализации (skills с example-based retrieval, heartbeat и т.д.)\n" +
+        "5. Ключевых инновациях и почему они лучше традиционных подходов\n\n" +
+        "Опиши всё технически точно, с деталями реализации.")
     console.log(response)
 }
 

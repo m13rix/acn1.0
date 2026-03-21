@@ -1,0 +1,51 @@
+name: strategy
+description: |
+  Persistent strategy graphs with scalar stateDelta transitions and an exact finite-horizon solver.
+
+  Core namespaces:
+  - strategy.strategies.create(name, description?)
+  - strategy.strategies.list()
+  - strategy.strategies.get(strategyId)
+  - strategy.strategies.remove(strategyId)
+
+  - strategy.paths.create(strategyId, { name, description?, rootName? })
+  - strategy.paths.list(strategyId)
+  - strategy.paths.get(strategyId, pathId)
+  - strategy.paths.remove(strategyId, pathId)
+  - strategy.paths.validate(strategyId, pathId)
+
+  - strategy.nodes.add(strategyId, pathId, { name, kind?, note? })
+  - strategy.nodes.list(strategyId, pathId)
+  - strategy.nodes.update(strategyId, pathId, nodeId, patch)
+  - strategy.nodes.remove(strategyId, pathId, nodeId)
+
+  - strategy.events.add(strategyId, pathId, { fromNodeId, toNodeId, name, probability, stateDelta, reason? })
+  - strategy.events.list(strategyId, pathId)
+  - strategy.events.update(strategyId, pathId, eventId, patch)
+  - strategy.events.remove(strategyId, pathId, eventId)
+
+  Analysis:
+  - strategy.analysis.analyzePath(strategyId, pathId, { maxSteps })
+  - strategy.analysis.probabilityToReachGoal(strategyId, pathId, maxSteps)
+  - strategy.analysis.expectedStepsToGoal(strategyId, pathId, maxSteps)
+  - strategy.analysis.expectedStateDelta(strategyId, pathId, maxSteps)
+  - strategy.analysis.hittingTimeDistribution(strategyId, pathId, maxSteps)
+  - strategy.analysis.distributionAtStep(strategyId, pathId, step)
+
+  Divergence:
+  - strategy.divergence.get(strategyId)
+  - strategy.divergence.set(strategyId, { x, y })
+
+  Convenience aliases:
+  - strategy.createStrategy(...)
+  - strategy.createProject(...)
+  - strategy.createPath(...)
+  - strategy.addNode(...)
+  - strategy.addEvent(...)
+  - strategy.connectNodes(...)
+  - strategy.analyzePath(...)
+  - strategy.calculatePathUtility(...)
+  - strategy.getDivergence(...)
+  - strategy.setDivergence(...)
+
+module: index.ts

@@ -32,7 +32,7 @@ const TARGET_HEIGHT = 1080;
 // Load ComfyUI workflow
 import workflow from './workflow.json' with { type: 'json' };
 
-// State for shots
+// State for shots — persisted to disk so state survives across action calls
 interface Shot {
     index: number;
     speakerLine: string;
@@ -41,7 +41,32 @@ interface Shot {
     duration: number; // in seconds
 }
 
-const shots: Shot[] = [];
+const SHOTS_FILE = path.join(PUBLIC_DIR, 'shots_state.json');
+
+/**
+ * Load shots from persisted JSON file.
+ * Returns empty array if file doesn't exist.
+ */
+function loadShots(): Shot[] {
+    try {
+        if (fs.existsSync(SHOTS_FILE)) {
+            return JSON.parse(fs.readFileSync(SHOTS_FILE, 'utf-8'));
+        }
+    } catch (err) {
+        console.warn('[Editor] Warning: failed to load shots state, starting fresh');
+    }
+    return [];
+}
+
+/**
+ * Save shots array to persistent JSON file.
+ */
+function saveShots(shots: Shot[]): void {
+    if (!fs.existsSync(PUBLIC_DIR)) {
+        fs.mkdirSync(PUBLIC_DIR, { recursive: true });
+    }
+    fs.writeFileSync(SHOTS_FILE, JSON.stringify(shots, null, 2));
+}
 
 // ============================================================================
 // Retry Logic with Exponential Backoff
@@ -523,6 +548,7 @@ export const shotsApi = {
      * @param shotPrompt - Description of what happens visually in this shot
      */
     async add(speakerLine: string, shotPrompt: string): Promise<Shot> {
+        const shots = loadShots();
         const shotIndex = shots.length + 1;
         const voiceFileName = `shot${shotIndex}_voice.mp3`;
         const voicePath = path.join(PUBLIC_DIR, voiceFileName);
@@ -551,6 +577,7 @@ export const shotsApi = {
         };
 
         shots.push(shot);
+        saveShots(shots);
 
         console.log(`[Editor] Shot ${shotIndex} created: duration=${duration}s, voice=${voiceFileName}`);
         return shot;
@@ -560,14 +587,14 @@ export const shotsApi = {
      * Get all added shots
      */
     getAll(): Shot[] {
-        return [...shots];
+        return loadShots();
     },
 
     /**
      * Clear all shots
      */
     clear(): void {
-        shots.length = 0;
+        saveShots([]);
         console.log('[Editor] All shots cleared');
     }
 };
@@ -633,6 +660,8 @@ function runGeminiCli(prompt: string, resume: boolean = false): Promise<string> 
  * Processes all added shots sequentially.
  */
 export async function generateAndRender(): Promise<void> {
+    const shots = loadShots();
+
     if (shots.length === 0) {
         throw new Error('No shots added. Use shots.add() first.');
     }

@@ -1,0 +1,16 @@
+name: utils
+description: |
+  Utility helpers for semi-automatic local workflows.
+
+  - `utils.screenshot(filePath: string, monitorIndex?: number): Promise<{ path: string; monitorIndex: number; width: number; height: number; x: number; y: number; savedToSandbox: boolean; deviceName?: string; isPrimary?: boolean }>`
+    Captures a screenshot of a system monitor on the local machine.
+    Example: `await utils.screenshot("./monitor0.png");`
+
+  - `utils.llm(prompt: string, schema: ZodSchema | JsonSchema, imagePath?: string): Promise<any>`
+    Calls a small LLM for structured JSON output.
+    `schema` is a plain JSON schema object.
+    If `imagePath` is provided, the image is sent to the vision-capable model as extra context.
+    Example:
+    `const result = await utils.llm("Extract fields", { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"], additionalProperties: false }, "./screen.png");`
+
+module: index.ts

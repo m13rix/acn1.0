@@ -1,307 +1,542 @@
-/**
- * Инструмент для работы с домашними заданиями.
- * Позволяет получать информацию из школьных учебников, тексты заданий и параграфов,
- * а также генерировать SVG рисунки и форматировать готовые задания.
- */
-
+import 'dotenv/config';
 import { GoogleGenAI } from '@google/genai';
 import fs from 'fs/promises';
 import path from 'path';
-import { fileURLToPath } from 'url';
-import puppeteer from 'puppeteer-extra';
-import StealthPlugin from 'puppeteer-extra-plugin-stealth';
-
-puppeteer.use(StealthPlugin());
-
+import os from 'os';
+import { execFile } from 'child_process';
+import { fileURLToPath, pathToFileURL } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const HOMEWORK_NOTEBOOK_ID = 'b14102a9-29f2-4cf9-ad2a-10238008c138';
+
+const VALID_BOOKS = ['algebra', 'geometry', 'social_studies', 'history', 'russian'];
+const BOOK_PROMPTS: Record<string, string> = {
+  algebra: 'Выведите из учебника по алгебре.',
+  geometry: 'Выведите из учебника по геометрии.',
+  social_studies: 'Выведите из учебника по обществознанию.',
+  history: 'Выведите из учебника по истории.',
+  russian: 'Выведите из учебника по русскому языку.',
+};
 
 function getApiKey(): string {
-    const GEMINI_API_KEY = process.env.GEMINI_KEY || process.env.GEMINI_API_KEY;
-    if (!GEMINI_API_KEY) {
-        throw new Error(
-            "GEMINI_KEY не настроен. Добавьте переменную в .env файл."
-        );
-    }
-    return GEMINI_API_KEY;
+  const apiKey = process.env.GEMINI_KEY || process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error('GEMINI_KEY is not configured.');
+  }
+  return apiKey;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function normalizeNotebookQuestion(question: string): string {
+  return question.replace(/\r?\n+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+async function getHomeworkLibraryModule(): Promise<{
+  listStoredDocuments: () => Promise<unknown>;
+  getStoredSectionText: (documentId: string, sectionNumber: number) => Promise<string>;
+  extractSectionPdf: (documentId: string, sectionNumber: number) => Promise<{ pdfBuffer: Buffer; sectionName: string }>;
+}> {
+  const projectRoot = process.env.PROJECT_ROOT || path.resolve(__dirname, '..', '..');
+  const modulePath = path.join(projectRoot, 'src', 'homework-library', 'index.ts');
+  return import(pathToFileURL(modulePath).href);
+}
+
+type CommandResult = {
+  stdout: string;
+  stderr: string;
+};
+
+function summarizeOutput(output: string, limit: number = 800): string {
+  if (!output) {
+    return '';
+  }
+
+  return output.length > limit ? `${output.slice(0, limit)}...` : output;
 }
 
 /**
- * Получает текст задания, параграфа или любую другую информацию из указанного учебника с использованием NotebookLM.
- *
- * @param bookId - ID учебника. Допустимые значения: 'algebra', 'geometry', 'social_studies', 'history', 'russian'.
- * @param question - Вопрос (например, "Выведи ПОЛНОЦЕННЫЙ ТЕКСТ ЗАДАНИЯ номер 156 в этом учебнике...").
- * @returns Ответ модели на основе содержания учебника.
- * @example
- * const result = await ask("algebra", "Выведи полный текст задания номер 156");
+ * Runs a command directly without shell interpolation for better quoting stability.
  */
-export async function ask(bookId: string, question: string): Promise<string> {
-    const validBooks = ['algebra', 'geometry', 'social_studies', 'history', 'russian'];
-    if (!validBooks.includes(bookId)) {
-        throw new Error(`Недопустимый ID учебника: ${bookId}. Допустимые значения: ${validBooks.join(', ')}`);
+function runCommand(command: string, args: string[], timeoutMs: number = 300_000): Promise<CommandResult> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      command,
+      args,
+      {
+        timeout: timeoutMs,
+        maxBuffer: 10 * 1024 * 1024,
+        windowsHide: true,
+        env: {
+          ...process.env,
+          PYTHONIOENCODING: 'utf-8',
+          PYTHONUTF8: '1',
+        },
+      },
+      (error, stdout, stderr) => {
+        const trimmedStdout = stdout.trim();
+        const trimmedStderr = stderr.trim();
+
+        if (error) {
+          const errorCode = (error as NodeJS.ErrnoException).code;
+          if (errorCode === 'ENOENT') {
+            reject(
+              new Error(
+                `Command not found: ${command}. Ensure NotebookLM CLI is installed and available in PATH.`
+              )
+            );
+            return;
+          }
+
+          const details = [summarizeOutput(trimmedStderr), summarizeOutput(trimmedStdout)]
+            .filter(Boolean)
+            .join('\n');
+          reject(
+            new Error(
+              `Command failed: ${command} ${args.join(' ')}${details ? `\n${details}` : ''}`
+            )
+          );
+          return;
+        }
+
+        resolve({ stdout: trimmedStdout, stderr: trimmedStderr });
+      }
+    );
+  });
+}
+
+function parseJsonOutput(commandLabel: string, output: string): unknown {
+  try {
+    return JSON.parse(output);
+  } catch (error: any) {
+    throw new Error(
+      `Failed to parse JSON from ${commandLabel}: ${error.message}. Output: ${summarizeOutput(output)}`
+    );
+  }
+}
+
+function getStringField(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function getNestedStringField(record: Record<string, unknown>, key: string): string | undefined {
+  const direct = getStringField(record[key]);
+  if (direct) {
+    return direct;
+  }
+
+  const nested = record[key];
+  if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+    const nestedRecord = nested as Record<string, unknown>;
+    return getStringField(nestedRecord.id) || getStringField(nestedRecord[`${key}_id`]);
+  }
+
+  return undefined;
+}
+
+function extractNotebookId(payload: unknown): string {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw new Error(`Unexpected create response: ${summarizeOutput(JSON.stringify(payload))}`);
+  }
+
+  const record = payload as Record<string, unknown>;
+  const notebookId =
+    getStringField(record.id) ||
+    getStringField(record.notebook_id) ||
+    getNestedStringField(record, 'notebook');
+
+  if (!notebookId) {
+    throw new Error(`Notebook ID missing in create response: ${summarizeOutput(JSON.stringify(payload))}`);
+  }
+
+  return notebookId;
+}
+
+function extractSourceId(payload: unknown): string {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw new Error(`Unexpected source response: ${summarizeOutput(JSON.stringify(payload))}`);
+  }
+
+  const record = payload as Record<string, unknown>;
+  const sourceId =
+    getStringField(record.source_id) ||
+    getStringField(record.id) ||
+    getNestedStringField(record, 'source');
+
+  if (!sourceId) {
+    throw new Error(`Source ID missing in add response: ${summarizeOutput(JSON.stringify(payload))}`);
+  }
+
+  return sourceId;
+}
+
+function extractTaskId(payload: unknown): string {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw new Error(`Unexpected generation response: ${summarizeOutput(JSON.stringify(payload))}`);
+  }
+
+  const record = payload as Record<string, unknown>;
+  const taskId =
+    getStringField(record.task_id) ||
+    getStringField(record.artifact_id) ||
+    getStringField(record.id);
+
+  if (!taskId) {
+    throw new Error(`Task ID missing in generation response: ${summarizeOutput(JSON.stringify(payload))}`);
+  }
+
+  return taskId;
+}
+
+type NotebookLmSourceInfo = {
+  id: string;
+  title?: string;
+  status?: string;
+  status_id?: number;
+};
+
+type NotebookLmArtifactInfo = {
+  id: string;
+  title?: string;
+  status?: string;
+  status_id?: number;
+};
+
+function extractArrayField(payload: unknown, field: string): Record<string, unknown>[] {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw new Error(`Unexpected ${field} response: ${summarizeOutput(JSON.stringify(payload))}`);
+  }
+
+  const value = (payload as Record<string, unknown>)[field];
+  if (!Array.isArray(value)) {
+    throw new Error(`Missing "${field}" array in response: ${summarizeOutput(JSON.stringify(payload))}`);
+  }
+
+  return value.filter((item): item is Record<string, unknown> => !!item && typeof item === 'object' && !Array.isArray(item));
+}
+
+async function listNotebookSources(notebookId: string): Promise<NotebookLmSourceInfo[]> {
+  const payload = parseJsonOutput(
+    'notebooklm source list',
+    (await runCommand('notebooklm', ['source', 'list', '-n', notebookId, '--json'])).stdout
+  );
+
+  return extractArrayField(payload, 'sources').map((item) => ({
+    id: getStringField(item.id) || '',
+    title: getStringField(item.title),
+    status: getStringField(item.status),
+    status_id: typeof item.status_id === 'number' ? item.status_id : undefined,
+  }));
+}
+
+async function listNotebookArtifacts(notebookId: string): Promise<NotebookLmArtifactInfo[]> {
+  const payload = parseJsonOutput(
+    'notebooklm artifact list',
+    (await runCommand('notebooklm', ['artifact', 'list', '-n', notebookId, '--json'])).stdout
+  );
+
+  return extractArrayField(payload, 'artifacts').map((item) => ({
+    id: getStringField(item.id) || '',
+    title: getStringField(item.title),
+    status: getStringField(item.status),
+    status_id: typeof item.status_id === 'number' ? item.status_id : undefined,
+  }));
+}
+
+async function waitForSourceReady(
+  notebookId: string,
+  sourceId: string,
+  timeoutMs: number = 600_000,
+  pollIntervalMs: number = 5_000
+): Promise<NotebookLmSourceInfo> {
+  const deadline = Date.now() + timeoutMs;
+  let lastStatus = 'missing';
+
+  while (Date.now() <= deadline) {
+    const source = (await listNotebookSources(notebookId)).find((item) => item.id === sourceId);
+    if (source) {
+      const normalizedStatus = (source.status || '').toLowerCase();
+      lastStatus = normalizedStatus || String(source.status_id ?? 'unknown');
+
+      if (normalizedStatus === 'ready') {
+        return source;
+      }
+
+      if (normalizedStatus === 'error' || normalizedStatus === 'failed') {
+        throw new Error(
+          `Source ${sourceId} failed to process${source.title ? ` (${source.title})` : ''}.`
+        );
+      }
     }
 
-    const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
-    const PROFILE_DIR = path.resolve(PROJECT_ROOT, 'browser-profile');
+    await delay(pollIntervalMs);
+  }
 
-    const browser = await puppeteer.launch({
-        headless: false,
-        userDataDir: PROFILE_DIR,
-        args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-blink-features=AutomationControlled',
-            '--start-maximized'
-        ],
-        ignoreDefaultArgs: ['--enable-automation'],
-        defaultViewport: null
+  throw new Error(`Timed out waiting for source ${sourceId}. Last known status: ${lastStatus}`);
+}
+
+async function waitForArtifactCompletion(
+  notebookId: string,
+  artifactId: string,
+  timeoutMs: number = 2_700_000,
+  pollIntervalMs: number = 15_000
+): Promise<NotebookLmArtifactInfo> {
+  const deadline = Date.now() + timeoutMs;
+  let lastStatus = 'missing';
+
+  while (Date.now() <= deadline) {
+    const artifact = (await listNotebookArtifacts(notebookId)).find((item) => item.id === artifactId);
+    if (artifact) {
+      const normalizedStatus = (artifact.status || '').toLowerCase();
+      lastStatus = normalizedStatus || String(artifact.status_id ?? 'unknown');
+
+      if (normalizedStatus === 'completed' || normalizedStatus === 'ready') {
+        return artifact;
+      }
+
+      if (normalizedStatus === 'error' || normalizedStatus === 'failed') {
+        throw new Error(
+          `Artifact ${artifactId} failed to generate${artifact.title ? ` (${artifact.title})` : ''}.`
+        );
+      }
+    }
+
+    await delay(pollIntervalMs);
+  }
+
+  throw new Error(`Timed out waiting for artifact ${artifactId}. Last known status: ${lastStatus}`);
+}
+
+export async function ask(bookId: string, question: string): Promise<string> {
+  if (!VALID_BOOKS.includes(bookId)) {
+    throw new Error(`Invalid bookId "${bookId}". Allowed values: ${VALID_BOOKS.join(', ')}`);
+  }
+
+  const normalizedQuestion = normalizeNotebookQuestion(question);
+  if (!normalizedQuestion) {
+    throw new Error('question is required.');
+  }
+
+  const prefix = BOOK_PROMPTS[bookId] || `[${bookId}]`;
+  const fullQuery = normalizeNotebookQuestion(`${normalizedQuestion} ${prefix}`);
+
+  try {
+    const payload = parseJsonOutput(
+      'notebooklm ask',
+      (await runCommand('notebooklm', ['ask', fullQuery, '-n', HOMEWORK_NOTEBOOK_ID, '--json'], 300_000)).stdout
+    );
+
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      throw new Error(`Unexpected ask response: ${summarizeOutput(JSON.stringify(payload))}`);
+    }
+
+    const answer = getStringField((payload as Record<string, unknown>).answer);
+
+    if (!answer) {
+      throw new Error(`NotebookLM returned an empty answer: ${summarizeOutput(JSON.stringify(payload))}`);
+    }
+
+    return answer;
+  } catch (error: any) {
+    throw new Error(`NotebookLM request failed: ${error.message}`);
+  }
+}
+
+export async function generateSVG(taskText: string): Promise<string> {
+  const ai = new GoogleGenAI({ apiKey: getApiKey() });
+  const model = 'gemini-3-flash-preview';
+  const promptPath = path.join(__dirname, 'prompts', 'generate_svg.md');
+
+  try {
+    const systemInstruction = await fs.readFile(promptPath, 'utf8');
+    const response = await ai.models.generateContent({
+      model,
+      contents: taskText,
+      config: {
+        systemInstruction,
+      },
     });
 
-    try {
-        const pages = await browser.pages();
-        const page = pages.length > 0 ? pages[0] : await browser.newPage();
-
-        // Разрешаем работу с буфером обмена
-        const context = browser.defaultBrowserContext();
-        await context.overridePermissions('https://notebooklm.google.com', ['clipboard-read', 'clipboard-write']);
-
-        await page.goto('https://notebooklm.google.com/notebook/b14102a9-29f2-4cf9-ad2a-10238008c138?authuser=1', { waitUntil: 'domcontentloaded', timeout: 60000 });
-
-        const delay = (ms: number) => new Promise(res => setTimeout(res, ms));
-        await delay(5000); // Ждем основательной загрузки интерфейса
-
-        // 1. Открываем настройки чата и удаляем историю
-        try {
-            const chatSettingsSelector = 'button[aria-label="Настройки чата"]';
-            await page.waitForSelector(chatSettingsSelector, { timeout: 10000 });
-            await page.click(chatSettingsSelector);
-            await delay(2000);
-
-            // 2. Нажимаем "Удалить историю чата"
-            await page.evaluate(() => {
-                const items = Array.from(document.querySelectorAll('[role="menuitem"]'));
-                const deleteItem = items.find(el => el.textContent?.includes('Удалить историю'));
-                if (deleteItem) (deleteItem as HTMLElement).click();
-            });
-            await delay(2000);
-
-            // 3. Подтверждаем удаление
-            await page.evaluate(() => {
-                const btns = Array.from(document.querySelectorAll('button'));
-                const yesBtn = btns.find(b => b.textContent?.includes('Удалить') || b.classList.contains('yes-button'));
-                if (yesBtn) yesBtn.click();
-            });
-            await delay(3000); // Ждем очистки
-        } catch (e) {
-            console.warn("[homework.ask] Не удалось очистить историю чата, возможно она уже пуста или интерфейс не загрузился.");
-        }
-
-        // Запоминаем текущее количество сообщений, чтобы не считать старые
-        const messageContentSelector = '.message-text-content';
-        const initialMessagesCount = await page.evaluate((sel: string) => document.querySelectorAll(sel).length, messageContentSelector);
-
-        // 4. Вводим запрос
-        const textAreaSelector = 'textarea[aria-label="Поле для запросов"]';
-        await page.waitForSelector(textAreaSelector, { timeout: 15000 });
-        await page.click(textAreaSelector); // Focus
-        await delay(500);
-
-        const bookPrompts: Record<string, string> = {
-            'algebra': 'Выведите из учебника по алгебре.',
-            'geometry': 'Выведите из учебника по геометрии.',
-            'social_studies': 'Выведите из учебника по обществознанию.',
-            'history': 'Выведите из учебника по истории.',
-            'russian': 'Выведите из учебника по русскому языку.'
-        };
-
-        const prefix = bookPrompts[bookId] || `[${bookId}]`;
-        const fullQuery = `${question}${prefix}`;
-        // Набираем текст запроса как пользователь
-        await page.keyboard.type(fullQuery, { delay: 10 });
-        await delay(1000);
-
-        // 5. Отправляем запрос
-        const submitSelector = 'button[aria-label="Отправить"]';
-        try {
-            const submitHandle = await page.$(submitSelector);
-            if (submitHandle) {
-                const isDisabled = await page.evaluate((el: any) => el.disabled, submitHandle);
-                if (!isDisabled) {
-                    await submitHandle.click();
-                } else {
-                    await page.keyboard.press('Enter');
-                }
-            } else {
-                await page.keyboard.press('Enter');
-            }
-        } catch (e) {
-            console.warn("[homework.ask] Ошибка взаимодействия с кнопкой отправки, жмем Enter.");
-            await page.keyboard.press('Enter');
-        }
-
-        // Ждем пока появится новое сообщение
-        let newMessagesCount = initialMessagesCount;
-        for (let i = 0; i < 30; i++) {
-            await delay(1000);
-            newMessagesCount = await page.evaluate((sel: string) => document.querySelectorAll(sel).length, messageContentSelector);
-            if (newMessagesCount > initialMessagesCount) {
-                break;
-            }
-        }
-
-        if (newMessagesCount <= initialMessagesCount) {
-            console.warn("[homework.ask] Новое сообщение не появилось, попытаемся прочитать последнее.");
-        }
-
-        // 6. Ждем генерации ответа
-        console.log("[homework.ask] Ожидание завершения генерации NotebookLM...");
-        let lastLength = 0;
-        let stableCount = 0;
-
-        while (true) {
-            await delay(1000);
-            const currentText = await page.evaluate((sel: string) => {
-                const els = document.querySelectorAll(sel);
-                if (els.length === 0) return "";
-                // Берем текст последнего сообщения
-                return els[els.length - 1].textContent || "";
-            }, messageContentSelector);
-
-            if (currentText.length > 0 && currentText.length === lastLength) {
-                stableCount++;
-                // Ждём дольше — 10 секунд без изменений для уверенности (особенно важно для математики)
-                if (stableCount >= 10) {
-                    break;
-                }
-            } else {
-                lastLength = currentText.length;
-                stableCount = 0;
-            }
-        }
-
-        await delay(2000); // Дополнительная пауза для кнопки копирования
-
-        // 7. Нажимаем кнопку копирования последнего ответа
-        const copyButtonSelector = 'button[aria-label="Копировать ответ модели в буфер обмена"]';
-        try {
-            await page.waitForSelector(copyButtonSelector, { timeout: 10000 });
-            await page.evaluate((sel: string) => {
-                const btns = document.querySelectorAll(sel);
-                if (btns.length > 0) {
-                    (btns[btns.length - 1] as HTMLElement).click();
-                }
-            }, copyButtonSelector);
-            await delay(1000); // Ждем копирования в буфер
-        } catch (e) {
-            console.warn("[homework.ask] Кнопка копирования не найдена.");
-        }
-
-        // 8. Читаем из буфера обмена
-        let clipboardText = await page.evaluate(async () => {
-            try {
-                return await navigator.clipboard.readText();
-            } catch (e) {
-                return null;
-            }
-        });
-
-        if (clipboardText && clipboardText.trim().length > 0) {
-            return clipboardText.trim();
-        }
-
-        console.warn("[homework.ask] Ошибка чтения буфера обмена, извлекаем текст из DOM.");
-        // Fallback на чтение из DOM
-        const resultText = await page.evaluate((sel: string) => {
-            const els = document.querySelectorAll(sel);
-            if (els.length === 0) return "";
-            return (els[els.length - 1] as HTMLElement).innerText || "";
-        }, messageContentSelector);
-
-        return resultText.trim();
-    } catch (err: any) {
-        throw new Error(`Ошибка при запросе к NotebookLM через браузер: ${err.message}`);
-    } finally {
-        if (browser) {
-            await browser.close();
-        }
-    }
+    const text = response.text || '';
+    const svgMatch = text.match(/```(?:xml|svg)?\s*([\s\S]*?)```/i);
+    return svgMatch?.[1]?.trim() || text.trim();
+  } catch (error: any) {
+    throw new Error(`SVG generation failed: ${error.message}`);
+  }
 }
 
-/**
- * Генерирует SVG код рисунка по тексту геометрической задачи при помощи LLM.
- *
- * @param taskText - Текст условия задачи.
- * @returns Строка с кодом SVG чертежа.
- * @example
- * const result = await generateSVG("В треугольнике ABC угол C равен 90 градусов...");
- */
-export async function generateSVG(taskText: string): Promise<string> {
-    const key = getApiKey();
-    const ai = new GoogleGenAI({ apiKey: key });
-    const model = 'gemini-3-flash-preview';
-
-    const promptPath = path.join(__dirname, 'prompts', 'generate_svg.md');
-    try {
-        const systemInstruction = await fs.readFile(promptPath, 'utf-8');
-
-        const response = await ai.models.generateContent({
-            model: model,
-            contents: taskText,
-            config: {
-                systemInstruction: systemInstruction,
-            }
-        });
-
-        const text = response.text || "";
-
-        // Попытка извлечь чистый SVG код, если модель обернула его в markdown
-        const svgMatch = text.match(/```(?:xml|svg)?\s*([\s\S]*?)```/i);
-        if (svgMatch && svgMatch[1]) {
-            return svgMatch[1].trim();
-        }
-
-        return text.trim();
-    } catch (err: any) {
-        throw new Error(`Ошибка генерации SVG: ${err.message}`);
-    }
-}
-
-/**
- * Форматирует готовое задание в строгий текстовый формат для принтера
- * и сохраняет его в .txt файл.
- *
- * @param taskContent - Содержимое выполненной задачи (с рисунком, решением и т.п.).
- * @param fileName - Название файла для сохранения в директории агента (например, task_156.txt).
- * @returns Сообщение об успешном выполнении и отформатированный текст.
- * @example
- * const result = await formatHomework("Дано: ... Решение: ... Ответ: ...", "task_156.txt");
- */
 export async function formatHomework(taskContent: string, fileName: string): Promise<string> {
-    const key = getApiKey();
-    const ai = new GoogleGenAI({ apiKey: key });
-    const model = 'gemini-flash-latest';
+  const ai = new GoogleGenAI({ apiKey: getApiKey() });
+  const model = 'gemini-flash-latest';
+  const promptPath = path.join(__dirname, 'prompts', 'format_homework.md');
 
-    const promptPath = path.join(__dirname, 'prompts', 'format_homework.md');
-    try {
-        const systemInstruction = await fs.readFile(promptPath, 'utf-8');
-        const requestText = "Форматируй этот текст как ученик: " + taskContent;
+  try {
+    const systemInstruction = await fs.readFile(promptPath, 'utf8');
+    const response = await ai.models.generateContent({
+      model,
+      contents: `Отформатируй этот текст как ученик: ${taskContent}`,
+      config: {
+        systemInstruction,
+      },
+    });
 
-        const response = await ai.models.generateContent({
-            model: model,
-            contents: requestText,
-            config: {
-                systemInstruction: systemInstruction,
-            }
-        });
+    const formattedText = response.text || '';
+    const targetPath = path.resolve(process.cwd(), fileName);
+    await fs.writeFile(targetPath, formattedText, 'utf8');
 
-        const formattedText = response.text || "";
+    return `Saved formatted homework to ${targetPath}\n\n${formattedText}`;
+  } catch (error: any) {
+    throw new Error(`Homework formatting failed: ${error.message}`);
+  }
+}
 
-        // Сохраняем в текущую рабочую директорию (сандбокс)
-        const targetPath = path.resolve(process.cwd(), fileName);
-        await fs.writeFile(targetPath, formattedText, 'utf-8');
+export async function listDocuments(): Promise<unknown> {
+  const homeworkLibrary = await getHomeworkLibraryModule();
+  return homeworkLibrary.listStoredDocuments();
+}
 
-        return `Задание успешно отформатировано и сохранено в файл: ${targetPath}\n\n[Результат форматирования]:\n${formattedText}`;
-    } catch (err: any) {
-        throw new Error(`Ошибка форматирования задания: ${err.message}`);
+export async function getSectionText(documentId: string, sectionNumber: number): Promise<string> {
+  if (!documentId || !documentId.trim()) {
+    throw new Error('documentId is required.');
+  }
+  if (!Number.isFinite(sectionNumber) || sectionNumber < 1) {
+    throw new Error('sectionNumber must be a positive integer.');
+  }
+
+  const homeworkLibrary = await getHomeworkLibraryModule();
+  return homeworkLibrary.getStoredSectionText(documentId.trim(), Math.floor(sectionNumber));
+}
+
+/**
+ * Generates an explainer video for a document section via NotebookLM,
+ * then downloads it and sends to the user in Telegram.
+ *
+ * @param documentId - The document identifier from the homework library
+ * @param sectionNumber - The section number to generate a video for
+ * @returns Status message describing the result
+ *
+ * @example
+ * const result = await homework.generateSectionVideo("istoriya-rossii-8", 17);
+ * //=> "✅ Video for section 17 generated and sent to Telegram."
+ */
+export async function generateSectionVideo(documentId: string, sectionNumber: number): Promise<string> {
+  if (!documentId || !documentId.trim()) {
+    throw new Error('documentId is required.');
+  }
+  if (!Number.isFinite(sectionNumber) || sectionNumber < 1) {
+    throw new Error('sectionNumber must be a positive integer.');
+  }
+
+  const docId = documentId.trim();
+  const secNum = Math.floor(sectionNumber);
+  const tmpDir = os.tmpdir();
+
+  // 1. Extract trimmed PDF for the section
+  console.log(`[homework] Extracting section ${secNum} PDF from "${docId}"...`);
+  const homeworkLibrary = await getHomeworkLibraryModule();
+  const { pdfBuffer, sectionName } = await homeworkLibrary.extractSectionPdf(docId, secNum);
+
+  const tmpPdfPath = path.join(tmpDir, `section_${docId}_${secNum}_${Date.now()}.pdf`);
+  await fs.writeFile(tmpPdfPath, pdfBuffer);
+  console.log(`[homework] Section PDF saved: ${tmpPdfPath} (${pdfBuffer.length} bytes)`);
+
+  const tmpVideoPath = path.join(tmpDir, `video_${docId}_${secNum}_${Date.now()}.mp4`);
+
+  try {
+    // 2. Create a new NotebookLM notebook
+    const notebookTitle = sectionName.replace(/\s+/g, ' ').trim().slice(0, 80) || `Section ${secNum}`;
+    console.log(`[homework] Creating NotebookLM notebook: "${notebookTitle}"...`);
+    const createResult = parseJsonOutput(
+      'notebooklm create',
+      (await runCommand('notebooklm', ['create', notebookTitle, '--json'])).stdout
+    );
+    const notebookId = extractNotebookId(createResult);
+    console.log(`[homework] Notebook created: ${notebookId}`);
+
+    // 3. Add the section PDF as a source using an explicit notebook ID.
+    console.log(`[homework] Adding PDF source to notebook...`);
+    const sourceResult = parseJsonOutput(
+      'notebooklm source add',
+      (
+        await runCommand(
+          'notebooklm',
+          ['source', 'add', tmpPdfPath, '-n', notebookId, '--type', 'file', '--json'],
+          300_000
+        )
+      ).stdout
+    );
+    const sourceId = extractSourceId(sourceResult);
+    console.log(`[homework] Source added: ${sourceId}. Waiting for processing...`);
+
+    // 4. Wait for source processing (up to 10 minutes).
+    // Poll the source list instead of using `source wait` because the CLI can
+    // occasionally throw an internal traceback even when the source finishes successfully.
+    await waitForSourceReady(notebookId, sourceId, 600_000, 5_000);
+    console.log(`[homework] Source processed successfully.`);
+
+    // 5. Generate video (explainer, Russian, auto style)
+    console.log(`[homework] Starting video generation (this may take 15-45 minutes)...`);
+    const videoPrompt = 'Твоя цель: превратить тему или параграф в **захватывающее видео**, в стиле Veritasium, которое заменит скучное чтение.';
+    const generateResult = parseJsonOutput(
+      'notebooklm generate video',
+      (
+        await runCommand(
+          'notebooklm',
+          [
+            'generate',
+            'video',
+            videoPrompt,
+            '-n',
+            notebookId,
+            '-s',
+            sourceId,
+            '--language',
+            'ru',
+            '--format',
+            'explainer',
+            '--style',
+            'auto',
+            '--retry',
+            '2',
+            '--json',
+          ],
+          60_000
+        )
+      ).stdout
+    );
+    const artifactId = extractTaskId(generateResult);
+    console.log(`[homework] Video generation started: ${artifactId}. Waiting for completion...`);
+
+    // 6. Wait for video generation (up to 45 minutes).
+    await waitForArtifactCompletion(notebookId, artifactId, 2_700_000, 15_000);
+    console.log(`[homework] Video generation completed!`);
+
+    // 7. Download the video
+    console.log(`[homework] Downloading video...`);
+    await runCommand('notebooklm', ['download', 'video', tmpVideoPath, '-a', artifactId, '-n', notebookId, '--force'], 120_000);
+    console.log(`[homework] Video downloaded: ${tmpVideoPath}`);
+
+    // 8. Send to Telegram
+    console.log(`[homework] Sending video to Telegram...`);
+    const projectRoot = process.env.PROJECT_ROOT || path.resolve(__dirname, '..', '..');
+    const messagePath = path.join(projectRoot, 'tools', 'message', 'index.ts');
+    const messageModule = await import(pathToFileURL(messagePath).href) as {
+      sendFiles: (files: string[]) => Promise<void>;
+    };
+    await messageModule.sendFiles([tmpVideoPath]);
+    console.log(`[homework] ✅ Video sent to Telegram!`);
+
+    return `✅ Видео для секции ${secNum} ("${sectionName}") сгенерировано и отправлено в Telegram.`;
+  } catch (error: any) {
+    throw new Error(
+      `Failed to generate section video for "${docId}" section ${secNum}: ${error.message}`
+    );
+  } finally {
+    // Cleanup temporary files
+    for (const tmpFile of [tmpPdfPath, tmpVideoPath]) {
+      try { await fs.unlink(tmpFile); } catch { /* ignore */ }
     }
+  }
 }

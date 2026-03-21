@@ -12,6 +12,11 @@
 
 import { actionContext } from './ActionContext.js';
 import { agentContext } from './AgentContext.js'; // Import agentContext
+import {
+  buildCompletionContinuationMessage,
+  buildCompletionWarning,
+  COMPLETION_SIGNAL_REGEX,
+} from './completion.js';
 import type { Session } from './Session.js';
 import type { ProviderConfig, ProviderStreamEvent } from '../types/index.js';
 import { ToolExecutionEngine } from './ToolExecutionEngine.js';
@@ -57,11 +62,6 @@ export interface ExecutorOptions {
 }
 
 const DEFAULT_MAX_ITERATIONS = 500;
-const SKILLS_SCORE_THRESHOLD = 0.8; // 80% minimum score for automated skill retrieval
-
-// Regex to capture FINISH("message") output from sandbox
-// Matches: __ACN_FINISH_START__"message"__ACN_FINISH_END__
-const FINISH_REGEX = /__ACN_FINISH_START__(.*?)__ACN_FINISH_END__/s;
 
 export class Executor {
   private session: Session;
@@ -81,82 +81,7 @@ export class Executor {
    * Execute a user message and return the final response
    */
   async execute(userMessage: string): Promise<string> {
-    // Run skills search if configured
-    let enhancedMessage = userMessage;
-
-    if (this.session.skillsService) {
-      try {
-        const skillResult = await this.session.skillsService.search(userMessage);
-
-        if (skillResult && skillResult.entries && skillResult.entries.length > 0) {
-          // Filter out entries that have already been added to the conversation (save tokens)
-          const newEntries = skillResult.entries.filter(entry => {
-            return !this.session.hasSkillBeenAdded(entry.entry.id);
-          });
-
-          if (newEntries.length > 0) {
-            // Format multiple entries as separate <skills> tags
-            const contents = newEntries.map(e => e.content);
-            const wrappedSkills = this.session.syntax.wrapSkillsMultiple
-              ? this.session.syntax.wrapSkillsMultiple(contents)
-              : contents.map(content => this.session.syntax.wrapSkills(content)).join('\n');
-            enhancedMessage = userMessage + '\n\n' + wrappedSkills;
-
-            // Mark these skill entries as added to prevent duplicates in future messages
-            const addedIds = newEntries.map(e => e.entry.id);
-            this.session.markSkillsAsAdded(addedIds);
-
-            // Debug log for skills retrieval
-            const skippedCount = skillResult.entries.length - newEntries.length;
-            if (skippedCount > 0) {
-              console.log(`[Executor] Retrieved ${newEntries.length} new skill(s) (${skippedCount} already in context, skipped) with scores: ${newEntries.map(e => (e.score * 100).toFixed(0) + '%').join(', ')}`);
-            } else {
-              console.log(`[Executor] Retrieved ${newEntries.length} skill(s) with scores: ${newEntries.map(e => (e.score * 100).toFixed(0) + '%').join(', ')}`);
-            }
-
-            // Call callback for each entry (or combine - using highest score for backward compatibility)
-            const topScore = newEntries[0]?.score ?? 0;
-            const combinedContent = newEntries.map(e => e.content).join('\n\n');
-            if (this.options.callbacks?.onSkillsRetrieved) {
-              this.options.callbacks.onSkillsRetrieved(combinedContent, topScore);
-            }
-          } else {
-            // All entries were already in context - nothing new to add
-            console.log(`[Executor] Skills search found ${skillResult.entries.length} matching entries, but all were already added to context (skipped to save tokens)`);
-          }
-        } else {
-          // Notify that search was performed but didn't meet threshold
-          if (skillResult && skillResult.entries && skillResult.entries.length > 0) {
-            const topEntry = skillResult.entries[0];
-            if (topEntry) {
-              console.log(`[Executor] Skills search found ${skillResult.entries.length} entries but none met 80% threshold. Top score: ${(topEntry.score * 100).toFixed(0)}%`);
-              if (this.options.callbacks?.onSkillsSearched) {
-                this.options.callbacks.onSkillsSearched(topEntry.score);
-              }
-            } else {
-              console.log(`[Executor] Skills search performed but found no matching entries`);
-              if (this.options.callbacks?.onSkillsSearched) {
-                this.options.callbacks.onSkillsSearched(null);
-              }
-            }
-          } else {
-            console.log(`[Executor] Skills search performed but found no matching entries`);
-            if (this.options.callbacks?.onSkillsSearched) {
-              this.options.callbacks.onSkillsSearched(null);
-            }
-          }
-        }
-      } catch (error) {
-        // Skills search failed - continue without skills
-        console.error('[Executor] Skills search error:', error);
-      }
-
-      // Clear pre-embedded words after search (deprecated but harmless)
-      this.session.skillsService.clearPreEmbeddedWords();
-    }
-
-    // Add (possibly enhanced) user message to history
-    this.session.addUserMessage(enhancedMessage);
+    this.session.addUserMessage(userMessage);
 
     // Shared execution helper for action/cli/file flows
     const toolEngine = new ToolExecutionEngine(this.session, {
@@ -180,13 +105,28 @@ export class Executor {
 
     let iterations = 0;
     let currentAssistantContent = '';
-    let continuationUserMessage = 'Continue with the user request.';
+    let continuationUserMessage = buildCompletionContinuationMessage();
 
     while (iterations < (this.options.maxIterations ?? DEFAULT_MAX_ITERATIONS)) {
       iterations++;
 
       // Load any pending file messages (e.g., screenshots) into context
       await this.processFileMessages();
+
+      const extraMessages = currentAssistantContent
+        ? [
+          {
+            role: 'assistant' as const,
+            content: currentAssistantContent,
+          },
+          {
+            role: 'user' as const,
+            content: continuationUserMessage,
+          },
+        ]
+        : [];
+
+      await this.session.refreshSkillsContext(extraMessages, this.options.callbacks);
 
       // Build messages for the provider
       const messages = this.buildMessages(currentAssistantContent, continuationUserMessage);
@@ -249,10 +189,10 @@ export class Executor {
 
       if (!processed.hasAction && !processed.hasCli && !hasFiles && !hasDiffs && !hasEdits) {
         // No action or CLI - check if we should finish or force continue
-        // We now REQUIRE FINISH() to be called.
+        // We now REQUIRE TASK_DONE()/FINISH() to be called.
         // If we have no new actions, we must tell the agent to finish.
         if (this.options.requireFinish) {
-          const warningMessage = 'SYSTEM: You haven\'t completed the task yet. To finish, you MUST call the `FINISH("message")` function with a description of what you have done and the result.';
+          const warningMessage = buildCompletionWarning();
 
           // Append warning and continue loop
           currentAssistantContent += '\n\n' + warningMessage;
@@ -263,7 +203,7 @@ export class Executor {
 
           // Reset assistant content for next turn
           currentAssistantContent = '';
-          continuationUserMessage = 'Please call FINISH("message") to complete the task.';
+          continuationUserMessage = buildCompletionContinuationMessage();
 
           continue; // Force next iteration
         } else {
@@ -345,18 +285,18 @@ export class Executor {
         this.options.callbacks.onObservation(observation);
       }
 
-      // Check for FINISH signal
-      const finishMatch = observation.match(FINISH_REGEX);
+      // Check for completion signal
+      const finishMatch = observation.match(COMPLETION_SIGNAL_REGEX);
       if (finishMatch) {
         try {
           // Parse the JSON message
           const rawFinishPayload = finishMatch[1];
           if (!rawFinishPayload) {
-            throw new Error('FINISH payload is empty');
+            throw new Error('Completion payload is empty');
           }
           const finishMessage = JSON.parse(rawFinishPayload);
 
-          // We found the finish signal!
+          // We found the completion signal.
           // Remove the signal from observation to keep history clean?
           // Or keep it as log? Let's keep it but maybe format it.
 
@@ -370,9 +310,9 @@ export class Executor {
 
           return finishMessage;
         } catch (e) {
-          console.error('Failed to parse FINISH message:', e);
+          console.error('Failed to parse completion message:', e);
           // Verify this doesn't loop infinitely if parse fails
-          observation += '\nSYSTEM: Failed to parse FINISH message. Ensure it is a valid string.';
+          observation += '\nSYSTEM: Failed to parse completion message. Ensure it is a valid string.';
         }
       }
 
@@ -382,7 +322,7 @@ export class Executor {
         observation,
         this.session.syntax,
         filename,
-        enhancedMessage
+        userMessage
       );
 
       // Check if this loop type commits messages after each action

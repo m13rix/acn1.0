@@ -1,0 +1,10 @@
+{
+  "title": "Exploring the subject catalog",
+  "content": "Use the 'getCatalog' method to view the hierarchical structure of topics and categories for a specific subject. This is the primary discovery tool for understanding what content is available and for obtaining 'category_id' values required for further exploration.",
+  "examples": [
+    "Show me all the topics available in the EGE mathematics catalog.",
+    "What categories are there for computer science?",
+    "List the hierarchy of physics topics."
+  ],
+  "scoreThreshold": 0.7
+}

@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Homework Library</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;700;800&family=IBM+Plex+Mono:wght@400;500&family=Cormorant+Garamond:wght@600&display=swap"
+    rel="stylesheet">
+  <link rel="stylesheet" href="styles/main.css">
+</head>
+
+<body>
+  <div class="page-shell">
+    <aside class="control-panel">
+      <div class="brand-block">
+        <div class="eyebrow">ACN Homework</div>
+        <h1>Textbook Library</h1>
+        <p>Upload a PDF, pick the contents page, apply the page offset, and let Gemini build section mappings.</p>
+      </div>
+
+      <section class="panel-card">
+        <div class="section-heading">1. Choose PDF</div>
+        <label id="drop-zone" class="drop-zone">
+          <input id="pdf-file" type="file" accept="application/pdf,.pdf">
+          <span class="drop-title">Drop textbook PDF here</span>
+          <span class="drop-subtitle" id="drop-label">or click to select a file</span>
+        </label>
+      </section>
+
+      <section class="panel-card">
+        <div class="section-heading">2. Document setup</div>
+        <label class="field">
+          <span>Title</span>
+          <input id="title-input" type="text" placeholder="Auto from filename if empty">
+        </label>
+
+        <div class="field-grid">
+          <label class="field">
+            <span>Split by</span>
+            <select id="section-type">
+              <option value="paragraphs">Paragraphs</option>
+              <option value="chapters">Chapters</option>
+              <option value="articles">Articles</option>
+              <option value="sections">Sections</option>
+              <option value="custom">Custom</option>
+            </select>
+          </label>
+
+          <label class="field hidden" id="custom-type-field">
+            <span>Custom label</span>
+            <input id="custom-type-input" type="text" placeholder="For example: clauses">
+          </label>
+        </div>
+
+        <div class="field-grid">
+          <label class="field">
+            <span>Page offset</span>
+            <input id="page-offset" type="number" value="0">
+          </label>
+
+          <label class="field">
+            <span>TOC page (PDF)</span>
+            <input id="toc-page" type="number" min="1" value="1">
+          </label>
+        </div>
+
+        <div class="quick-actions">
+          <button id="jump-first" class="ghost-button" type="button">Jump to first</button>
+          <button id="jump-last" class="ghost-button" type="button">Jump to last</button>
+          <button id="use-current-page" class="ghost-button strong" type="button">Use current as TOC</button>
+        </div>
+
+        <div id="ingest-status" class="status-line"></div>
+        <button id="ingest-button" class="primary-button" type="button">Add textbook</button>
+      </section>
+
+      <section class="panel-card compact-card">
+        <div class="section-heading">Current viewer</div>
+        <div class="viewer-meta">
+          <div><span class="meta-label">PDF page</span><strong id="current-page-label">-</strong></div>
+          <div><span class="meta-label">Printed page</span><strong id="logical-page-label">-</strong></div>
+          <div><span class="meta-label">TOC page</span><strong id="toc-page-label">-</strong></div>
+          <div><span class="meta-label">Total pages</span><strong id="total-pages-label">-</strong></div>
+        </div>
+      </section>
+    </aside>
+
+    <main class="workspace">
+      <section class="viewer-panel">
+        <header class="viewer-toolbar">
+          <div>
+            <div class="eyebrow">Page Review</div>
+            <h2 id="viewer-title">No PDF selected</h2>
+          </div>
+          <div class="pager-controls">
+            <button id="prev-page" class="ghost-button" type="button">Prev</button>
+            <button id="next-page" class="ghost-button" type="button">Next</button>
+          </div>
+        </header>
+        <div class="viewer-stage">
+          <canvas id="pdf-canvas"></canvas>
+          <div id="viewer-placeholder" class="viewer-placeholder">
+            Load a PDF to preview the last page first and choose the table of contents page.
+          </div>
+        </div>
+      </section>
+
+      <section class="library-panel">
+        <header class="library-header">
+          <div>
+            <div class="eyebrow">Stored documents</div>
+            <h2>Library index</h2>
+          </div>
+          <button id="refresh-documents" class="ghost-button" type="button">Refresh</button>
+        </header>
+        <div id="documents-list" class="documents-list"></div>
+      </section>
+    </main>
+  </div>
+
+  <template id="document-card-template">
+    <article class="document-card">
+      <div class="document-topline">
+        <div>
+          <h3 class="document-title"></h3>
+          <div class="document-id"></div>
+        </div>
+        <a class="document-link" target="_blank" rel="noreferrer">Open PDF</a>
+      </div>
+      <div class="document-stats"></div>
+      <div class="section-table-wrap">
+        <table class="section-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Name</th>
+              <th>Pages</th>
+            </tr>
+          </thead>
+          <tbody class="section-rows"></tbody>
+        </table>
+      </div>
+    </article>
+  </template>
+
+  <script type="module" src="app.js"></script>
+</body>
+
+</html>

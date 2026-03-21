@@ -20,6 +20,7 @@ tools:
   - search
   - message
   - agents
+  - utils
 
 memory:
   enabled: true
@@ -29,3 +30,4 @@ syntax: markdown
 skillsTable: analyzer_skills
 injectAgentsList: true
 requireFinish: false
+

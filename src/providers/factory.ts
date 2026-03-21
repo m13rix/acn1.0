@@ -3,8 +3,9 @@ import { Provider } from '../types/index.js';
 import { GeminiProvider } from './gemini.js';
 import { OpenRouterProvider } from './openrouter.js';
 import { OllamaProvider } from './ollama.js';
+import { OpenAICodexProvider } from './openai-codex/index.js';
 
-export type ProviderName = 'gemini' | 'openrouter' | 'ollama' | string;
+export type ProviderName = 'gemini' | 'openrouter' | 'ollama' | 'openai-codex' | string;
 
 export function createProvider(name: ProviderName, apiKey?: string): Provider {
     const normalized = name.toLowerCase();
@@ -19,6 +20,10 @@ export function createProvider(name: ProviderName, apiKey?: string): Provider {
 
     if (normalized === 'ollama') {
         return new OllamaProvider(); // Ollama usually doesn't need API key, host is env
+    }
+
+    if (normalized === 'openai-codex') {
+        return new OpenAICodexProvider();
     }
 
     throw new Error(`Unknown provider: ${name}`);

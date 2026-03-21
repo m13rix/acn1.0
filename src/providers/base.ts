@@ -8,6 +8,9 @@
 import type {
   Message,
   Provider,
+  ProviderAuthChallenge,
+  ProviderAuthCompletion,
+  ProviderAuthStatus,
   ProviderConfig,
   ProviderResponse,
   ProviderStreamChunk,
@@ -85,6 +88,25 @@ export abstract class BaseProvider implements Provider {
     _toolRequest: ProviderToolRequest
   ): any {
     throw new Error(`Provider "${this.name}" does not support native tools`);
+  }
+
+  getAuthStatus(): Promise<ProviderAuthStatus> {
+    return Promise.resolve({
+      provider: this.name,
+      authenticated: true,
+    });
+  }
+
+  beginLogin(_options?: Record<string, unknown>): Promise<ProviderAuthChallenge> {
+    throw new Error(`Provider "${this.name}" does not support interactive login`);
+  }
+
+  completeLogin(_payload: ProviderAuthCompletion): Promise<ProviderAuthStatus> {
+    throw new Error(`Provider "${this.name}" does not support interactive login completion`);
+  }
+
+  logout(_profileId?: string): Promise<void> {
+    throw new Error(`Provider "${this.name}" does not support logout`);
   }
   
   /**

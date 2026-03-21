@@ -1,0 +1,21 @@
+name: realtime
+description: |
+  Tool for launching signed realtime sessions against the local realtime server and sending the launch link to the user in Telegram.
+
+  Shared defaults live in `tools/realtime/config.json`.
+  Leave `systemPrompt` empty there if you want the realtime server to keep its own mode-specific defaults.
+
+  Available functions:
+
+  - `realtime.startCall(optionalInstructions?: string): Promise<void>`
+    Generates a signed voice-only realtime link and sends it to the user.
+
+  - `realtime.startInteractiveListening(listeningText: string, optionalInstructions?: string): Promise<void>`
+    Generates a signed interactive-listening link, writes the provided text into a local `.txt` file in the current sandbox, sends the link, then sends the file to the user.
+
+  - `realtime.startUrlCall(url: string, optionalInstructions?: string): Promise<void>`
+    Generates a signed realtime session link for an HTTPS webpage and sends it to the user.
+
+  - `realtime.startHtmlCall(filePath: string, optionalInstructions?: string): Promise<void>`
+    Resolves a `.html` file inside the current sandbox, uploads it to the realtime server, then generates and sends a signed session link for the stored HTML document.
+module: index.ts

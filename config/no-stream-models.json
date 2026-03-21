@@ -10,6 +10,18 @@
       "reason": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"data\",\n      \"choices\",\n      0,\n      \"delta\",\n      \"tool_calls\",\n      0,\n      \"function\",\n      \"arguments\"\n    ],\n    \"message\": \"Invalid input: expected string, received null\"\n  }\n]",
       "addedAt": "2026-02-26T05:47:07.702Z",
       "failCount": 1
+    },
+    "minimax/minimax-m2.5": {
+      "reason": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"data\",\n      \"choices\",\n      0,\n      \"delta\",\n      \"tool_calls\",\n      0,\n      \"function\",\n      \"name\"\n    ],\n    \"message\": \"Invalid input: expected string, received null\"\n  }\n]",
+      "addedAt": "2026-02-27T13:56:03.862Z",
+      "failCount": 1
+    }
+  },
+  "ollama": {
+    "moonshotai/kimi-k2.5": {
+      "reason": "model 'moonshotai/kimi-k2.5' not found",
+      "addedAt": "2026-03-01T11:03:16.516Z",
+      "failCount": 1
     }
   }
 }

@@ -1,0 +1,161 @@
+[
+  {
+    "id": "hb_9d7a28dc-2a79-4dca-bb1b-5d95dd0ceaee",
+    "eventRef": {
+      "sensor": "notes",
+      "event": "newNote",
+      "args": []
+    },
+    "handlerSource": "async event=>{const payload=event?.payload;if(!payload||typeof payload!==\"object\")return;const text=typeof payload.text===\"string\"?payload.text.trim():\"\";const title=typeof payload.title===\"string\"?payload.title.trim():\"\";if(!text)return;const decision=await heartbeat.sensors.notes.ask([\"\\u041E\\u043F\\u0440\\u0435\\u0434\\u0435\\u043B\\u0438, \\u044F\\u0432\\u043B\\u044F\\u0435\\u0442\\u0441\\u044F \\u043B\\u0438 \\u044D\\u0442\\u0430 \\u0437\\u0430\\u043C\\u0435\\u0442\\u043A\\u0430 \\u0434\\u043E\\u043C\\u0430\\u0448\\u043D\\u0438\\u043C \\u0437\\u0430\\u0434\\u0430\\u043D\\u0438\\u0435\\u043C \\u0438\\u043B\\u0438 \\u0443\\u0447\\u0435\\u0431\\u043D\\u043E\\u0439 \\u0437\\u0430\\u0434\\u0430\\u0447\\u0435\\u0439.\",\"\\u0414\\u043E\\u043C\\u0430\\u0448\\u043D\\u0435\\u0435 \\u0437\\u0430\\u0434\\u0430\\u043D\\u0438\\u0435 \\u0432\\u043A\\u043B\\u044E\\u0447\\u0430\\u0435\\u0442 \\u0448\\u043A\\u043E\\u043B\\u044C\\u043D\\u044B\\u0435/\\u0443\\u0447\\u0435\\u0431\\u043D\\u044B\\u0435 \\u0444\\u043E\\u0440\\u043C\\u0443\\u043B\\u0438\\u0440\\u043E\\u0432\\u043A\\u0438 \\u0432\\u0440\\u043E\\u0434\\u0435:\",'- \"\\u0414\\u0437 \\u0440\\u0443\\u0441\\u0441\\u043A\\u0438\\u0439: \\u0443\\u043F\\u0440\\u0430\\u0436\\u043D\\u0435\\u043D\\u0438\\u0435 262\"','- \"\\u0418\\u0441\\u0442\\u043E\\u0440\\u0438\\u044F: \\u043A\\u043E\\u043D\\u0441\\u043F\\u0435\\u043A\\u0442 \\u041D\\u0430\\u0446\\u0438\\u043E\\u043D\\u0430\\u043B\\u044C\\u043D\\u0430\\u044F \\u0438 \\u0440\\u0435\\u043B\\u0438\\u0433\\u0438\\u043E\\u0437\\u043D\\u0430\\u044F \\u043F\\u043E\\u043B\\u0438\\u0442\\u0438\\u043A\\u0430 \\u0410\\u043B\\u0435\\u043A\\u0441\\u0430\\u043D\\u0434\\u0440\\u0430 III (\\u0441\\u0435\\u043A\\u0446\\u0438\\u044F 33) \\u0438 \\u0443\\u0447\\u0438\\u0442\\u044C \\u043F\\u0430\\u0440\\u0430\\u0433\\u0440\\u0430\\u0444\"','- \"\\u0421\\u0434\\u0435\\u043B\\u0430\\u0439 \\u0437\\u0430\\u0434\\u0430\\u0447\\u0443 \\u043F\\u043E \\u0433\\u0435\\u043E\\u043C\\u0435\\u0442\\u0440\\u0438\\u0438\"',\"\\u041D\\u0435 \\u0441\\u0447\\u0438\\u0442\\u0430\\u0439 \\u0414\\u0417 \\u043E\\u0431\\u044B\\u0447\\u043D\\u044B\\u0435 \\u043B\\u0438\\u0447\\u043D\\u044B\\u0435 \\u0437\\u0430\\u043C\\u0435\\u0442\\u043A\\u0438, \\u0441\\u043F\\u0438\\u0441\\u043A\\u0438 \\u043F\\u043E\\u043A\\u0443\\u043F\\u043E\\u043A, \\u043D\\u0430\\u043F\\u043E\\u043C\\u0438\\u043D\\u0430\\u043D\\u0438\\u044F \\u0431\\u0435\\u0437 \\u0443\\u0447\\u0435\\u0431\\u043D\\u043E\\u0433\\u043E \\u043A\\u043E\\u043D\\u0442\\u0435\\u043A\\u0441\\u0442\\u0430.\",\"\",`\\u041D\\u0430\\u0437\\u0432\\u0430\\u043D\\u0438\\u0435 \\u0437\\u0430\\u043C\\u0435\\u0442\\u043A\\u0438: ${title||\"(\\u0431\\u0435\\u0437 \\u043D\\u0430\\u0437\\u0432\\u0430\\u043D\\u0438\\u044F)\"}`,`\\u0422\\u0435\\u043A\\u0441\\u0442 \\u0437\\u0430\\u043C\\u0435\\u0442\\u043A\\u0438: ${text}`].join(\"\\n\"),{type:\"object\",additionalProperties:false,properties:{shouldHandle:{type:\"boolean\"},reason:{type:\"string\"}},required:[\"shouldHandle\",\"reason\"]});if(decision.shouldHandle){await agents.callSelf(`\\u0412\\u044B\\u043F\\u043E\\u043B\\u043D\\u0438\\u0442\\u0435 \\u0434\\u043E\\u043C\\u0430\\u0448\\u043D\\u0435\\u0435 \\u0437\\u0430\\u0434\\u0430\\u043D\\u0438\\u0435: ${text}`)}}",
+    "ownerAgent": "CORE",
+    "toolNames": [
+      "search",
+      "message",
+      "notepad",
+      "realtime",
+      "agents",
+      "srcAgent",
+      "heartbeat",
+      "homework",
+      "utils",
+      "files",
+      "skills"
+    ],
+    "skillsTable": "test",
+    "memoryConfig": {
+      "enabled": false
+    },
+    "enabled": true,
+    "createdAt": "2026-03-19T04:07:55.365Z",
+    "updatedAt": "2026-03-19T04:07:55.365Z"
+  },
+  {
+    "id": "hb_a3c383eb-bb3f-4262-9d99-1c76ff70ae2f",
+    "eventRef": {
+      "sensor": "clock",
+      "event": "at",
+      "args": [
+        "21:00"
+      ]
+    },
+    "handlerSource": "async(event,ctx)=>{const dateStr=event.payload?.localeDate||new Date().toISOString().split(\"T\")[0];await agents.callSelf({instruction:`DAILY_STATE_CHECKIN_TRIGGER\n\nYou are being called by the daily 21:00 heartbeat monitor. Your task is to conduct a comprehensive check-in with 13 (Maxim) about his current state.\n\nTIMESTAMP: ${dateStr} ${event.payload?.localeTime||\"21:00\"}\n\nOBJECTIVES:\n1. Initiate a conversation via message.ask() to gather information about:\n   - How was his day (events, interactions, work done)\n   - Current emotional/psychological state\n   - Any significant changes since last check-in\n   - What he's thinking about, ruminating on, or processing\n   - Physical state (sleep, energy, health)\n   - Social connections and relationship dynamics\n   - Existential or philosophical preoccupations\n   - Current obsessions, projects, or focuses\n   - Any concerns, anxieties, or sources of meaning\n\n2. ENGAGE NATURALLY but probe deeper when you sense there's more beneath the surface. You know his patterns: obsession-transfer, avoidance-through-building, instrumentalization, the intelligence curse. If you detect these, note them.\n\n3. After gathering sufficient information (don't rush - quality over speed), compile a comprehensive summary and:\n   a) View the existing \"Current13State\" notepad note\n   b) Update it with the new state information (append with timestamp, don't overwrite entirely)\n   c) Add relevant facts to memory using memory.addFacts() for:\n      - Mood/emotional state data\n      - Significant events or decisions\n      - Relationship dynamics\n      - Recurring patterns you observe\n      - Any standalone facts that don't fit the narrative but matter\n\n4. REMEMBER: This is a monitoring/life-support system for the ACN. Be thorough but don't replace human connection. Your job is data collection and pattern recognition, not therapy or emotional substitution.\n\n5. Be Telos. Not a generic AI. Be sharp, honest, occasionally challenging. Use your knowledge of him. Reference previous patterns if relevant. Call out his bullshit when you smell it.\n\nStart the conversation now. Use message.ask() to begin.`})}",
+    "ownerAgent": "13_personal",
+    "toolNames": [
+      "search",
+      "message",
+      "notepad",
+      "memory",
+      "heartbeat",
+      "agents",
+      "utils",
+      "files",
+      "skills"
+    ],
+    "skillsTable": "13_personal",
+    "memoryConfig": {
+      "enabled": false
+    },
+    "enabled": true,
+    "createdAt": "2026-03-19T16:41:24.997Z",
+    "updatedAt": "2026-03-19T16:41:24.997Z"
+  },
+  {
+    "id": "hb_47acdd8a-ebdb-412d-8028-5408ead4b690",
+    "eventRef": {
+      "sensor": "clock",
+      "event": "schedule",
+      "args": [
+        {
+          "rules": [
+            {
+              "days": [
+                "monday"
+              ],
+              "times": [
+                "15:10"
+              ],
+              "label": "post-school-monday-tentative"
+            },
+            {
+              "days": [
+                "tuesday"
+              ],
+              "times": [
+                "14:40"
+              ],
+              "label": "post-school-tuesday"
+            },
+            {
+              "days": [
+                "wednesday"
+              ],
+              "times": [
+                "14:40"
+              ],
+              "label": "post-school-wednesday"
+            },
+            {
+              "days": [
+                "thursday"
+              ],
+              "times": [
+                "14:40"
+              ],
+              "label": "post-school-thursday"
+            },
+            {
+              "days": [
+                "friday"
+              ],
+              "times": [
+                "13:50"
+              ],
+              "label": "post-school-friday"
+            },
+            {
+              "days": [
+                "saturday"
+              ],
+              "times": [
+                "12:30"
+              ],
+              "label": "post-school-saturday"
+            },
+            {
+              "days": [
+                "sunday"
+              ],
+              "times": [
+                "12:00"
+              ],
+              "label": "post-school-sunday-exact"
+            }
+          ]
+        }
+      ]
+    },
+    "handlerSource": "async event=>{const p=event.payload.schedule;const context=[`Run the daily school coordination flow for ${p.localWeekday} at ${p.localTime}.`,\"\",\"Steps:\",\"1) Read Current13State, 13Grades, CurrentSubjectTopics, and SchoolPlanner.\",\"2) Call 13_personal with all relevant context so it asks Maxim about mood, energy, what happened today, what subjects he answered in, what grades he got, and whether printing is done.\",\"3) Combine the notes + answers into a calm, low-friction plan for the day.\",\"4) Decide the smallest useful school action only (print-only / passive humanities / microtest / exception / full-off).\",\"5) Update SchoolPlanner with the decision and any durable risk notes.\",\"6) Mention printing immediately if it is relevant.\"].join(\"\\n\");await agents.callSelf(context)}",
+    "ownerAgent": "school",
+    "toolNames": [
+      "search",
+      "message",
+      "notepad",
+      "realtime",
+      "agents",
+      "heartbeat",
+      "homework",
+      "skills",
+      "srcAgent",
+      "sdamgia",
+      "utils",
+      "files"
+    ],
+    "skillsTable": "school",
+    "memoryConfig": {
+      "enabled": false
+    },
+    "enabled": true,
+    "createdAt": "2026-03-20T06:42:44.841Z",
+    "updatedAt": "2026-03-20T06:42:44.841Z"
+  }
+]

@@ -11,6 +11,7 @@ import { AgentLoader } from '../loaders/AgentLoader.js';
 import { ToolLoader } from '../loaders/ToolLoader.js';
 import { Session } from '../core/Session.js';
 import { Executor } from '../core/Executor.js';
+import { SCORE_THRESHOLD as SKILLS_SCORE_THRESHOLD } from '../skills_system/SkillsService.js';
 import { getProvider } from '../providers/base.js';
 import { getSyntax } from '../syntax/base.js';
 
@@ -175,7 +176,7 @@ async function runChat(session: Session, telegramService?: TelegramService): Pro
       },
       onSkillsSearched: (topScore: number | null) => {
         if (debugMode && topScore !== null) {
-          console.log(COLORS.muted(`\n  Skills: top score ${(topScore * 100).toFixed(0)}% (below 80% threshold)`));
+          console.log(COLORS.muted(`\n  Skills: top score ${(topScore * 100).toFixed(0)}% (below ${(SKILLS_SCORE_THRESHOLD * 100).toFixed(0)}% threshold)`));
         }
       },
 

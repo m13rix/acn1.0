@@ -1,15 +1,188 @@
 name: clock
 description: >
-  Time management sensor.
-  
-  Triggers:
-  - heartbeat.sensors.clock.events.every("10m") -> Repeats every interval. (Formats: s, m, h)
-  - heartbeat.sensors.clock.events.at("14:00") -> Fires daily at specific HH:MM.
-  - heartbeat.sensors.clock.events.after("5m") -> Fires once after delay.
-
-  Context:
-  Returns current ISO time, local time, and date.
-  
-minillm:
-  model: openai/gpt-oss-20b
-  provider: openrouter
+  Time-based heartbeat sensor.
+events:
+  - name: every
+    description: Fires when the internal heartbeat clock reaches a supported interval.
+    argsSchema:
+      type: array
+      items:
+        - type: string
+          description: Interval label such as 1s, 5s, 10s, 1m, 5m, 10m, or 1h.
+      minItems: 1
+      maxItems: 1
+    payloadSchema:
+      type: object
+      additionalProperties: false
+      properties:
+        iso:
+          type: string
+        localeTime:
+          type: string
+        localeDate:
+          type: string
+        weekday:
+          type: string
+        hour:
+          type: integer
+        minute:
+          type: integer
+        second:
+          type: integer
+        timestamp:
+          type: integer
+      required:
+        - iso
+        - localeTime
+        - localeDate
+        - weekday
+        - hour
+        - minute
+        - second
+        - timestamp
+  - name: at
+    description: Fires at a specific local HH:MM once per day.
+    argsSchema:
+      type: array
+      items:
+        - type: string
+          description: Time in local HH:MM format.
+      minItems: 1
+      maxItems: 1
+    payloadSchema:
+      type: object
+      additionalProperties: false
+      properties:
+        iso:
+          type: string
+        localeTime:
+          type: string
+        localeDate:
+          type: string
+        weekday:
+          type: string
+        hour:
+          type: integer
+        minute:
+          type: integer
+        second:
+          type: integer
+        timestamp:
+          type: integer
+      required:
+        - iso
+        - localeTime
+        - localeDate
+        - weekday
+        - hour
+        - minute
+        - second
+        - timestamp
+  - name: schedule
+    description: >
+      Fires on the device's local clock when any schedule rule matches the
+      current weekday and HH:MM. Use one arg object with a rules array; each
+      rule can target one or more weekdays and one or more times.
+    argsSchema:
+      type: array
+      items:
+        - type: object
+          additionalProperties: false
+          properties:
+            rules:
+              type: array
+              minItems: 1
+              items:
+                type: object
+                additionalProperties: false
+                properties:
+                  days:
+                    type: array
+                    minItems: 1
+                    items:
+                      type: string
+                    description: Weekday names or abbreviations, such as Monday or Mon.
+                  times:
+                    type: array
+                    minItems: 1
+                    items:
+                      type: string
+                    description: Local 24h times in HH:MM format. One rule may contain several times.
+                  label:
+                    type: string
+                    description: Optional human-readable label for the rule.
+                required:
+                  - days
+                  - times
+          required:
+            - rules
+      minItems: 1
+      maxItems: 1
+    payloadSchema:
+      type: object
+      additionalProperties: false
+      properties:
+        iso:
+          type: string
+        localeTime:
+          type: string
+        localeDate:
+          type: string
+        weekday:
+          type: string
+        hour:
+          type: integer
+        minute:
+          type: integer
+        second:
+          type: integer
+        timestamp:
+          type: integer
+        schedule:
+          type: object
+          additionalProperties: false
+          properties:
+            matchedRuleIndexes:
+              type: array
+              items:
+                type: integer
+            matchedRules:
+              type: array
+              items:
+                type: object
+                additionalProperties: false
+                properties:
+                  label:
+                    type:
+                      - string
+                      - 'null'
+                  days:
+                    type: array
+                    items:
+                      type: string
+                  times:
+                    type: array
+                    items:
+                      type: string
+                required:
+                  - days
+                  - times
+            localWeekday:
+              type: string
+            localTime:
+              type: string
+          required:
+            - matchedRuleIndexes
+            - matchedRules
+            - localWeekday
+            - localTime
+      required:
+        - iso
+        - localeTime
+        - localeDate
+        - weekday
+        - hour
+        - minute
+        - second
+        - timestamp
+        - schedule

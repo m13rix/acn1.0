@@ -3,20 +3,30 @@ description: AI-Director for creating high-quality documentary videos from text 
 
 model: moonshotai/kimi-k2.5
 provider: openrouter
-
 systemPrompt: prompts/system.md
+subagentPrompt: prompts/subagent.md
 
 modelSwitching:
+  mode: whitelist
   whitelist:
     - x-ai/grok-4.1-fast
     - deepseek/deepseek-v3.2
+    - minimax/minimax-m2.5
   selector:
     model: openai/gpt-oss-20b
     provider: openrouter
 
 tools:
   - editor
+  - message
+  - utils
 
-loop: message-passthrough
+memory:
+  enabled: false
+
+loop: provider-tools
 syntax: markdown
 skillsTable: director
+injectAgentsList: false
+requireFinish: true
+

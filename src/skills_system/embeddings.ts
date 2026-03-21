@@ -11,8 +11,13 @@ const ai = new GoogleGenAI({
   apiKey: process.env.GEMINI_KEY!
 });
 
+const EMBEDDING_MODEL = 'gemini-embedding-001';
+const EMBEDDING_TASK_TYPE = 'SEMANTIC_SIMILARITY';
+const EMBEDDING_BATCH_SIZE = 64;
+
 // Embedding cache to avoid redundant API calls
 const cache = new Map<string, number[]>();
+const inFlight = new Map<string, Promise<number[]>>();
 
 /**
  * Normalize text for cache key
@@ -21,32 +26,99 @@ function normalize(text: string): string {
   return text.toLowerCase().trim();
 }
 
+async function requestBatch(texts: string[]): Promise<number[][]> {
+  if (texts.length === 0) return [];
+
+  const res = await ai.models.embedContent({
+    model: EMBEDDING_MODEL,
+    contents: texts,
+    config: { taskType: EMBEDDING_TASK_TYPE }
+  });
+
+  const embeddings = (res.embeddings || []).map(item => item.values as number[]);
+  if (embeddings.length !== texts.length) {
+    throw new Error(`Embedding API returned ${embeddings.length} vectors for ${texts.length} texts.`);
+  }
+
+  return embeddings;
+}
+
+function chunk<T>(items: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    chunks.push(items.slice(i, i + size));
+  }
+  return chunks;
+}
+
 /**
  * Embed a single text, with caching
  */
 export async function embed(text: string): Promise<number[]> {
   const key = normalize(text);
 
-  if (cache.has(key)) {
-    return cache.get(key)!;
+  const cached = cache.get(key);
+  if (cached) return cached;
+
+  const pending = inFlight.get(key);
+  if (pending) return pending;
+
+  const [vector] = await embedBatch([text]);
+  if (!vector) {
+    throw new Error('Embedding API returned an empty vector.');
   }
-
-  const res = await ai.models.embedContent({
-    model: 'gemini-embedding-001',
-    contents: [text],
-    config: { taskType: 'SEMANTIC_SIMILARITY' }
-  });
-
-  const vector = res.embeddings![0].values as number[];
-  cache.set(key, vector);
   return vector;
 }
 
 /**
- * Embed multiple texts in parallel (with caching)
+ * Embed multiple texts with cache-aware batching.
  */
 export async function embedBatch(texts: string[]): Promise<number[][]> {
-  return Promise.all(texts.map(embed));
+  if (texts.length === 0) return [];
+
+  const normalized = texts.map(normalize);
+  const missing = new Map<string, string>();
+
+  for (let i = 0; i < texts.length; i++) {
+    const key = normalized[i];
+    if (!key) continue;
+    if (cache.has(key) || inFlight.has(key) || missing.has(key)) continue;
+    missing.set(key, texts[i]!);
+  }
+
+  for (const entries of chunk(Array.from(missing.entries()), EMBEDDING_BATCH_SIZE)) {
+    const batchPromise = requestBatch(entries.map(([, text]) => text));
+
+    entries.forEach(([key], index) => {
+      let pendingPromise: Promise<number[]>;
+      pendingPromise = batchPromise
+        .then(vectors => {
+          const vector = vectors[index];
+          if (!vector) {
+            throw new Error(`Embedding API did not return a vector for batch item ${index}.`);
+          }
+          cache.set(key, vector);
+          return vector;
+        })
+        .finally(() => {
+          if (inFlight.get(key) === pendingPromise) {
+            inFlight.delete(key);
+          }
+        });
+
+      inFlight.set(key, pendingPromise);
+    });
+  }
+
+  return Promise.all(normalized.map((key, index) => {
+    const cached = cache.get(key);
+    if (cached) return cached;
+
+    const pending = inFlight.get(key);
+    if (pending) return pending;
+
+    throw new Error(`Missing embedding promise for text at index ${index}.`);
+  }));
 }
 
 /**
@@ -71,9 +143,11 @@ export function cosineSimilarity(a: number[] | ArrayLike<number>, b: number[] | 
   let normB = 0;
 
   for (let i = 0; i < a.length; i++) {
-    dotProduct += a[i] * b[i];
-    normA += a[i] * a[i];
-    normB += b[i] * b[i];
+    const aValue = a[i] ?? 0;
+    const bValue = b[i] ?? 0;
+    dotProduct += aValue * bValue;
+    normA += aValue * aValue;
+    normB += bValue * bValue;
   }
 
   const magnitude = Math.sqrt(normA) * Math.sqrt(normB);
@@ -87,11 +161,15 @@ export function cosineSimilarity(a: number[] | ArrayLike<number>, b: number[] | 
  */
 export function clearCache(): void {
   cache.clear();
+  inFlight.clear();
 }
 
 /**
  * Get cache stats
  */
-export function getCacheStats(): { size: number } {
-  return { size: cache.size };
+export function getCacheStats(): { size: number; inFlight: number } {
+  return {
+    size: cache.size,
+    inFlight: inFlight.size,
+  };
 }

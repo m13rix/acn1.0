@@ -1,476 +1,902 @@
-/**
- * Heartbeat Service
- *
- * The central orchestrator for the ACN Heartbeat System.
- * - Manages Tasks (CRUD, Persistence)
- * - Manages Sensors (Loading, Lifecycle)
- * - Handles Events -> Pulse Logic -> Action Execution
- */
-
 import * as fs from 'fs';
 import * as path from 'path';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 import { EventEmitter } from 'events';
+import { randomUUID } from 'crypto';
 import * as yaml from 'js-yaml';
 
-import { HeartbeatTask, Sensor, SensorConfig } from './types.js';
-import { Pulse } from './Pulse.js';
+import {
+  HeartbeatBindingOptions,
+  HeartbeatBindingPatch,
+  HeartbeatBindingQuery,
+  HeartbeatBindingRecord,
+  HeartbeatEventRef,
+  HeartbeatSensorDescriptor,
+  HeartbeatSensorEvent,
+  Sensor,
+  SensorAskInput,
+  SensorConfig,
+} from './types.js';
 import { LocalSandbox } from '../sandbox/LocalSandbox.js';
-import { runAgent } from '../core/AgentRunner.js';
-import { getAgentSandbox, getParentAgentName } from '../core/AgentContext.js';
 import { ToolLoader } from '../loaders/ToolLoader.js';
 import { AgentLoader } from '../loaders/AgentLoader.js';
-import { actionContext } from '../core/ActionContext.js';
+import { getAgentSandbox, getCurrentAgent } from '../core/AgentContext.js';
+import { serializeHandlerSource, validateHandlerSource } from './handlerSource.js';
+import { structuredLlm } from '../utils/structuredLlm.js';
+import type { AgentMemoryConfig, LoadedAgent } from '../types/index.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(__dirname, '..', '..');
-const DATA_DIR = path.join(ROOT_DIR, 'data', 'heartbeat');
-const TOOLS_DIR = path.join(ROOT_DIR, 'tools', 'heartbeat', 'sensors');
-const TASKS_FILE = path.join(DATA_DIR, 'tasks.json');
+const DEFAULT_DATA_DIR = path.join(ROOT_DIR, 'data', 'heartbeat');
+const DEFAULT_SENSORS_DIR = path.join(ROOT_DIR, 'tools', 'heartbeat', 'sensors');
+const DEFAULT_BINDINGS_FILE = path.join(DEFAULT_DATA_DIR, 'bindings.json');
+const DEFAULT_TASKS_FILE = path.join(DEFAULT_DATA_DIR, 'tasks.json');
+
+interface HeartbeatPaths {
+  dataDir: string;
+  sensorsDir: string;
+  bindingsFile: string;
+  legacyTasksFile: string;
+}
+
+interface InitializeOptions {
+  enableWatcher?: boolean;
+}
+
+interface HeartbeatServiceOptions {
+  dataDir?: string;
+  sensorsDir?: string;
+  bindingsFile?: string;
+  legacyTasksFile?: string;
+  toolLoader?: ToolLoader;
+  agentLoader?: AgentLoader;
+}
+
+type LoadedSensor = {
+  runtime: Sensor;
+  descriptor: HeartbeatSensorDescriptor;
+};
+
+function defaultPaths(options: HeartbeatServiceOptions = {}): HeartbeatPaths {
+  const dataDir = options.dataDir || process.env.HEARTBEAT_DATA_DIR || DEFAULT_DATA_DIR;
+  const sensorsDir = options.sensorsDir || process.env.HEARTBEAT_SENSORS_DIR || DEFAULT_SENSORS_DIR;
+  return {
+    dataDir,
+    sensorsDir,
+    bindingsFile: options.bindingsFile || path.join(dataDir, 'bindings.json'),
+    legacyTasksFile: options.legacyTasksFile || path.join(dataDir, 'tasks.json'),
+  };
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(item => stableStringify(item)).join(',')}]`;
+  }
+
+  if (isPlainObject(value)) {
+    const keys = Object.keys(value).sort();
+    return `{${keys.map(key => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(',')}}`;
+  }
+
+  return JSON.stringify(value);
+}
+
+function formatLogValue(value: unknown): string {
+  try {
+    return stableStringify(value);
+  } catch (error) {
+    return `[unserializable: ${error instanceof Error ? error.message : String(error)}]`;
+  }
+}
+
+function sameArgs(left: unknown[], right: unknown[]): boolean {
+  return stableStringify(left) === stableStringify(right);
+}
+
+function shouldLogEventDispatch(event: HeartbeatSensorEvent, matchingCount: number): boolean {
+  if (matchingCount > 0) {
+    return true;
+  }
+
+  if (event.sensor === 'clock' && event.event === 'every') {
+    return false;
+  }
+
+  return true;
+}
+
+function ensureEventRef(eventRef: HeartbeatEventRef): HeartbeatEventRef {
+  if (!eventRef || typeof eventRef !== 'object') {
+    throw new Error('eventRef must be an object.');
+  }
+  if (typeof eventRef.sensor !== 'string' || !eventRef.sensor.trim()) {
+    throw new Error('eventRef.sensor must be a non-empty string.');
+  }
+  if (typeof eventRef.event !== 'string' || !eventRef.event.trim()) {
+    throw new Error('eventRef.event must be a non-empty string.');
+  }
+  if (!Array.isArray(eventRef.args)) {
+    throw new Error('eventRef.args must be an array.');
+  }
+
+  return {
+    sensor: eventRef.sensor.trim(),
+    event: eventRef.event.trim(),
+    args: [...eventRef.args],
+  };
+}
+
+function cloneBinding(record: HeartbeatBindingRecord): HeartbeatBindingRecord {
+  return JSON.parse(JSON.stringify(record)) as HeartbeatBindingRecord;
+}
+
+function projectBinding(record: HeartbeatBindingRecord, query?: HeartbeatBindingQuery): Record<string, unknown> {
+  const includeCode = query?.includeCode ?? false;
+  const fields = query?.fields;
+  const copy = cloneBinding(record) as unknown as Record<string, unknown>;
+
+  if (!includeCode) {
+    delete copy.handlerSource;
+  }
+
+  if (!fields || fields.length === 0) {
+    return copy;
+  }
+
+  const result: Record<string, unknown> = {};
+  for (const field of fields) {
+    if (field === 'handlerSource' && !includeCode) {
+      continue;
+    }
+    if (field in copy) {
+      result[field] = copy[field];
+    }
+  }
+  return result;
+}
+
+function normalizeToolSnapshot(toolNames: string[]): string[] {
+  const ordered = new Set<string>();
+  for (const toolName of toolNames) {
+    const trimmed = String(toolName || '').trim();
+    if (trimmed) {
+      ordered.add(trimmed);
+    }
+  }
+  ordered.add('heartbeat');
+  return Array.from(ordered);
+}
+
+const CLOCK_WEEKDAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'] as const;
+const CLOCK_WEEKDAY_ALIASES: Record<string, (typeof CLOCK_WEEKDAYS)[number]> = {
+  sun: 'sunday',
+  sunday: 'sunday',
+  mon: 'monday',
+  monday: 'monday',
+  tue: 'tuesday',
+  tues: 'tuesday',
+  tuesday: 'tuesday',
+  wed: 'wednesday',
+  weds: 'wednesday',
+  wednesday: 'wednesday',
+  thu: 'thursday',
+  thur: 'thursday',
+  thurs: 'thursday',
+  thursday: 'thursday',
+  fri: 'friday',
+  friday: 'friday',
+  sat: 'saturday',
+  saturday: 'saturday',
+};
+
+interface ClockScheduleRule {
+  days: string[];
+  times: string[];
+  label?: string;
+}
+
+interface ClockScheduleDefinition {
+  rules: ClockScheduleRule[];
+}
+
+interface ClockScheduleMatch {
+  matchedRuleIndexes: number[];
+  matchedRules: ClockScheduleRule[];
+}
+
+function pad2(value: number): string {
+  return value.toString().padStart(2, '0');
+}
+
+function getClockWeekday(now: Date): (typeof CLOCK_WEEKDAYS)[number] {
+  return CLOCK_WEEKDAYS[now.getDay()]!;
+}
+
+function getClockTime(now: Date): string {
+  return `${pad2(now.getHours())}:${pad2(now.getMinutes())}`;
+}
+
+function normalizeClockWeekday(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const normalized = CLOCK_WEEKDAY_ALIASES[value.trim().toLowerCase()];
+  return normalized || null;
+}
+
+function normalizeClockTime(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const match = value.trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) {
+    return null;
+  }
+
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+
+  if (!Number.isInteger(hours) || !Number.isInteger(minutes) || hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
+    return null;
+  }
+
+  return `${pad2(hours)}:${pad2(minutes)}`;
+}
+
+function parseClockScheduleDefinition(args: unknown[]): ClockScheduleDefinition | null {
+  if (!Array.isArray(args) || args.length !== 1) {
+    return null;
+  }
+
+  const [rawDefinition] = args;
+  if (!isPlainObject(rawDefinition)) {
+    return null;
+  }
+
+  const rulesValue = rawDefinition['rules'];
+  if (!Array.isArray(rulesValue) || rulesValue.length === 0) {
+    return null;
+  }
+
+  const rules: ClockScheduleRule[] = [];
+  for (const ruleValue of rulesValue) {
+    if (!isPlainObject(ruleValue)) {
+      return null;
+    }
+
+    const rawDays = ruleValue['days'];
+    const rawTimes = ruleValue['times'];
+    if (!Array.isArray(rawDays) || !Array.isArray(rawTimes) || rawDays.length === 0 || rawTimes.length === 0) {
+      return null;
+    }
+
+    const days = rawDays.map(normalizeClockWeekday);
+    const times = rawTimes.map(normalizeClockTime);
+    if (days.some(day => !day) || times.some(time => !time)) {
+      return null;
+    }
+
+    const rule: ClockScheduleRule = {
+      days: Array.from(new Set(days as string[])),
+      times: Array.from(new Set(times as string[])),
+    };
+
+    const label = ruleValue['label'];
+    if (typeof label === 'string' && label.trim()) {
+      rule.label = label.trim();
+    }
+
+    rules.push(rule);
+  }
+
+  return { rules };
+}
+
+function getClockScheduleMatch(schedule: ClockScheduleDefinition, now: Date): ClockScheduleMatch | null {
+  const weekday = getClockWeekday(now);
+  const time = getClockTime(now);
+  const matchedRuleIndexes: number[] = [];
+  const matchedRules: ClockScheduleRule[] = [];
+
+  schedule.rules.forEach((rule, index) => {
+    if (rule.days.includes(weekday) && rule.times.includes(time)) {
+      matchedRuleIndexes.push(index);
+      matchedRules.push(rule);
+    }
+  });
+
+  if (matchedRuleIndexes.length === 0) {
+    return null;
+  }
+
+  return { matchedRuleIndexes, matchedRules };
+}
 
 export class HeartbeatService extends EventEmitter {
-    private static instance: HeartbeatService;
+  private static instance: HeartbeatService;
 
-    private tasks: Map<string, HeartbeatTask> = new Map();
-    private sensors: Map<string, Sensor> = new Map();
-    private sensorConfigs: Map<string, SensorConfig> = new Map();
+  private readonly paths: HeartbeatPaths;
+  private readonly toolLoader: ToolLoader;
+  private readonly agentLoader: AgentLoader;
+  private readonly bindings = new Map<string, HeartbeatBindingRecord>();
+  private readonly sensors = new Map<string, LoadedSensor>();
 
-    // Loaders
-    private toolLoader = new ToolLoader();
-    private agentLoader = new AgentLoader();
+  private initialized = false;
+  private initializing = false;
+  private started = false;
+  private bindingsWatcher?: fs.FSWatcher;
 
-    private initialized = false;
+  public constructor(options: HeartbeatServiceOptions = {}) {
+    super();
+    this.paths = defaultPaths(options);
+    this.toolLoader = options.toolLoader || new ToolLoader();
+    this.agentLoader = options.agentLoader || new AgentLoader();
+    this.ensureDataDir();
+  }
 
-    private constructor() {
-        super();
-        this.ensureDataDir();
+  public static getInstance(): HeartbeatService {
+    if (!HeartbeatService.instance) {
+      HeartbeatService.instance = new HeartbeatService();
+    }
+    return HeartbeatService.instance;
+  }
+
+  private log(message: string, details?: unknown): void {
+    if (typeof details === 'undefined') {
+      console.log(`[Heartbeat] ${message}`);
+      return;
+    }
+    console.log(`[Heartbeat] ${message}`, details);
+  }
+
+  private ensureDataDir(): void {
+    if (!fs.existsSync(this.paths.dataDir)) {
+      fs.mkdirSync(this.paths.dataDir, { recursive: true });
+    }
+  }
+
+  public async initialize(options: InitializeOptions = {}): Promise<void> {
+    if (this.initialized || this.initializing) {
+      return;
+    }
+    this.initializing = true;
+    try {
+      this.archiveLegacyTasksIfNeeded();
+      this.loadBindings();
+
+      if (options.enableWatcher !== false) {
+        this.watchBindings();
+      }
+
+      await this.loadSensors();
+
+      this.initialized = true;
+      this.log(`Initialized with ${this.bindings.size} binding(s) and ${this.sensors.size} sensor(s).`);
+      if (this.bindings.size > 0) {
+        this.log(`Loaded binding IDs: ${Array.from(this.bindings.keys()).join(', ')}`);
+      }
+    } finally {
+      this.initializing = false;
+    }
+  }
+
+  public async start(): Promise<void> {
+    if (this.started) {
+      return;
+    }
+    this.started = true;
+
+    for (const [sensorName, sensor] of this.sensors) {
+      try {
+        this.log(`Starting sensor '${sensorName}'.`);
+        await sensor.runtime.start((event) => {
+          void this.dispatchEvent({
+            sensor: sensorName,
+            event: event.event,
+            args: Array.isArray(event.args) ? event.args : [],
+            payload: event.payload,
+            occurredAt: event.occurredAt || new Date().toISOString(),
+          });
+        });
+        this.log(`Sensor '${sensorName}' started.`);
+      } catch (error) {
+        console.error(`[Heartbeat] Failed to start sensor '${sensorName}':`, error);
+      }
+    }
+  }
+
+  public async stop(): Promise<void> {
+    if (this.bindingsWatcher) {
+      this.bindingsWatcher.close();
+      this.bindingsWatcher = undefined;
     }
 
-    public static getInstance(): HeartbeatService {
-        if (!HeartbeatService.instance) {
-            HeartbeatService.instance = new HeartbeatService();
-        }
-        return HeartbeatService.instance;
+    const stops = Array.from(this.sensors.values()).map(sensor => sensor.runtime.stop());
+    await Promise.allSettled(stops);
+    this.started = false;
+  }
+
+  private archiveLegacyTasksIfNeeded(): void {
+    const tasksFile = this.paths.legacyTasksFile;
+    if (!fs.existsSync(tasksFile)) {
+      return;
     }
 
-    private ensureDataDir() {
-        if (!fs.existsSync(DATA_DIR)) {
-            fs.mkdirSync(DATA_DIR, { recursive: true });
-        }
+    const content = fs.readFileSync(tasksFile, 'utf-8').trim();
+    if (!content) {
+      fs.unlinkSync(tasksFile);
+      return;
     }
 
-    private initializing = false;
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const archivedPath = path.join(this.paths.dataDir, `tasks.legacy.${timestamp}.json`);
+    fs.renameSync(tasksFile, archivedPath);
+  }
 
-    public async initialize(options: { enableWatcher?: boolean } = {}) {
-        if (this.initialized || this.initializing) return;
-        this.initializing = true;
-
-        // 1. Load Tasks
-        this.loadTasks();
-
-        if (options.enableWatcher !== false) {
-            this.watchTasks();
-        } else {
-            // console.log('[Heartbeat] Task watching disabled (Tool Mode).');
-        }
-
-        // 2. Discover and Load Sensors (Configs & Modules only)
-        await this.loadSensors();
-
-        this.initialized = true;
+  private loadBindings(): void {
+    this.ensureDataDir();
+    if (!fs.existsSync(this.paths.bindingsFile)) {
+      this.bindings.clear();
+      return;
     }
 
-    public async start() {
-        console.log('[Heartbeat] Starting Active Service...');
-        // Start all sensors
-        for (const [name, sensor] of this.sensors) {
-            console.log(`[Heartbeat] Starting sensor: ${name}`);
-            try {
-                await sensor.start((event: string, payload?: any) => {
-                    this.handleEvent(name, event, payload);
-                });
-            } catch (e) {
-                console.error(`[Heartbeat] Failed to start sensor '${name}':`, e);
-            }
+    try {
+      const raw = JSON.parse(fs.readFileSync(this.paths.bindingsFile, 'utf-8'));
+      const next = new Map<string, HeartbeatBindingRecord>();
+      if (Array.isArray(raw)) {
+        for (const candidate of raw) {
+          if (!candidate || typeof candidate !== 'object') {
+            continue;
+          }
+          const record = candidate as HeartbeatBindingRecord;
+          if (typeof record.id !== 'string' || !record.id) {
+            continue;
+          }
+          next.set(record.id, {
+            ...record,
+            eventRef: ensureEventRef(record.eventRef),
+            toolNames: normalizeToolSnapshot(Array.isArray(record.toolNames) ? record.toolNames : []),
+            enabled: record.enabled !== false,
+          });
         }
+      }
+
+      this.bindings.clear();
+      for (const [id, record] of next) {
+        this.bindings.set(id, record);
+      }
+    } catch (error) {
+      console.error('[Heartbeat] Failed to load bindings:', error);
+    }
+  }
+
+  private saveBindings(): void {
+    const records = Array.from(this.bindings.values()).map(binding => cloneBinding(binding));
+    fs.writeFileSync(this.paths.bindingsFile, JSON.stringify(records, null, 2), 'utf-8');
+  }
+
+  private watchBindings(): void {
+    this.ensureDataDir();
+    if (this.bindingsWatcher) {
+      return;
     }
 
-    // ────────────────────────────────────────────────────────────────────────
-    // Task Management
-    // ────────────────────────────────────────────────────────────────────────
-
-    private loadTasks() {
-        if (fs.existsSync(TASKS_FILE)) {
-            try {
-                const data = JSON.parse(fs.readFileSync(TASKS_FILE, 'utf-8'));
-                if (Array.isArray(data)) {
-                    // Clear existing to avoid stale data (optional, but safer if we want exact sync)
-                    // actually, we might want to keep running tasks active? 
-                    // No, for now let's just update definitions.
-                    data.forEach(t => {
-                        // If task exists, we update it. If it doesn't, we add it.
-                        // If a task was deleted in file, we should arguably delete it here too.
-                        // For a full sync, we should probably re-create the map or mark missing ones.
-                        // Let's do a merge for now to be safe with active handlers.
-
-                        const existing = this.tasks.get(t.name);
-                        if (existing) {
-                            // Update properties but maybe keep runtime state? 
-                            // Actually, runtime state like 'remainingRepeats' IS persisted.
-                            // So we can just overwrite.
-                            Object.assign(existing, t);
-                        } else {
-                            this.tasks.set(t.name, t);
-                        }
-                    });
-                }
-            } catch (e) {
-                console.error('[Heartbeat] Failed to load tasks:', e);
-            }
+    try {
+      this.bindingsWatcher = fs.watch(this.paths.dataDir, (_eventType, filename) => {
+        if (!filename || filename !== path.basename(this.paths.bindingsFile)) {
+          return;
         }
+        this.loadBindings();
+      });
+    } catch (error) {
+      console.warn('[Heartbeat] Failed to watch bindings:', error);
+    }
+  }
+
+  private async loadSensors(): Promise<void> {
+    this.sensors.clear();
+
+    if (!fs.existsSync(this.paths.sensorsDir)) {
+      return;
     }
 
-    private watchTasks() {
-        if (!fs.existsSync(DATA_DIR)) return;
+    const entries = fs.readdirSync(this.paths.sensorsDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
 
-        let fsWait: NodeJS.Timeout | false = false;
+      const sensorDir = path.join(this.paths.sensorsDir, entry.name);
+      const configPath = path.join(sensorDir, 'sensor.yaml');
+      const modulePath = path.join(sensorDir, 'index.ts');
 
-        try {
-            fs.watch(TASKS_FILE, (eventType, filename) => {
-                if (filename && eventType === 'change') {
-                    if (fsWait) return;
-                    fsWait = setTimeout(() => {
-                        fsWait = false;
-                        this.loadTasks();
-                    }, 100); // Debounce
-                }
-            });
-        } catch (e) {
-            console.warn('[Heartbeat] Failed to set up file watcher for tasks:', e);
-        }
-    }
+      if (!fs.existsSync(configPath) || !fs.existsSync(modulePath)) {
+        continue;
+      }
 
-    private saveTasks() {
-        try {
-            const arr = Array.from(this.tasks.values());
-            fs.writeFileSync(TASKS_FILE, JSON.stringify(arr, null, 2), 'utf-8');
-        } catch (e) {
-            console.error('[Heartbeat] Failed to save tasks:', e);
-        }
-    }
-
-    public createTask(name: string, options: {
-        trigger: string;
-        condition?: string;
-        action: string;
-        maxRepeats?: number;
-    }): string {
-        if (this.tasks.has(name)) {
-            throw new Error(`Task '${name}' already exists.`);
+      try {
+        const config = yaml.load(fs.readFileSync(configPath, 'utf-8')) as SensorConfig;
+        if (!config?.name || !Array.isArray(config.events)) {
+          throw new Error(`Invalid sensor config for ${entry.name}`);
         }
 
-        // Capture Context
-        const agentName = getParentAgentName() || 'CORE'; // Fallback to CORE if system created
-        let toolNames: string[] = ['heartbeat', 'files', 'message']; // Defaults
-
-        const sandbox = getAgentSandbox();
-        if (sandbox instanceof LocalSandbox) {
-            toolNames = sandbox.getTools().map(t => t.config.name);
-        }
-
-        const task: HeartbeatTask = {
-            id: name, // Using name as unique ID
-            name: name,
-            trigger: options.trigger,
-            condition: options.condition,
-            action: options.action,
-            active: true,
-            maxRepeats: options.maxRepeats ?? -1,
-            remainingRepeats: options.maxRepeats ?? -1,
-            agentName,
-            tools: toolNames
+        const module = await import(pathToFileURL(modulePath).href);
+        const runtime: Sensor = {
+          start: module.start,
+          stop: module.stop,
+          getContext: module.getContext,
+          ask: module.ask,
         };
 
-        this.tasks.set(name, task);
-        this.saveTasks();
+        if (typeof runtime.start !== 'function' || typeof runtime.stop !== 'function') {
+          throw new Error(`Sensor '${entry.name}' must export start() and stop().`);
+        }
 
-        // Check if we need to wire up this task immediately (if sensor is running)
-        // Actually, logic is Event Driven: Listener is dynamic or global.
-        // We will just update our lookup.
-
-        return `Task '${name}' created successfully.`;
-    }
-
-    public listTasks(): string {
-        const currentAgent = getParentAgentName();
-
-        const active: string[] = [];
-        const inactive: string[] = [];
-
-        this.tasks.forEach(t => {
-            // Filter: Only show tasks for current agent (or if current is system/undefined, show all?)
-            // Let's be strict: only show own tasks.
-            if (currentAgent && t.agentName !== currentAgent) return;
-
-            if (t.active) {
-                const cond = t.condition ? ` -> condition: "${t.condition.slice(0, 30)}..."` : '';
-                const repeats = (t.maxRepeats && t.maxRepeats > 0) ? ` [${t.remainingRepeats} left]` : '';
-                active.push(`- **${t.name}**: ${t.trigger}${cond}${repeats}`);
-            } else {
-                inactive.push(`- **${t.name}**: Deactivated`);
-            }
+        this.sensors.set(config.name, {
+          runtime,
+          descriptor: {
+            name: config.name,
+            description: config.description || '',
+            events: config.events,
+          },
         });
+      } catch (error) {
+        console.error(`[Heartbeat] Failed to load sensor '${entry.name}':`, error);
+      }
+    }
+  }
 
-        if (active.length === 0 && inactive.length === 0) return "No tasks registered.";
+  public getSensorDescriptors(): HeartbeatSensorDescriptor[] {
+    return Array.from(this.sensors.values()).map(sensor => JSON.parse(JSON.stringify(sensor.descriptor)) as HeartbeatSensorDescriptor);
+  }
 
-        return `Active Tasks:\n${active.join('\n')}\n\nInactive Tasks:\n${inactive.join('\n')}`;
+  public getSensorDescriptor(name: string): HeartbeatSensorDescriptor | null {
+    const sensor = this.sensors.get(name);
+    return sensor ? JSON.parse(JSON.stringify(sensor.descriptor)) as HeartbeatSensorDescriptor : null;
+  }
+
+  public createEventRef(sensor: string, event: string, args: unknown[] = []): HeartbeatEventRef {
+    const descriptor = this.sensors.get(sensor)?.descriptor;
+    if (!descriptor) {
+      throw new Error(`Unknown heartbeat sensor '${sensor}'.`);
+    }
+    if (!descriptor.events.some(item => item.name === event)) {
+      throw new Error(`Unknown event '${event}' for sensor '${sensor}'.`);
+    }
+    return ensureEventRef({ sensor, event, args });
+  }
+
+  private async resolveCreatorContext(): Promise<{
+    ownerAgent: string;
+    toolNames: string[];
+    skillsTable?: string;
+    memoryConfig?: AgentMemoryConfig;
+    loadedAgent?: LoadedAgent | null;
+  }> {
+    const fromContext = getCurrentAgent();
+    const explicitAgentName = fromContext?.config.name || (process.env.ACN_AGENT_NAME || '').trim();
+    const ownerAgent = explicitAgentName || 'CORE';
+    const loadedAgent = explicitAgentName
+      ? (fromContext || await this.agentLoader.loadByName(explicitAgentName))
+      : (fromContext || null);
+
+    const sandbox = getAgentSandbox();
+    let toolNames: string[] = [];
+    if (sandbox instanceof LocalSandbox) {
+      toolNames = sandbox.getTools().map(tool => tool.config.name);
+    } else if (loadedAgent?.config) {
+      toolNames = [...(loadedAgent.config.tools || [])];
+      toolNames.push('files');
+      if (loadedAgent.config.skillsTable) {
+        toolNames.push('skills');
+      }
+      if (loadedAgent.config.memory?.enabled !== false && loadedAgent.config.memory) {
+        toolNames.push('memory');
+      }
     }
 
-    public editTask(name: string, options: Partial<HeartbeatTask>): string {
-        const task = this.tasks.get(name);
-        if (!task) throw new Error(`Task '${name}' not found.`);
+    return {
+      ownerAgent,
+      toolNames: normalizeToolSnapshot(toolNames),
+      skillsTable: loadedAgent?.config.skillsTable,
+      memoryConfig: loadedAgent?.config.memory,
+      loadedAgent,
+    };
+  }
 
-        Object.assign(task, options);
-        this.saveTasks();
-        return `Task '${name}' updated.`;
+  public async bind(
+    eventRef: HeartbeatEventRef,
+    handler: Function,
+    options: HeartbeatBindingOptions = {}
+  ): Promise<HeartbeatBindingRecord> {
+    const normalizedEventRef = ensureEventRef(eventRef);
+    this.createEventRef(normalizedEventRef.sensor, normalizedEventRef.event, normalizedEventRef.args);
+
+    const creator = await this.resolveCreatorContext();
+    const handlerSource = serializeHandlerSource(handler, creator.toolNames);
+    const now = new Date().toISOString();
+    const id = options.id?.trim() || `hb_${randomUUID()}`;
+
+    if (this.bindings.has(id)) {
+      throw new Error(`Heartbeat binding '${id}' already exists.`);
     }
 
-    public setActive(name: string, state: boolean): string {
-        const task = this.tasks.get(name);
-        if (!task) throw new Error(`Task '${name}' not found.`);
+    const record: HeartbeatBindingRecord = {
+      id,
+      eventRef: normalizedEventRef,
+      handlerSource,
+      ownerAgent: creator.ownerAgent,
+      toolNames: creator.toolNames,
+      skillsTable: creator.skillsTable,
+      memoryConfig: creator.memoryConfig,
+      metadata: options.metadata,
+      enabled: options.enabled !== false,
+      createdAt: now,
+      updatedAt: now,
+    };
 
-        task.active = state;
-        this.saveTasks();
-        return `Task '${name}' is now ${state ? 'ACTIVE' : 'INACTIVE'}.`;
+    this.bindings.set(record.id, record);
+    this.saveBindings();
+    return cloneBinding(record);
+  }
+
+  public listBindings(query: HeartbeatBindingQuery = {}): Record<string, unknown>[] {
+    return Array.from(this.bindings.values())
+      .filter(binding => {
+        if (query.ids && query.ids.length > 0 && !query.ids.includes(binding.id)) {
+          return false;
+        }
+        if (query.sensor && binding.eventRef.sensor !== query.sensor) {
+          return false;
+        }
+        if (query.event && binding.eventRef.event !== query.event) {
+          return false;
+        }
+        if (query.ownerAgent && binding.ownerAgent !== query.ownerAgent) {
+          return false;
+        }
+        return true;
+      })
+      .map(binding => projectBinding(binding, query));
+  }
+
+  public getBinding(id: string, query: HeartbeatBindingQuery = {}): Record<string, unknown> | null {
+    const binding = this.bindings.get(id);
+    if (!binding) {
+      return null;
+    }
+    return projectBinding(binding, query);
+  }
+
+  public unbind(id: string): { ok: true } {
+    if (!this.bindings.delete(id)) {
+      throw new Error(`Heartbeat binding '${id}' not found.`);
+    }
+    this.saveBindings();
+    return { ok: true };
+  }
+
+  public async rebind(id: string, patch: HeartbeatBindingPatch): Promise<HeartbeatBindingRecord> {
+    const binding = this.bindings.get(id);
+    if (!binding) {
+      throw new Error(`Heartbeat binding '${id}' not found.`);
     }
 
-    public deleteTask(name: string): string {
-        if (!this.tasks.delete(name)) throw new Error(`Task '${name}' not found.`);
-        this.saveTasks();
-        return `Task '${name}' deleted.`;
+    if (patch.eventRef) {
+      binding.eventRef = ensureEventRef(patch.eventRef);
+      this.createEventRef(binding.eventRef.sensor, binding.eventRef.event, binding.eventRef.args);
+    }
+    if (typeof patch.enabled === 'boolean') {
+      binding.enabled = patch.enabled;
+    }
+    if (patch.metadata) {
+      binding.metadata = patch.metadata;
+    }
+    if (patch.handler || patch.handlerSource) {
+      const allowedIdentifiers = normalizeToolSnapshot(binding.toolNames);
+      binding.handlerSource = patch.handler
+        ? serializeHandlerSource(patch.handler, allowedIdentifiers)
+        : validateHandlerSource(String(patch.handlerSource || '').trim(), allowedIdentifiers);
     }
 
-    // ────────────────────────────────────────────────────────────────────────
-    // Sensor Management
-    // ────────────────────────────────────────────────────────────────────────
+    binding.updatedAt = new Date().toISOString();
+    this.saveBindings();
+    return cloneBinding(binding);
+  }
 
-    private async loadSensors() {
-        if (!fs.existsSync(TOOLS_DIR)) {
-            console.warn(`[Heartbeat] Tools directory not found: ${TOOLS_DIR}`);
-            return;
+  public async askSensor(name: string, input: SensorAskInput): Promise<unknown> {
+    const sensor = this.sensors.get(name);
+    if (!sensor) {
+      throw new Error(`Sensor '${name}' not found.`);
+    }
+
+    this.log(`askSensor('${name}') request`, {
+      prompt: input.prompt,
+      schema: input.schema,
+      imagePath: input.imagePath || null,
+      usesNativeAsk: typeof sensor.runtime.ask === 'function',
+    });
+
+    if (sensor.runtime.ask) {
+      const result = await sensor.runtime.ask(input);
+      this.log(`askSensor('${name}') response: ${formatLogValue(result)}`);
+      return result;
+    }
+
+    if (!sensor.runtime.getContext) {
+      throw new Error(`Sensor '${name}' does not support ask().`);
+    }
+
+    const context = await sensor.runtime.getContext();
+    const prompt = [
+      `Sensor: ${name}`,
+      `Description: ${sensor.descriptor.description}`,
+      '',
+      'Sensor context:',
+      context,
+      '',
+      'User request:',
+      input.prompt,
+    ].join('\n');
+
+    const result = await structuredLlm(prompt, input.schema as any, input.imagePath);
+    this.log(`askSensor('${name}') response: ${formatLogValue(result)}`);
+    return result;
+  }
+
+  public async dispatchEvent(event: HeartbeatSensorEvent): Promise<void> {
+    const normalized: HeartbeatSensorEvent = {
+      sensor: event.sensor,
+      event: event.event,
+      args: Array.isArray(event.args) ? event.args : [],
+      payload: event.payload,
+      occurredAt: event.occurredAt || new Date().toISOString(),
+    };
+
+    if (normalized.sensor === 'clock' && normalized.event === 'schedule') {
+      const occurrence = new Date(normalized.occurredAt);
+      const matching = Array.from(this.bindings.values()).flatMap((binding) => {
+        if (!binding.enabled || binding.eventRef.sensor !== 'clock' || binding.eventRef.event !== 'schedule') {
+          return [];
         }
 
-        const entries = fs.readdirSync(TOOLS_DIR, { withFileTypes: true });
+        const schedule = parseClockScheduleDefinition(binding.eventRef.args);
+        if (!schedule) {
+          console.warn(`[Heartbeat] Ignoring invalid clock.schedule binding '${binding.id}': schedule args must contain a single { rules: [...] } object.`);
+          return [];
+        }
 
-        for (const entry of entries) {
-            if (entry.isDirectory()) {
-                const sensorName = entry.name;
-                const sensorPath = path.join(TOOLS_DIR, sensorName);
-                const configPath = path.join(sensorPath, 'sensor.yaml');
-                const modulePath = path.join(sensorPath, 'index.ts');
+        const match = getClockScheduleMatch(schedule, occurrence);
+        if (!match) {
+          return [];
+        }
 
-                // console.log(`[Heartbeat] Found sensor directory: ${sensorName}`);
-
-                // 1. Load Config
-                if (fs.existsSync(configPath)) {
-                    try {
-                        const config = yaml.load(fs.readFileSync(configPath, 'utf-8')) as SensorConfig;
-                        this.sensorConfigs.set(sensorName, config);
-                    } catch (e) {
-                        console.error(`[Heartbeat] Invalid config for sensor '${sensorName}':`, e);
-                        continue;
-                    }
-                } else {
-                    console.warn(`[Heartbeat] No sensor.yaml for '${sensorName}'`);
-                }
-
-                // 2. Load Module
-                if (fs.existsSync(modulePath)) {
-                    try {
-                        // Dynamic import
-                        // Use file:// URL for Windows compatibility
-                        const moduleUrl = `file://${modulePath.replace(/\\/g, '/')}`;
-                        const module = await import(moduleUrl);
-
-                        // Expect 'start', 'stop', 'getContext', 'events'
-                        const sensor = {
-                            start: module.start,
-                            stop: module.stop,
-                            getContext: module.getContext,
-                            ask: module.ask,
-                            onTaskExecuted: module.onTaskExecuted
-                        } as Sensor;
-
-                        this.sensors.set(sensorName, sensor);
-
-                        // NOTE: Sensor start moved to start() method.
-
-                    } catch (e) {
-                        console.error(`[Heartbeat] Failed to load sensor module '${sensorName}':`, e);
-                    }
-                } else {
-                    console.warn(`[Heartbeat] No index.ts in '${sensorName}'`);
-                }
+        const payload = isPlainObject(normalized.payload)
+          ? {
+              ...normalized.payload,
+              schedule: {
+                matchedRuleIndexes: match.matchedRuleIndexes,
+                matchedRules: match.matchedRules,
+                localWeekday: getClockWeekday(occurrence),
+                localTime: getClockTime(occurrence),
+              },
             }
-        }
-    }
+          : normalized.payload;
 
-    public getSensorDocs(): string {
-        const docs: string[] = [];
-        this.sensorConfigs.forEach(conf => {
-            docs.push(`### ${conf.name}\n${conf.description}\n`);
+        return [{
+          binding,
+          event: {
+            ...normalized,
+            args: binding.eventRef.args,
+            payload,
+          } as HeartbeatSensorEvent,
+        }];
+      });
+
+      if (shouldLogEventDispatch(normalized, matching.length)) {
+        this.log(`Event '${normalized.sensor}.${normalized.event}' received with ${matching.length} matching binding(s).`, {
+          args: normalized.args,
+          occurredAt: normalized.occurredAt,
+          bindingIds: matching.map(item => item.binding.id),
         });
-        return docs.join('\n');
+      }
+
+      await Promise.all(matching.map(item => this.executeBinding(item.binding, item.event)));
+      return;
     }
 
-    public async askSensor(name: string, query: string): Promise<string> {
-        const sensor = this.sensors.get(name);
-        if (!sensor) throw new Error(`Sensor '${name}' not found or not loaded.`);
-        if (!sensor.ask) throw new Error(`Sensor '${name}' does not support direct queries (no .ask() method).`);
+    const matching = Array.from(this.bindings.values()).filter(binding =>
+      binding.enabled
+      && binding.eventRef.sensor === normalized.sensor
+      && binding.eventRef.event === normalized.event
+      && sameArgs(binding.eventRef.args, normalized.args)
+    );
 
-        return await sensor.ask(query);
+    if (shouldLogEventDispatch(normalized, matching.length)) {
+      this.log(`Event '${normalized.sensor}.${normalized.event}' received with ${matching.length} matching binding(s).`, {
+        args: normalized.args,
+        occurredAt: normalized.occurredAt,
+        bindingIds: matching.map(binding => binding.id),
+      });
     }
 
-    // ────────────────────────────────────────────────────────────────────────
-    // Event Loop Logic
-    // ────────────────────────────────────────────────────────────────────────
+    await Promise.all(matching.map(binding => this.executeBinding(binding, normalized)));
+  }
 
-    private async handleEvent(sensorName: string, eventSignature: string, payload: any) {
-        const fullTrigger = `${sensorName}.${eventSignature}`;
+  private async executeBinding(binding: HeartbeatBindingRecord, event: HeartbeatSensorEvent): Promise<void> {
+    const toolNames = normalizeToolSnapshot(binding.toolNames);
+    const tools = await this.toolLoader.loadByNames(toolNames);
+    const sandbox = new LocalSandbox();
 
-        // Normalize helper: remove quotes and spaces
-        const normalize = (s: string) => s.replace(/["'\s]/g, '');
-        const normalizedTrigger = normalize(fullTrigger);
+    try {
+      this.log(`Executing binding '${binding.id}' for event '${event.sensor}.${event.event}'.`);
+      await sandbox.initialize(tools, binding.skillsTable, binding.memoryConfig);
+      const runtimeEvent = {
+        ...event,
+        bindingId: binding.id,
+      };
 
-        // Find matching tasks
-        // We use normalized comparison to handle quotes/spaces differences
-        const matchingTasks = Array.from(this.tasks.values()).filter(t =>
-            t.active && normalize(t.trigger) === normalizedTrigger
-        );
+      const code = `
+const __binding = ${JSON.stringify(cloneBinding(binding))};
+const __event = ${JSON.stringify(runtimeEvent)};
+const __handler = (${binding.handlerSource});
 
-        if (matchingTasks.length === 0) return;
+if (typeof __handler !== 'function') {
+  throw new Error('Persisted heartbeat handler did not restore to a function.');
+}
 
-        // Get Context ONCE
-        const sensor = this.sensors.get(sensorName);
-        if (!sensor) return;
-        const context = await sensor.getContext();
+const ctx = {
+  binding: __binding,
+  async unbind(id = __binding.id) {
+    return await heartbeat.bindings.unbind(id);
+  },
+  async rebind(patch) {
+    return await heartbeat.bindings.rebind(__binding.id, patch);
+  },
+};
 
-        // Get Config for LLM
-        const config = this.sensorConfigs.get(sensorName);
-        if (!config || !config.minillm) {
-            console.error(`[Heartbeat] No LLM config for sensor '${sensorName}'. Cannot execute Pulse.`);
-            return;
-        }
+const __handlerResult = await __handler(__event, ctx);
+if (typeof __handlerResult !== 'undefined') {
+  try {
+    const serialized = typeof __handlerResult === 'string'
+      ? __handlerResult
+      : JSON.stringify(__handlerResult);
+    console.log('[Heartbeat Handler Result] ' + serialized);
+  } catch (error) {
+    console.log('[Heartbeat Handler Result] [unserializable: ' + (error instanceof Error ? error.message : String(error)) + ']');
+  }
+}
+`;
 
-        for (const task of matchingTasks) {
-            this.executeTaskLogic(task, context, config.minillm, sensor);
-        }
+      const result = await sandbox.execute(code, undefined, {
+        ACN_AGENT_NAME: binding.ownerAgent,
+        ACN_API_URL: process.env.ACN_API_URL || '',
+        ACN_CHAT_ID: 'HEARTBEAT_ROUTE',
+        HEARTBEAT_DATA_DIR: this.paths.dataDir,
+        HEARTBEAT_SENSORS_DIR: this.paths.sensorsDir,
+      }, (chunk) => process.stderr.write(chunk));
+
+      if (!result.success) {
+        console.error(`[Heartbeat] Binding '${binding.id}' failed:`, result.error || result.output);
+        return;
+      }
+
+      const output = String(result.output || '').trim();
+      if (output && output !== '(no output)') {
+        this.log(`Binding '${binding.id}' completed with output:\n${output}`);
+      } else {
+        this.log(`Binding '${binding.id}' completed successfully.`);
+      }
+    } catch (error) {
+      console.error(`[Heartbeat] Binding '${binding.id}' execution failed:`, error);
+    } finally {
+      await sandbox.cleanup();
     }
-
-    private async executeTaskLogic(
-        task: HeartbeatTask,
-        context: string,
-        llmConfig: { model: string, provider: string },
-        sensor: Sensor
-    ) {
-        // 1. Check Repetitions (TTL)
-        if (task.maxRepeats && task.maxRepeats > 0) {
-            if ((task.remainingRepeats || 0) <= 0) {
-                // Should have been deleted, but just in case
-                this.deleteTask(task.name);
-                return;
-            }
-        }
-
-        // 2. Pulse Check
-        console.log(`[Heartbeat] Pulsing task '${task.name}'...`);
-        const result = await Pulse.evaluate(
-            context,
-            task.condition,
-            task.action,
-            llmConfig
-        );
-
-        if (!result.success) {
-            console.log(`[Heartbeat] Task '${task.name}' condition FALSE.`);
-            return;
-        }
-
-        // 3. Prepare Action
-        const actionPrompt = Pulse.interpolate(task.action, result.variables || {});
-
-        // 4. Execute Action (Agent)
-        console.log(`[Heartbeat] EXECUTING Action for '${task.name}': "${actionPrompt}"`);
-
-        try {
-            // Restore Context
-            console.log(`[Heartbeat] Transforming to Agent: ${task.agentName}`);
-
-            // 1. Load Agent Config
-            const agentConfig = await this.agentLoader.loadByName(task.agentName);
-            if (!agentConfig) {
-                console.error(`[Heartbeat] Agent '${task.agentName}' not found. Cannot execute task.`);
-                return;
-            }
-
-            // 2. Load Tools
-            // We use the list saved in the task
-            // If task.tools is undefined (old tasks), use defaults
-            const toolNames = task.tools || ['files', 'heartbeat'];
-
-            const tools = await this.toolLoader.loadByNames(toolNames);
-
-            // 3. Create Sandbox
-            const sandbox = new LocalSandbox({
-                // New sandbox for execution
-            });
-
-            // Initialize with the CORRECT tools
-            await sandbox.initialize(tools);
-
-            // Create Observation wrapper
-            const systemMsg = `
-> [!IMPORTANT]
-> **HEARTBEAT INTERVENTION**
-            `;
-
-            // Run Agent with restored identity
-            await actionContext.run(
-                {
-                    chatId: 'HEARTBEAT_ROUTE',
-                    env: {
-                        ACN_API_URL: process.env.ACN_API_URL || '',
-                        ACN_CHAT_ID: 'HEARTBEAT_ROUTE'
-                    }
-                },
-                async () => {
-                    await runAgent({
-                        agent: task.agentName,
-                        message: `\`\`\`obs\n${systemMsg}\n${actionPrompt}\n\`\`\``,
-                        sandbox: sandbox,
-                        stream: false, // Background
-                    });
-                }
-            );
-
-            // 5. Cleanup / TTL Update
-            if (task.maxRepeats && task.maxRepeats > 0) {
-                task.remainingRepeats = (task.remainingRepeats || 0) - 1;
-                if (task.remainingRepeats <= 0) {
-                    this.deleteTask(task.name);
-                    console.log(`[Heartbeat] Task '${task.name}' expired and deleted.`);
-                } else {
-                    this.saveTasks();
-                }
-            }
-
-            // Sensor cleanup hook
-            if (sensor.onTaskExecuted) {
-                await sensor.onTaskExecuted(task.id);
-            }
-
-        } catch (e: any) {
-            console.error(`[Heartbeat] Action execution failed for '${task.name}':`, e);
-        }
-    }
+  }
 }

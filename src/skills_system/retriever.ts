@@ -1,6 +1,6 @@
 /**
  * Skill Retriever
- * 
+ *
  * Simple example-based semantic retrieval that compares user queries
  * against example queries for each skill entry.
  */
@@ -15,7 +15,7 @@ export interface SkillEntry {
   content: string;
   examples: string[];  // Required array of example queries
   exampleVectors: number[][];  // Pre-embedded vectors for each example
-  scoreThreshold?: number;  // Optional similarity threshold (default: 0.8)
+  scoreThreshold?: number;  // Optional similarity threshold (default: 0.82)
   updatedAt: number;
 }
 
@@ -58,12 +58,12 @@ export interface RetrievalResult {
 /**
  * Default score threshold
  */
-export const DEFAULT_SCORE_THRESHOLD = 0.8;
+export const DEFAULT_SCORE_THRESHOLD = 0.82;
 
 /**
  * Retrieve skill entries using example-based semantic matching
  * Returns ALL entries with detailed scoring (including those below threshold)
- * 
+ *
  * @param query - User's query
  * @param entries - Skill entries to search
  * @param minThreshold - Minimum similarity threshold (default: 0.8)
@@ -77,47 +77,51 @@ export async function retrieve(
   includeAll: boolean = true
 ): Promise<RetrievalResult> {
   const startTime = performance.now();
-  
+
   // Embed user query once
   const embeddingStart = performance.now();
   const queryVector = await embed(query);
   const embeddingMs = performance.now() - embeddingStart;
-  
+
   // Score all entries against query
   const scoringStart = performance.now();
   const scoredEntries: ScoredEntry[] = [];
-  
+
   for (const entry of entries) {
     // Compare query against all examples for this entry
     const exampleScores: ExampleScore[] = [];
     let maxSimilarity = 0;
     let bestExampleIndex = -1;
     let bestExample = '';
-    
+
     for (let i = 0; i < entry.exampleVectors.length; i++) {
       const exampleVector = entry.exampleVectors[i];
+      const exampleText = entry.examples[i];
+      if (!exampleVector || exampleText === undefined) {
+        continue;
+      }
       const similarity = cosineSimilarity(queryVector, exampleVector);
-      
+
       exampleScores.push({
-        example: entry.examples[i],
+        example: exampleText,
         exampleIndex: i,
         similarity
       });
-      
+
       if (similarity > maxSimilarity) {
         maxSimilarity = similarity;
         bestExampleIndex = i;
-        bestExample = entry.examples[i];
+        bestExample = exampleText;
       }
     }
-    
+
     // Sort example scores by similarity descending
     exampleScores.sort((a, b) => b.similarity - a.similarity);
-    
+
     // Use entry's custom threshold if provided, otherwise use default
     const threshold = entry.scoreThreshold ?? minThreshold;
     const matched = maxSimilarity >= threshold;
-    
+
     // Include entry if matched OR if includeAll is true (for debugging)
     if (matched || includeAll) {
       scoredEntries.push({
@@ -131,7 +135,7 @@ export async function retrieve(
       });
     }
   }
-  
+
   // Sort by score descending (matched entries first, then by score)
   scoredEntries.sort((a, b) => {
     if (a.matched !== b.matched) {
@@ -139,10 +143,10 @@ export async function retrieve(
     }
     return b.score - a.score;
   });
-  
+
   const scoringMs = performance.now() - scoringStart;
   const totalMs = performance.now() - startTime;
-  
+
   return {
     query,
     queryVector,
@@ -165,13 +169,13 @@ export async function quickMatch(
 ): Promise<number> {
   const queryVector = await embed(query);
   let maxSimilarity = 0;
-  
+
   for (const exampleVector of entry.exampleVectors) {
     const similarity = cosineSimilarity(queryVector, exampleVector);
     if (similarity > maxSimilarity) {
       maxSimilarity = similarity;
     }
   }
-  
+
   return maxSimilarity;
 }

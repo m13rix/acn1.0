@@ -1,5 +1,97 @@
 [
   {
+    "id": "openai-codex/gpt-5-codex",
+    "model": "gpt-5-codex",
+    "name": "OpenAI Codex: GPT-5 Codex",
+    "provider": "openai-codex",
+    "description": "ChatGPT-subscription-backed Codex route for GPT-5 Codex. Requires ChatGPT OAuth login instead of a paid API key. Supports native tool calling and streaming through the openai-codex experimental provider.",
+    "oauthOnly": true,
+    "auth": "chatgpt",
+    "cost_input": 0,
+    "cost_output": 0,
+    "popularity": 50
+  },
+  {
+    "id": "openai-codex/gpt-5.3-codex",
+    "model": "gpt-5.3-codex",
+    "name": "OpenAI Codex: GPT-5.3 Codex",
+    "provider": "openai-codex",
+    "description": "ChatGPT-subscription-backed Codex route for GPT-5.3 Codex. Requires ChatGPT OAuth login instead of a paid API key. Supports native tool calling and streaming through the openai-codex experimental provider.",
+    "oauthOnly": true,
+    "auth": "chatgpt",
+    "cost_input": 0,
+    "cost_output": 0,
+    "popularity": 45
+  },
+  {
+    "id": "openai-codex/gpt-5.2-codex",
+    "model": "gpt-5.2-codex",
+    "name": "OpenAI Codex: GPT-5.2 Codex",
+    "provider": "openai-codex",
+    "description": "ChatGPT-subscription-backed Codex route for GPT-5.2 Codex. Requires ChatGPT OAuth login instead of a paid API key. Supports native tool calling and streaming through the openai-codex experimental provider.",
+    "oauthOnly": true,
+    "auth": "chatgpt",
+    "cost_input": 0,
+    "cost_output": 0,
+    "popularity": 42
+  },
+  {
+    "id": "openai-codex/gpt-5.1-codex",
+    "model": "gpt-5.1-codex",
+    "name": "OpenAI Codex: GPT-5.1 Codex",
+    "provider": "openai-codex",
+    "description": "ChatGPT-subscription-backed Codex route for GPT-5.1 Codex. Requires ChatGPT OAuth login instead of a paid API key. Supports native tool calling and streaming through the openai-codex experimental provider.",
+    "oauthOnly": true,
+    "auth": "chatgpt",
+    "cost_input": 0,
+    "cost_output": 0,
+    "popularity": 38
+  },
+  {
+    "id": "openai-codex/gpt-5.1-codex-max",
+    "model": "gpt-5.1-codex-max",
+    "name": "OpenAI Codex: GPT-5.1 Codex Max",
+    "provider": "openai-codex",
+    "description": "ChatGPT-subscription-backed Codex route for GPT-5.1 Codex Max. Requires ChatGPT OAuth login instead of a paid API key. Supports native tool calling and streaming through the openai-codex experimental provider.",
+    "oauthOnly": true,
+    "auth": "chatgpt",
+    "cost_input": 0,
+    "cost_output": 0,
+    "popularity": 34
+  },
+  {
+    "id": "openai-codex/gpt-5.1-codex-mini",
+    "model": "gpt-5.1-codex-mini",
+    "name": "OpenAI Codex: GPT-5.1 Codex Mini",
+    "provider": "openai-codex",
+    "description": "ChatGPT-subscription-backed Codex route for GPT-5.1 Codex Mini. Requires ChatGPT OAuth login instead of a paid API key. Supports native tool calling and streaming through the openai-codex experimental provider.",
+    "oauthOnly": true,
+    "auth": "chatgpt",
+    "cost_input": 0,
+    "cost_output": 0,
+    "popularity": 32
+  },
+  {
+    "id": "openai/gpt-5.4",
+    "model": "openai/gpt-5.4",
+    "name": "OpenAI: GPT-5.4",
+    "provider": "openrouter",
+    "description": "In our production deployments throughout March 2026, openai/gpt-5.4 has established itself as an exceptionally reliable engine for complex orchestration, demonstrating near-perfect adherence to multi-step instructions. In dynamic task execution, it seamlessly handles cascading state changes without human intervention. While user experience telemetry unequivocally shows that Moonshot’s Kimi k2 and the agentic Kimi k2.5[1] are by far the best chat models for casual, empathetic user dialogue, GPT-5.4 possesses by far the best English writing capabilities available in production. Its prose is remarkably human-like, entirely shedding the sterile, predictable tone of previous iterations. Real-world latency averages 450ms to first token with a sustained 85 tokens per second throughput, making it highly viable for synchronous applications. However, we've observed a specific failure mode regarding ambiguous instructions: rather than pausing to ask clarifying questions, the model confidently fabricates assumptions, causing subtle hallucinations in edge cases. Despite this, its formatting consistency for structured JSON outputs approaches 99.8% reliability, drastically reducing downstream parsing errors.\n\nWhen benchmarked against the broader March 2026 landscape, GPT-5.4 occupies a highly specific tactical niche. For enterprise coding, it is superior to Gemini 3 Flash and DeepSeek V3.2 when refactoring sprawling codebases, but it noticeably struggles with hyper-specific algorithmic optimization compared to Claude Sonnet 4.6 and OpenAI's own GPT-5.3 Codex[2]. In complex reasoning, GPT-5.4 outperforms Gemini 3 Pro and Claude Opus 4.6 at maintaining coherent logic over deep context, yet falls slightly behind Claude Sonnet 4.6 in pure mathematical abstraction. For autonomous agents, it is vastly better than DeepSeek V3.2 at native tool calling, effortlessly executing dozens of sequential functions without context degradation. Speed and cost-wise, it cannot compete with the sheer volume-handling of Gemini 3 Flash, positioning it strictly as a premium reasoning engine rather than a default generic router.\n\nIntelligent routing systems should choose this model when the specific task type demands flawless English copywriting combined with the strict constraint of navigating complex, multi-tool workflows. Switch from DeepSeek V3.2 or Claude Opus 4.6 to this model when your pipeline experiences frequent schema validation failures. Conversely, avoid this model for open-ended conversational avatars where Kimi k2.5 provides a vastly superior user experience[1], or when processing massive data extraction batches where cheaper, faster alternatives exist.\n\nOur telemetry reveals GPT-5.4 maintains exceptional attention recall up to 800k tokens, after which we observe a 12% degradation in retrieving nested variables. System prompt sensitivity is extraordinarily high; negative constraints work poorly, requiring strict affirmative prompt engineering patterns detailing exact expected behaviors. While platform rate limits have stabilized since the initial rollout, maximizing cost efficiency in real workflows requires aggressive semantic caching rather than relying on basic per-token math. Finally, our tuning data indicates that tool calling operates most reliably at a temperature of 0.3, while creative writing tasks peak at 0.7.\n\nSources\nhelp\nkimi.com\nmedium.com\nGoogle Search Suggestions\nDisplay of Search Suggestions is required when using Grounding with Google Search. Learn more\n\"Kimi k2\" OR \"Kimi k2.5\" AI model Moonshot\nOpenAI GPT-5 predictions OR timeline 2025 2026",
+    "cost_input": 2.5,
+    "cost_output": 15,
+    "popularity": 42
+  },
+  {
+    "id": "google/gemini-3.1-pro-preview",
+    "model": "google/gemini-3.1-pro-preview",
+    "name": "Google: Gemini 3.1 Pro Preview",
+    "provider": "openrouter",
+    "description": "In testing and deploying 'google/gemini-3.1-pro-preview' in production environments as of March 2026, we observed that it delivers exceptional reasoning and multimodal capabilities, supported by a large context window of up to 1 million tokens for input and 65,536 tokens for output. This allows handling extensive codebases, large documents, and complex multi-step workflows without truncation, although some performance degradation occurs at the extreme upper limits, with accuracy dropping to around 26.3% on long-context benchmarks like MRCR v2 at 1 million tokens, indicating some degradation at maximum context length (Google Blog, DeepMind). Response quality remains high in typical use cases, with scores exceeding 77% on ARC-AGI-2, outperforming previous Gemini versions and rivaling top models like GPT-5.4/5.3 Codex and Claude Opus 4.6 in reasoning benchmarks (Google Blog, DeepMind). We have seen the model excel in complex reasoning, creative coding, and synthesizing large data sets, supporting multimodal inputs including images, videos, and audio, which enhances its versatility for advanced workflows (Google AI Docs). Its ability to generate structured, multimodal outputs makes it suitable for building sophisticated systems such as aerospace dashboards or interactive simulations, with strong support for function calling and code execution, enabling seamless integration into agentic workflows (Google Blog). However, as a preview, it exhibits some reliability issues, including occasional API errors (503s), and variability in performance across languages, notably in Japanese, with some bugs like hanging responses or system prompt leaks, which can be mitigated by retries or careful prompt engineering (Reddit, Google AI Forum). The model supports flexible temperature settings (0.0 to 2.0), with default at 1.0, allowing users to balance creativity and determinism, and employs topP and topK parameters for sampling control, which are crucial for fine-tuning output style and variability (Google Docs). Cost-wise, Gemini 3.1 Pro is priced at approximately $2.00 per million input tokens and $12.00 per million output tokens, making it suitable for high-stakes reasoning and creative tasks, though more affordable options like Gemini Flash-Lite are available for high-volume, less complex workflows at roughly 1/8th the cost (VentureBeat). For production deployment, best practices include using versioned server prompt templates, validating inputs rigorously to prevent prompt injection, and leveraging Firebase Remote Config for dynamic updates. Common pitfalls involve handling API rate limits, managing latency spikes during peak demand, and addressing bugs related to custom tool integrations, which can be mitigated through retries and careful prompt design (Firebase Docs). Overall, Gemini 3.1 Pro is a powerful, flexible model optimized for complex reasoning, multimodal integration, and agentic workflows, but it requires careful management of its preview status and associated stability considerations.\n\n",
+    "cost_input": 2,
+    "cost_output": 12,
+    "popularity": 42
+  },
+  {
     "id": "minimax/minimax-m2.5",
     "model": "moonshotai/kimi-k2.5",
     "name": "MoonshotAI: Kimi K2.5",

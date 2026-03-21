@@ -6,7 +6,10 @@ export interface ModelDefinition {
     id?: string;
     name?: string;
     provider?: string;
+    model?: string;
     description?: string;
+    oauthOnly?: boolean;
+    auth?: string;
     embedding?: number[];
     [key: string]: any;
 }

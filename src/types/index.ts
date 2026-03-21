@@ -25,6 +25,7 @@ export interface ProviderConfig {
   model: string;
   temperature?: number;
   maxTokens?: number;
+  transport?: 'auto' | 'sse' | 'websocket';
   stopSequences?: string[];
   /**
    * Sampling
@@ -75,6 +76,31 @@ export interface ProviderToolRequest {
 
 export interface ProviderToolResponse extends ProviderResponse {
   toolCalls?: ProviderToolCall[];
+}
+
+export interface ProviderAuthStatus {
+  provider: string;
+  authenticated: boolean;
+  activeProfileId?: string;
+  accountLabel?: string;
+  expiresAt?: number;
+  modelsAvailable?: string[];
+}
+
+export interface ProviderAuthChallenge {
+  provider: string;
+  loginId: string;
+  authUrl: string;
+  redirectUri: string;
+  manualMessage: string;
+  expiresAt?: number;
+}
+
+export interface ProviderAuthCompletion {
+  loginId: string;
+  redirectUrl?: string;
+  callbackCode?: string;
+  callbackState?: string;
 }
 
 /**
@@ -135,11 +161,25 @@ export interface Provider {
   streamEventsWithTools?(messages: Message[], config: ProviderConfig, toolRequest: ProviderToolRequest): AsyncIterable<ProviderStreamEvent>;
   buildRequest?(messages: Message[], config: ProviderConfig): any;
   buildRequestWithTools?(messages: Message[], config: ProviderConfig, toolRequest: ProviderToolRequest): any;
+  getAuthStatus?(): Promise<ProviderAuthStatus>;
+  beginLogin?(options?: Record<string, unknown>): Promise<ProviderAuthChallenge>;
+  completeLogin?(payload: ProviderAuthCompletion): Promise<ProviderAuthStatus>;
+  logout?(profileId?: string): Promise<void>;
 }
 
 // ============================================================================
 // Agent Types
 // ============================================================================
+
+export interface AgentUtilsLlmConfig {
+  provider?: string;
+  model?: string;
+  host?: string;
+}
+
+export interface AgentUtilsConfig {
+  llm?: AgentUtilsLlmConfig;
+}
 
 export interface AgentConfig {
   name: string;
@@ -162,6 +202,7 @@ export interface AgentConfig {
   syntax: string;        // syntax type name
   skillsTable?: string;  // Optional: LanceDB table name for this agent's skills
   memory?: AgentMemoryConfig; // Optional: semantic graph memory configuration
+  utils?: AgentUtilsConfig; // Optional: local utility tool configuration
   sandbox?: string;      // Sandbox type: 'local' (default) or 'browser'
 
   // Model switching for dynamic model selection
@@ -169,7 +210,7 @@ export interface AgentConfig {
 
   // Agent system config
   injectAgentsList?: boolean;  // Inject available agents list into system prompt (default: true)
-  requireFinish?: boolean;     // Whether the agent must call FINISH to complete a task (default: true)
+  requireFinish?: boolean;     // Whether the agent must call TASK_DONE/FINISH to complete a task (default: true)
   subagentPrompt?: string;     // Optional: file to use as base system prompt for sub-agents (instead of CORE)
   actionAutoFix?: ActionAutoFixConfig; // Optional: auto-heal failed action() code executions
 }
@@ -262,12 +303,194 @@ export interface ToolConfig {
   name: string;
   description: string;
   module: string;  // path to the tool's index.ts/js file
+  skills?: {
+    enabled?: boolean;
+    directory?: string;
+  };
+}
+
+export interface ToolSkillEntry {
+  id: string;
+  toolName: string;
+  title?: string;
+  content: string;
+  examples: string[];
+  scoreThreshold?: number;
+  updatedAt: number;
+  filePath: string;
 }
 
 export interface LoadedTool {
   config: ToolConfig;
   directory: string;
   absolutePath: string;
+  skillEntries?: ToolSkillEntry[];
+}
+
+export type ImportedIntegrationKind = 'mcp' | 'clawhub';
+export type ImportedSourceType = 'localPath' | 'git' | 'package' | 'clawhubSlug';
+export type ImportedDocSourceKind = 'readme' | 'skill' | 'user' | 'inspection';
+export type ImportedKnowledgeMode = 'description' | 'skills' | 'both';
+
+export interface ImportedSource {
+  type: ImportedSourceType;
+  value: string;
+  displayName?: string;
+  command?: string;
+  args?: string[];
+  cwd?: string;
+  env?: Record<string, string>;
+  subpath?: string;
+}
+
+export interface ImportedDocSource {
+  name: string;
+  kind: ImportedDocSourceKind;
+}
+
+export interface ImportedMethodParameterSpec {
+  name: string;
+  description?: string;
+  required: boolean;
+  schema?: Record<string, unknown>;
+  location: 'object' | 'flag' | 'option' | 'positional';
+  token?: string;
+}
+
+export interface ImportedMcpInvocationSpec {
+  kind: 'mcp';
+  toolName: string;
+}
+
+export interface ImportedClawhubInvocationOption {
+  name: string;
+  kind: 'flag' | 'option' | 'positional';
+  token: string;
+  required: boolean;
+}
+
+export interface ImportedClawhubInvocationSpec {
+  kind: 'clawhub';
+  binary: string;
+  segments: string[];
+  options: ImportedClawhubInvocationOption[];
+  smokeCommand?: string[];
+}
+
+export interface NormalizedMethodSpec {
+  originalName: string;
+  methodName: string;
+  description?: string;
+  inputSchema?: Record<string, unknown>;
+  outputSchema?: Record<string, unknown>;
+  parameters: ImportedMethodParameterSpec[];
+  orderedParameters: string[];
+  positionalOverload: boolean;
+  invocation: ImportedMcpInvocationSpec | ImportedClawhubInvocationSpec;
+}
+
+export interface ImportRiskReport {
+  warnings: string[];
+  blockers: string[];
+  inferred: string[];
+}
+
+export interface GeneratedDocBundle {
+  toolDescription: string;
+  usageMarkdown: string;
+  methodDocs: Record<string, string>;
+  sources: ImportedDocSource[];
+  generatedWith: string;
+}
+
+export interface GeneratedSkillEntry {
+  title: string;
+  content: string;
+  examples: string[];
+  scoreThreshold?: number;
+}
+
+export interface GeneratedSkillBundle {
+  entries: GeneratedSkillEntry[];
+  generatedWith: string;
+  sourceSummary: string;
+}
+
+export interface ImportedRuntimeSpec {
+  command: string;
+  args: string[];
+  cwd?: string;
+  env?: Record<string, string>;
+  runtimeDir: string;
+  sourceDigest: string;
+  installCommand: string[];
+}
+
+export interface ImportedRuntimeLock extends ImportedRuntimeSpec {
+  version: string;
+  installedAt: string;
+}
+
+export interface ImportedDiscoveredTool {
+  name: string;
+  description?: string;
+  inputSchema?: Record<string, unknown>;
+  outputSchema?: Record<string, unknown>;
+  annotations?: Record<string, unknown>;
+}
+
+export interface ImportedOriginalMetadata {
+  readme?: string;
+  skill?: string;
+  promptsCount?: number;
+  resourcesCount?: number;
+  discoveredTools?: ImportedDiscoveredTool[];
+}
+
+export interface ImportedSmokeTestResult {
+  passed: boolean;
+  ranAt: string;
+  methodName?: string;
+  outputPreview?: string;
+}
+
+export interface ImportedIntegrationManifest {
+  id: string;
+  kind: ImportedIntegrationKind;
+  name: string;
+  slug: string;
+  namespace: string;
+  displayName: string;
+  knowledgeMode: ImportedKnowledgeMode;
+  description: string;
+  directory: string;
+  createdAt: string;
+  updatedAt: string;
+  status: 'active' | 'disabled';
+  source: ImportedSource;
+  runtime: ImportedRuntimeLock;
+  methods: NormalizedMethodSpec[];
+  risk: ImportRiskReport;
+  docs: GeneratedDocBundle;
+  skills?: GeneratedSkillBundle;
+  original: ImportedOriginalMetadata;
+  smokeTest: ImportedSmokeTestResult;
+}
+
+export interface ImportInspectionDraft {
+  kind: ImportedIntegrationKind;
+  slug: string;
+  namespace: string;
+  displayName: string;
+  knowledgeMode: ImportedKnowledgeMode;
+  description: string;
+  source: ImportedSource;
+  runtime: ImportedRuntimeSpec;
+  methods: NormalizedMethodSpec[];
+  risk: ImportRiskReport;
+  docs: GeneratedDocBundle;
+  skills?: GeneratedSkillBundle;
+  original: ImportedOriginalMetadata;
 }
 
 // ============================================================================
@@ -386,3 +609,4 @@ export interface ExecutionResult {
   error?: string;
   filename?: string; // Filename of the executed file (for code executions only)
 }
+

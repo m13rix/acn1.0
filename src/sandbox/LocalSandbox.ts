@@ -12,6 +12,13 @@ import { randomUUID } from 'crypto';
 import { fileURLToPath } from 'url';
 import type { AgentMemoryConfig, ExecutionResult, LoadedTool } from '../types/index.js';
 import type { ISandbox } from './interfaces.js';
+import {
+    COMPLETION_SIGNAL_END,
+    COMPLETION_SIGNAL_START,
+    LEGACY_COMPLETION_FUNCTION,
+    PRIMARY_COMPLETION_FUNCTION,
+} from '../core/completion.js';
+import { buildPowerShellCommand, normalizeCliCommand, shouldFallbackToCmd } from './windows-shell.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = join(__dirname, '..', '..');
@@ -153,31 +160,9 @@ The content of cli tags are shell commands executed in the sandbox directory.
             throw new Error('Sandbox not initialized. Call initialize() first.');
         }
 
-        // Process command for better compatibility
-        let processedCommand = command;
-
-        // 1. Handle multiline commands (join with &&)
-        // Split by newline, trim, filter empty
-        const lines = command.split('\n')
-            .map(line => line.trim())
-            .filter(line => line.length > 0 && !line.startsWith('#')); // Skip comments too
-
-        if (lines.length > 1) {
-            // Join with && for sequential execution
-            processedCommand = lines.join(' && ');
-        } else if (lines.length === 1) {
-            processedCommand = lines[0];
-        } else {
+        const processedCommand = normalizeCliCommand(command, process.platform);
+        if (!processedCommand) {
             return { success: true, output: '(empty command)' };
-        }
-
-        // 2. Windows-specific fixes
-        if (process.platform === 'win32') {
-            // Fix "mkdir -p" which creates literal "-p" folder on Windows CMD
-            // Windows mkdir is already recursive by default
-            // Replace "mkdir -p <path>" with "mkdir <path>"
-            // handle "mkdir -p path" and "mkdir -p path1 path2"
-            processedCommand = (processedCommand || '').replace(/\bmkdir\s+-p\s+/g, 'mkdir ');
         }
 
         return this.runShellCommand(processedCommand, onStdout, onStderr);
@@ -186,23 +171,95 @@ The content of cli tags are shell commands executed in the sandbox directory.
     /**
      * Run a shell command in the sandbox directory
      */
-    private runShellCommand(command: string, onStdout?: (data: string) => void, onStderr?: (data: string) => void): Promise<ExecutionResult> {
-        return new Promise((resolve) => {
-            const stdout: string[] = [];
-            const stderr: string[] = [];
+    private async runShellCommand(command: string, onStdout?: (data: string) => void, onStderr?: (data: string) => void): Promise<ExecutionResult> {
+        const env: NodeJS.ProcessEnv = { ...process.env };
+        if (this.skillsTable) {
+            env.SKILLS_TABLE = this.skillsTable;
+        }
+        this.applyMemoryEnv(env);
 
-            // Build environment with SKILLS_TABLE if configured
-            const env: NodeJS.ProcessEnv = { ...process.env };
-            if (this.skillsTable) {
-                env.SKILLS_TABLE = this.skillsTable;
+        if (process.platform === 'win32') {
+            const psResult = await this.spawnCommand(
+                'powershell',
+                ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', buildPowerShellCommand(command)],
+                {
+                    cwd: this.directory,
+                    env,
+                    shell: false,
+                },
+                onStdout,
+                onStderr
+            );
+
+            if (psResult.success) {
+                return this.toExecutionResult(psResult);
             }
-            this.applyMemoryEnv(env);
 
-            const proc = spawn(command, {
+            if (!shouldFallbackToCmd(psResult.stderr, psResult.startError)) {
+                return this.toExecutionResult(psResult);
+            }
+
+            const cmdResult = await this.spawnCommand(
+                'cmd.exe',
+                ['/d', '/s', '/c', command],
+                {
+                    cwd: this.directory,
+                    env,
+                    shell: false,
+                },
+                onStdout,
+                onStderr
+            );
+
+            const fallback = this.toExecutionResult(cmdResult);
+            const fallbackNotice = '[windows-shell] PowerShell failed to execute this command; retried via cmd.exe.';
+
+            if (fallback.success) {
+                fallback.output = `${fallbackNotice}\n${fallback.output}`.trim();
+                return fallback;
+            }
+
+            fallback.error = `${fallbackNotice}\nPowerShell error:\n${psResult.stderr || psResult.startError || psResult.error || '(no stderr)' }\n\ncmd.exe error:\n${fallback.error || '(no stderr)'}`.trim();
+            return fallback;
+        }
+
+        const result = await this.spawnCommand(
+            command,
+            [],
+            {
                 cwd: this.directory,
                 shell: true,
                 env,
-            });
+            },
+            onStdout,
+            onStderr
+        );
+        return this.toExecutionResult(result);
+    }
+
+    private spawnCommand(
+        command: string,
+        args: string[],
+        options: {
+            cwd: string;
+            shell: boolean;
+            env: NodeJS.ProcessEnv;
+        },
+        onStdout?: (data: string) => void,
+        onStderr?: (data: string) => void
+    ): Promise<{
+        success: boolean;
+        stdout: string;
+        stderr: string;
+        error?: string;
+        startError?: string;
+    }> {
+        return new Promise((resolve) => {
+            const stdout: string[] = [];
+            const stderr: string[] = [];
+            let startError: string | undefined;
+
+            const proc = spawn(command, args, options);
 
             proc.stdout.on('data', (data) => {
                 const str = data.toString();
@@ -221,34 +278,43 @@ The content of cli tags are shell commands executed in the sandbox directory.
             });
 
             proc.on('error', (error) => {
-                resolve({
-                    success: false,
-                    output: '',
-                    error: `Failed to start process: ${error.message}`,
-                });
+                startError = `Failed to start process: ${error.message}`;
             });
 
             proc.on('close', (code) => {
-                const output = stdout.join('').trim();
-                const errorOutput = stderr.join('').trim();
-
-                // Combine stdout and stderr for complete output
-                const combinedOutput = [output, errorOutput].filter(Boolean).join('\n');
-
-                if (code === 0) {
-                    resolve({
-                        success: true,
-                        output: combinedOutput || '(no output)',
-                    });
-                } else {
-                    resolve({
-                        success: false,
-                        output,
-                        error: errorOutput || `Process exited with code ${code}`,
-                    });
-                }
+                const out = stdout.join('').trim();
+                const err = stderr.join('').trim();
+                resolve({
+                    success: code === 0 && !startError,
+                    stdout: out,
+                    stderr: err,
+                    error: startError || undefined,
+                    startError,
+                });
             });
         });
+    }
+
+    private toExecutionResult(result: {
+        success: boolean;
+        stdout: string;
+        stderr: string;
+        error?: string;
+        startError?: string;
+    }): ExecutionResult {
+        const combinedOutput = [result.stdout, result.stderr].filter(Boolean).join('\n');
+        if (result.success) {
+            return {
+                success: true,
+                output: combinedOutput || '(no output)',
+            };
+        }
+
+        return {
+            success: false,
+            output: result.stdout,
+            error: result.stderr || result.error || result.startError || 'Process exited with non-zero code',
+        };
     }
 
     /**
@@ -257,7 +323,7 @@ The content of cli tags are shell commands executed in the sandbox directory.
     private generateExecutionFile(code: string): string {
         const requireStatements: string[] = [];
 
-        // Import globals (FINISH function)
+        // Import globals (completion helpers)
         requireStatements.push(`require('./globals.js');`);
 
         // Always require the files tool (built-in system tool)
@@ -309,15 +375,16 @@ The content of cli tags are shell commands executed in the sandbox directory.
 ${agentRequires}
 
 ${codeWithoutImports}
-})().catch(err => {
-  console.error(err);
-  process.exit(1);
-}).then(() => {
+})().then(() => {
   // Keep the event loop alive to allow promise chains (like .then() calls) to complete
   return new Promise(resolve => setTimeout(resolve, 500));
+}).catch(async err => {
+  console.error(err);
+  process.exitCode = 1;
+  await new Promise(resolve => setTimeout(resolve, 200));
 }).catch(err => {
   console.error('Error in promise chain:', err);
-  process.exit(1);
+  process.exitCode = 1;
 });
 `;
     }
@@ -555,7 +622,7 @@ ${codeWithoutImports}
     }
 
     /**
-     * Create globals.ts with system functions like FINISH
+     * Create globals.ts with system functions like TASK_DONE
      */
     private async createGlobalsFile(): Promise<void> {
         const content = `
@@ -563,11 +630,14 @@ import { exit } from 'process';
 import fs from 'fs';
 import path from 'path';
 
-// System function to finish the task
-(global as any).FINISH = (message: string) => {
-    console.log('__ACN_FINISH_START__' + JSON.stringify(message) + '__ACN_FINISH_END__');
+// System function to complete the task and send the final user-facing result.
+const completeTask = (message: string) => {
+    console.log('${COMPLETION_SIGNAL_START}' + JSON.stringify(message) + '${COMPLETION_SIGNAL_END}');
     exit(0);
 };
+
+(global as any).${PRIMARY_COMPLETION_FUNCTION} = completeTask;
+(global as any).${LEGACY_COMPLETION_FUNCTION} = completeTask;
 
 // Convenience helper available in action snippets.
 // Writes a file in sandbox scope and logs a standard confirmation line.
@@ -604,7 +674,8 @@ import path from 'path';
 
 // Type definition for TypeScript (doesn't affect runtime but good for documentation if we generated d.ts)
 declare global {
-    function FINISH(message: string): void;
+    function ${PRIMARY_COMPLETION_FUNCTION}(message: string): void;
+    function ${LEGACY_COMPLETION_FUNCTION}(message: string): void;
     function file(filename: string, content: unknown): void;
 }
 `;
@@ -1250,7 +1321,7 @@ declare global {
                 return {
                     success: false,
                     output: '',
-                    error: `File not found: "${filename}". Use \`\`\`./filename to create new files.`,
+                    error: `File not found: "${filename}". Create it first with a file write, or provide a creation-compatible SEARCH/REPLACE payload.`,
                 };
             }
             return {

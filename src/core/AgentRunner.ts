@@ -26,6 +26,117 @@ import type { LoadedAgent } from '../types/index.js';
 // Shared loader instances (singleton-like, safe to reuse)
 const toolLoader = new ToolLoader();
 
+interface UiBridgePayload {
+    event: string;
+    accumulated?: string;
+    text?: string;
+    code?: string;
+    command?: string;
+    filename?: string;
+    content?: string;
+    agentName?: string;
+}
+
+function createTelegramUiBridge(scopeId: string, agentName: string): ExecutorCallbacks | null {
+    const apiUrl = process.env.ACN_API_URL;
+    const chatId = process.env.ACN_CHAT_ID;
+
+    if (!apiUrl || !chatId) {
+        return null;
+    }
+
+    let queue = Promise.resolve();
+    const post = (payload: UiBridgePayload): void => {
+        queue = queue
+            .then(async () => {
+                const response = await fetch(`${apiUrl}/api/ui/event`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        chatId,
+                        scopeId,
+                        agentName,
+                        ...payload,
+                    }),
+                });
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(errorText || `HTTP ${response.status}`);
+                }
+            })
+            .catch((error) => {
+                console.warn(`[AgentRunner] Failed to forward UI event "${payload.event}":`, error);
+            });
+    };
+
+    return {
+        onBeforeProviderCall: () => post({ event: 'executor.before_provider_call' }),
+        onReasoningDelta: (_delta, accumulated) => post({ event: 'executor.reasoning_delta', accumulated }),
+        onTextDelta: (_delta, accumulated) => post({ event: 'executor.text_delta', accumulated }),
+        onTextDone: (text) => post({ event: 'executor.text_done', text }),
+        onAction: (code) => post({ event: 'executor.action', code }),
+        onCli: (command) => post({ event: 'executor.cli', command }),
+        onFile: (filename, content) => post({ event: 'executor.file', filename, content }),
+        onObservation: (content) => post({ event: 'executor.observation', content }),
+        onResponse: (content) => post({ event: 'executor.response', content }),
+    };
+}
+
+function composeCallbacks(...callbackSets: Array<ExecutorCallbacks | null | undefined>): ExecutorCallbacks {
+    const sets = callbackSets.filter(Boolean) as ExecutorCallbacks[];
+    if (sets.length === 0) {
+        return {};
+    }
+
+    return {
+        onReasoningDelta: (delta, accumulated) => {
+            for (const set of sets) set.onReasoningDelta?.(delta, accumulated);
+        },
+        onReasoningDone: (fullReasoning) => {
+            for (const set of sets) set.onReasoningDone?.(fullReasoning);
+        },
+        onTextDelta: (delta, accumulated) => {
+            for (const set of sets) set.onTextDelta?.(delta, accumulated);
+        },
+        onTextDone: (fullText) => {
+            for (const set of sets) set.onTextDone?.(fullText);
+        },
+        onThinking: (content) => {
+            for (const set of sets) set.onThinking?.(content);
+        },
+        onAction: (code) => {
+            for (const set of sets) set.onAction?.(code);
+        },
+        onCli: (command) => {
+            for (const set of sets) set.onCli?.(command);
+        },
+        onFile: (filename, content) => {
+            for (const set of sets) set.onFile?.(filename, content);
+        },
+        onObservation: (output) => {
+            for (const set of sets) set.onObservation?.(output);
+        },
+        onResponse: (content) => {
+            for (const set of sets) set.onResponse?.(content);
+        },
+        onError: (error) => {
+            for (const set of sets) set.onError?.(error);
+        },
+        onBeforeProviderCall: (messages, config, actualRequest) => {
+            for (const set of sets) set.onBeforeProviderCall?.(messages, config, actualRequest);
+        },
+        onSkillsRetrieved: (content, score) => {
+            for (const set of sets) set.onSkillsRetrieved?.(content, score);
+        },
+        onSkillsSearched: (topScore) => {
+            for (const set of sets) set.onSkillsSearched?.(topScore);
+        },
+        onStreamChunk: (delta, accumulated) => {
+            for (const set of sets) set.onStreamChunk?.(delta, accumulated);
+        },
+    };
+}
+
 /**
  * Options for running an agent
  */
@@ -180,7 +291,7 @@ export async function runAgent(options: RunAgentOptions): Promise<string> {
 
     display.setDepth(childDepth);
 
-    const callbacks: ExecutorCallbacks = {
+    const localCallbacks: ExecutorCallbacks = {
         onReasoningDelta: (delta: string) => {
             display.startReasoning();
             display.writeReasoning(delta);
@@ -206,9 +317,11 @@ export async function runAgent(options: RunAgentOptions): Promise<string> {
         },
         onSkillsRetrieved: (content: string, score: number) => {
             const prefix = getLineContinuation(childDepth);
-            console.log(prefix + COLORS.skills(`${SYMBOLS.skills} Skills retrieved (${(score * 100).toFixed(0)}% match)`));
+            console.error(prefix + COLORS.skills(`${SYMBOLS.skills} Skills retrieved (${(score * 100).toFixed(0)}% match)`));
         },
     };
+    const bridgeCallbacks = createTelegramUiBridge(`subagent:${agentName}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`, agentName);
+    const callbacks = composeCallbacks(localCallbacks, bridgeCallbacks);
 
     display.showAgentStart(agentName, childDepth);
 

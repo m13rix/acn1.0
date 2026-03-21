@@ -1,0 +1,7 @@
+name: sdamgia
+description: |
+  sdamgia imported MCP namespace. Detailed usage guidance is stored in embedded tool skills.
+module: index.ts
+skills:
+  enabled: true
+  directory: skills

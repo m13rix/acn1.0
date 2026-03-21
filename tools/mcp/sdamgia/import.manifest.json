@@ -1,0 +1,1466 @@
+{
+  "id": "mcp:sdamgia",
+  "kind": "mcp",
+  "name": "sdamgia",
+  "slug": "sdamgia",
+  "namespace": "sdamgia",
+  "displayName": "sdamgia",
+  "knowledgeMode": "skills",
+  "description": "Access the СДАМ ГИА educational database to retrieve, search, and explore exam problems, categories, and test variants.",
+  "directory": "G:\\agent0\\acn1.0\\tools\\mcp\\sdamgia",
+  "createdAt": "2026-03-18T12:29:46.922Z",
+  "updatedAt": "2026-03-18T12:29:46.922Z",
+  "status": "active",
+  "source": {
+    "type": "package",
+    "value": "sdamgia-mcp-server",
+    "displayName": "sdamgia",
+    "command": "npx.cmd",
+    "args": [
+      "-y",
+      "sdamgia-mcp-server"
+    ]
+  },
+  "runtime": {
+    "command": "C:\\Windows\\system32\\cmd.exe",
+    "args": [
+      "/d",
+      "/s",
+      "/c",
+      "npx.cmd -y sdamgia-mcp-server"
+    ],
+    "runtimeDir": "G:\\agent0\\acn1.0\\data\\imported-tools\\runtime\\sdamgia\\74f26ea2f9d5\\runtime",
+    "sourceDigest": "84131ccc147a02bc4db5b6588be9b8e832ce9d8d21b45b5f462bde36cbff5ad4",
+    "installCommand": [],
+    "version": "84131ccc147a",
+    "installedAt": "2026-03-18T12:29:46.919Z"
+  },
+  "methods": [
+    {
+      "originalName": "sdamgia_get_problem",
+      "methodName": "getProblem",
+      "description": "**Retrieves a complete problem from the СДАМ ГИА database by its unique identifier.**\n\n**When to use:**\n- You have a specific problem ID and need its full details\n- You need to see the problem statement, solution, answer, and similar problems\n- You want to reference an exact problem from the СДАМ ГИА database\n\n**Parameters:**\n- `subject` (required): Subject code (e.g., 'math', 'phys', 'inf', 'rus', 'chem', 'bio', 'geo', 'hist', 'soc', 'en', 'de', 'fr', 'sp', 'lit')\n- `problem_id` (required): Numeric problem ID as a string (e.g., \"12345\")\n- `response_format` (optional): Output format - 'markdown' (default, human-readable) or 'json' (structured data)\n\n**Returns:**\nA complete problem object containing:\n- **condition**: The problem statement (text and optional HTML/images)\n- **solution**: Step-by-step solution with explanations\n- **answer**: The correct answer\n- **similar_problems**: List of related problem IDs for further practice\n- **metadata**: Problem ID, subject, difficulty level where available\n\n**Response format:**\n- **Markdown**: Formatted text with sections for condition, solution, answer, and similar problems\n- **JSON**: Structured object with all problem data as nested objects/arrays\n\n**Example:**\nGetting a specific math problem:\n```json\n{\n  \"subject\": \"math\",\n  \"problem_id\": \"54321\",\n  \"response_format\": \"markdown\"\n}\n```\n\n**Notes:**\n- Problem IDs must be numeric strings (digits only)\n- The problem_id must exist in the specified subject database\n- Some problems may not have solutions available\n- Similar problems are automatically included for practice\n- Use this tool when you need exact problem details, not for searching",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "subject": {
+            "type": "string",
+            "enum": [
+              "math",
+              "mathb",
+              "rus",
+              "phys",
+              "chem",
+              "bio",
+              "geo",
+              "hist",
+              "soc",
+              "inf",
+              "en",
+              "de",
+              "fr",
+              "sp",
+              "lit"
+            ],
+            "description": "Subject code (e.g., 'math', 'phys', 'inf')"
+          },
+          "problem_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 20,
+            "pattern": "^\\d+$",
+            "description": "Problem ID (numeric string)"
+          },
+          "response_format": {
+            "type": "string",
+            "enum": [
+              "json",
+              "markdown"
+            ],
+            "default": "markdown",
+            "description": "Output format: 'markdown' for readable text or 'json' for structured data"
+          }
+        },
+        "required": [
+          "subject",
+          "problem_id"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "parameters": [
+        {
+          "name": "subject",
+          "description": "Subject code (e.g., 'math', 'phys', 'inf')",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "math",
+              "mathb",
+              "rus",
+              "phys",
+              "chem",
+              "bio",
+              "geo",
+              "hist",
+              "soc",
+              "inf",
+              "en",
+              "de",
+              "fr",
+              "sp",
+              "lit"
+            ],
+            "description": "Subject code (e.g., 'math', 'phys', 'inf')"
+          },
+          "location": "object"
+        },
+        {
+          "name": "problem_id",
+          "description": "Problem ID (numeric string)",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 20,
+            "pattern": "^\\d+$",
+            "description": "Problem ID (numeric string)"
+          },
+          "location": "object"
+        },
+        {
+          "name": "response_format",
+          "description": "Output format: 'markdown' for readable text or 'json' for structured data",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "json",
+              "markdown"
+            ],
+            "default": "markdown",
+            "description": "Output format: 'markdown' for readable text or 'json' for structured data"
+          },
+          "location": "object"
+        }
+      ],
+      "orderedParameters": [
+        "subject",
+        "problem_id",
+        "response_format"
+      ],
+      "positionalOverload": true,
+      "invocation": {
+        "kind": "mcp",
+        "toolName": "sdamgia_get_problem"
+      }
+    },
+    {
+      "originalName": "sdamgia_search_problems",
+      "methodName": "searchProblems",
+      "description": "**Searches for problems in the СДАМ ГИА database using a text-based query.**\n\n**When to use:**\n- You want to find problems related to a specific topic (e.g., \"quadratic equations\", \"Newton's laws\")\n- You're exploring available problems in a subject area\n- You need to discover problem IDs before fetching full details\n- You want to browse problems by keywords or concepts\n\n**Parameters:**\n- `subject` (required): Subject code to search within (e.g., 'math', 'phys', 'inf')\n- `query` (required): Search text - minimum 3 characters, maximum 500 characters. Use descriptive terms like \"triangle area\", \"oxidation reactions\", \"grammar rules\"\n- `limit` (optional): Maximum number of results (1-50, default: 20)\n- `response_format` (optional): 'markdown' (default) or 'json'\n\n**Returns:**\nA list of matching problems with:\n- **problem_ids**: Array of problem IDs matching the search query\n- **total**: Count of results returned\n- In markdown format: numbered list with clickable links to each problem\n\n**Search behavior:**\n- Performs text-based matching against problem descriptions and metadata\n- Results are ranked by relevance to your query\n- Search is optimized for subject-specific terminology\n- Broad search that returns problem IDs only (not full problem details)\n\n**Response format:**\n- **Markdown**: Formatted list with problem IDs and subject context\n- **JSON**: Object with problem_ids array and total count\n\n**Example usage:**\n```json\n{\n  \"subject\": \"math\",\n  \"query\": \"derivative of trigonometric functions\",\n  \"limit\": 10,\n  \"response_format\": \"markdown\"\n}\n```\n\n**Follow-up workflow:**\n1. Use this tool to find relevant problem IDs\n2. Use `sdamgia_get_problem` or `sdamgia_batch_get_problems` to fetch full details\n\n**Notes:**\n- Query must be at least 3 characters for meaningful results\n- Maximum 50 results per search (use limit parameter)\n- Search returns IDs only - follow up with get_problem for details\n- For exact text matching with problem conditions, use `sdamgia_search_by_text` instead\n- Subject-specific terminology works best for quality results",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "subject": {
+            "type": "string",
+            "enum": [
+              "math",
+              "mathb",
+              "rus",
+              "phys",
+              "chem",
+              "bio",
+              "geo",
+              "hist",
+              "soc",
+              "inf",
+              "en",
+              "de",
+              "fr",
+              "sp",
+              "lit"
+            ],
+            "description": "Subject code to search in"
+          },
+          "query": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 500,
+            "description": "Search query text"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50,
+            "default": 20,
+            "description": "Maximum number of results to return"
+          },
+          "response_format": {
+            "type": "string",
+            "enum": [
+              "json",
+              "markdown"
+            ],
+            "default": "markdown"
+          }
+        },
+        "required": [
+          "subject",
+          "query"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "parameters": [
+        {
+          "name": "subject",
+          "description": "Subject code to search in",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "math",
+              "mathb",
+              "rus",
+              "phys",
+              "chem",
+              "bio",
+              "geo",
+              "hist",
+              "soc",
+              "inf",
+              "en",
+              "de",
+              "fr",
+              "sp",
+              "lit"
+            ],
+            "description": "Subject code to search in"
+          },
+          "location": "object"
+        },
+        {
+          "name": "query",
+          "description": "Search query text",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 500,
+            "description": "Search query text"
+          },
+          "location": "object"
+        },
+        {
+          "name": "limit",
+          "description": "Maximum number of results to return",
+          "required": false,
+          "schema": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50,
+            "default": 20,
+            "description": "Maximum number of results to return"
+          },
+          "location": "object"
+        },
+        {
+          "name": "response_format",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "json",
+              "markdown"
+            ],
+            "default": "markdown"
+          },
+          "location": "object"
+        }
+      ],
+      "orderedParameters": [
+        "subject",
+        "query",
+        "limit",
+        "response_format"
+      ],
+      "positionalOverload": false,
+      "invocation": {
+        "kind": "mcp",
+        "toolName": "sdamgia_search_problems"
+      }
+    },
+    {
+      "originalName": "sdamgia_search_by_text",
+      "methodName": "searchByText",
+      "description": "**Finds problems by matching against their full condition text using fuzzy text similarity algorithms.**\n\n**When to use:**\n- You have a problem's exact condition text but don't know its ID\n- You're looking for problems similar to one you've seen before\n- You want to find problems with nearly identical wording\n- You need to detect duplicate or similar problems across the database\n- You have partial problem text and want to find the closest matches\n\n**How it works:**\n1. Performs a broad search to find candidate problems\n2. Fetches the full condition text for each candidate\n3. Applies fuzzy text matching to calculate similarity scores\n4. Returns problems that exceed the similarity threshold\n\n**Parameters:**\n- `subject` (required): Subject code to search within\n- `condition_text` (required): The problem condition text to match against (10-1000 characters). Provide as much of the original problem text as possible for best results.\n- `threshold` (optional): Similarity threshold from 0.0 to 1.0 (default: 0.6). Higher values = stricter matching. Recommended: 0.5-0.7 for approximate matches, 0.8+ for exact matches.\n- `limit` (optional): Maximum number of matches to return (1-50, default: 20)\n- `response_format` (optional): 'markdown' (default) or 'json'\n\n**Returns:**\n- **matches**: Array of matching problems, each containing:\n  - `problem_id`: The matched problem's ID\n  - `similarity`: Score from 0-1 indicating how closely the text matches (higher = better match)\n- **total**: Number of matches found\n\n**Similarity scores:**\n- 1.0: Exact match (identical text)\n- 0.8-0.99: Very close match (minor differences in wording)\n- 0.6-0.79: Similar problem (same concept, different phrasing)\n- 0.4-0.59: Somewhat related (loosely connected)\n- <0.4: Poor match (not recommended)\n\n**Example usage:**\n```json\n{\n  \"subject\": \"math\",\n  \"condition_text\": \"Find the area of a triangle with sides 3, 4, and 5 units.\",\n  \"threshold\": 0.7,\n  \"limit\": 5,\n  \"response_format\": \"markdown\"\n}\n```\n\n**Best practices:**\n- Include the complete problem condition for best matching\n- For exact duplicates, set threshold to 0.9 or higher\n- For similar problems, use threshold around 0.6-0.7\n- If you get too many results, increase the threshold\n- If you get no results, decrease the threshold\n\n**Notes:**\n- Condition text must be at least 10 characters\n- Fuzzy matching is computationally intensive - results may take longer\n- Searches broader than the limit, then applies fuzzy filtering\n- Some results may have lower similarity than expected due to formatting differences\n- For keyword-based searches, use `sdamgia_search_problems` instead\n- Follow up with `sdamgia_get_problem` to see full problem details",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "subject": {
+            "type": "string",
+            "enum": [
+              "math",
+              "mathb",
+              "rus",
+              "phys",
+              "chem",
+              "bio",
+              "geo",
+              "hist",
+              "soc",
+              "inf",
+              "en",
+              "de",
+              "fr",
+              "sp",
+              "lit"
+            ],
+            "description": "Subject code to search in"
+          },
+          "condition_text": {
+            "type": "string",
+            "minLength": 10,
+            "maxLength": 1000,
+            "description": "Problem condition text to search for (supports fuzzy matching)"
+          },
+          "threshold": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "default": 0.6,
+            "description": "Similarity threshold for fuzzy matching (0-1, higher = stricter)"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50,
+            "default": 20,
+            "description": "Maximum number of results to return"
+          },
+          "response_format": {
+            "type": "string",
+            "enum": [
+              "json",
+              "markdown"
+            ],
+            "default": "markdown"
+          }
+        },
+        "required": [
+          "subject",
+          "condition_text"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "parameters": [
+        {
+          "name": "subject",
+          "description": "Subject code to search in",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "math",
+              "mathb",
+              "rus",
+              "phys",
+              "chem",
+              "bio",
+              "geo",
+              "hist",
+              "soc",
+              "inf",
+              "en",
+              "de",
+              "fr",
+              "sp",
+              "lit"
+            ],
+            "description": "Subject code to search in"
+          },
+          "location": "object"
+        },
+        {
+          "name": "condition_text",
+          "description": "Problem condition text to search for (supports fuzzy matching)",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 10,
+            "maxLength": 1000,
+            "description": "Problem condition text to search for (supports fuzzy matching)"
+          },
+          "location": "object"
+        },
+        {
+          "name": "threshold",
+          "description": "Similarity threshold for fuzzy matching (0-1, higher = stricter)",
+          "required": false,
+          "schema": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "default": 0.6,
+            "description": "Similarity threshold for fuzzy matching (0-1, higher = stricter)"
+          },
+          "location": "object"
+        },
+        {
+          "name": "limit",
+          "description": "Maximum number of results to return",
+          "required": false,
+          "schema": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50,
+            "default": 20,
+            "description": "Maximum number of results to return"
+          },
+          "location": "object"
+        },
+        {
+          "name": "response_format",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "json",
+              "markdown"
+            ],
+            "default": "markdown"
+          },
+          "location": "object"
+        }
+      ],
+      "orderedParameters": [
+        "subject",
+        "condition_text",
+        "threshold",
+        "limit",
+        "response_format"
+      ],
+      "positionalOverload": false,
+      "invocation": {
+        "kind": "mcp",
+        "toolName": "sdamgia_search_by_text"
+      }
+    },
+    {
+      "originalName": "sdamgia_batch_get_problems",
+      "methodName": "batchGetProblems",
+      "description": "**Efficiently retrieves multiple complete problems from the СДАМ ГИА database in a single request.**\n\n**When to use:**\n- You have multiple problem IDs and need all their details\n- You want to compare several problems side-by-side\n- You're building a problem set or practice collection\n- You need to fetch related problems after a search\n- You want to reduce API calls compared to individual get_problem requests\n\n**Parameters:**\n- `subject` (required): Subject code for all problems (all IDs must belong to this subject)\n- `problem_ids` (required): Array of problem IDs to fetch. Must include 1-10 problem IDs as numeric strings (e.g., [\"12345\", \"67890\", \"54321\"])\n- `response_format` (optional): 'markdown' (default) or 'json'\n\n**Returns:**\n- **problems**: Array of complete problem objects, each containing:\n  - **condition**: Full problem statement with text and optional HTML/images\n  - **solution**: Detailed step-by-step solution\n  - **answer**: The correct answer\n  - **similar_problems**: Related problem IDs\n  - **metadata**: Problem ID, subject, difficulty level\n- **total**: Number of problems successfully fetched\n\n**Response format:**\n- **Markdown**: Formatted text with each problem in a separate section, clearly delineated with problem IDs\n- **JSON**: Structured object with problems array and metadata\n\n**Example usage:**\n```json\n{\n  \"subject\": \"math\",\n  \"problem_ids\": [\"12345\", \"67890\", \"54321\", \"11111\", \"22222\"],\n  \"response_format\": \"markdown\"\n}\n```\n\n**Typical workflow:**\n1. Use `sdamgia_search_problems` to find relevant problem IDs\n2. Pass the IDs to this tool for batch retrieval\n3. Review all problems together for comparison or practice\n\n**Performance benefits:**\n- Single API call instead of multiple individual calls\n- Faster than sequential `sdamgia_get_problem` requests\n- Ideal for fetching 2-10 problems at once\n- Reduces network overhead and latency\n\n**Constraints:**\n- Maximum 10 problems per batch request\n- All problem IDs must be valid numeric strings\n- All problems must be from the same subject\n- Invalid IDs will cause the entire batch to fail\n- Fetching many problems may return large responses\n\n**Error handling:**\n- If any problem ID is invalid or not found, the entire batch fails\n- Make sure all IDs exist in the subject before batching\n- Consider splitting into smaller batches if you encounter errors\n\n**Notes:**\n- Batch size is limited to 10 to prevent excessive response sizes\n- Use when you need full problem details, not just IDs\n- For searching, use `sdamgia_search_problems` first\n- Each problem includes similar problems for extended practice\n- All problems in batch are fetched in parallel for speed",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "subject": {
+            "type": "string",
+            "enum": [
+              "math",
+              "mathb",
+              "rus",
+              "phys",
+              "chem",
+              "bio",
+              "geo",
+              "hist",
+              "soc",
+              "inf",
+              "en",
+              "de",
+              "fr",
+              "sp",
+              "lit"
+            ],
+            "description": "Subject code"
+          },
+          "problem_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 20,
+              "pattern": "^\\d+$",
+              "description": "Problem ID (numeric string)"
+            },
+            "minItems": 1,
+            "maxItems": 10,
+            "description": "Array of problem IDs to fetch"
+          },
+          "response_format": {
+            "type": "string",
+            "enum": [
+              "json",
+              "markdown"
+            ],
+            "default": "markdown"
+          }
+        },
+        "required": [
+          "subject",
+          "problem_ids"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "parameters": [
+        {
+          "name": "subject",
+          "description": "Subject code",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "math",
+              "mathb",
+              "rus",
+              "phys",
+              "chem",
+              "bio",
+              "geo",
+              "hist",
+              "soc",
+              "inf",
+              "en",
+              "de",
+              "fr",
+              "sp",
+              "lit"
+            ],
+            "description": "Subject code"
+          },
+          "location": "object"
+        },
+        {
+          "name": "problem_ids",
+          "description": "Array of problem IDs to fetch",
+          "required": true,
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 20,
+              "pattern": "^\\d+$",
+              "description": "Problem ID (numeric string)"
+            },
+            "minItems": 1,
+            "maxItems": 10,
+            "description": "Array of problem IDs to fetch"
+          },
+          "location": "object"
+        },
+        {
+          "name": "response_format",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "json",
+              "markdown"
+            ],
+            "default": "markdown"
+          },
+          "location": "object"
+        }
+      ],
+      "orderedParameters": [
+        "subject",
+        "problem_ids",
+        "response_format"
+      ],
+      "positionalOverload": false,
+      "invocation": {
+        "kind": "mcp",
+        "toolName": "sdamgia_batch_get_problems"
+      }
+    },
+    {
+      "originalName": "sdamgia_get_catalog",
+      "methodName": "getCatalog",
+      "description": "Retrieves the complete hierarchical catalog structure for a specified subject, including all topics, subtopics, and problem categories with their unique identifiers.\n\n**PURPOSE:**\nThis is the primary discovery tool for exploring what problem content is available on the platform. It returns the full taxonomy of problem categories organized by topics, enabling you to navigate and find specific types of problems.\n\n**WHEN TO USE:**\n- Always use this FIRST when exploring a new subject to understand its structure\n- Use when you need to find category IDs for other tools (required prerequisite for sdamgia_get_category_problems)\n- Use when you need to understand the organization and topics available for a subject\n- Use when building problem sets and need to browse available content\n- Essential for discovering what problem types exist before querying specific categories\n\n**KEY PARAMETERS:**\n- subject (required): The subject identifier (e.g., 'ege', 'oge', 'math')\n- response_format (optional): Output format - 'json' for structured data, 'markdown' for formatted text (default: 'json')\n\n**RESPONSE FORMAT:**\nReturns an array of catalog entries, where each entry contains:\n- name: Human-readable topic/category name\n- id: Unique category identifier (required for other tools)\n- children: Optional array of subcategories (nested hierarchy)\n\nThe response is hierarchical - categories may contain subcategories, and leaf nodes represent actual problem categories you can query.\n\n**IMPORTANT NOTES:**\n- This tool ONLY returns category structure and IDs, NOT actual problems\n- Must be called before using sdamgia_get_category_problems to obtain valid category_id values\n- Category IDs are specific to each subject - the same ID may mean different things across subjects\n- The catalog structure can change over time as new content is added\n- Response size can be large for comprehensive subjects\n\n**EXAMPLE WORKFLOW:**\n1. Call sdamgia_get_catalog(subject='ege') to get all EGE categories\n2. Parse response to find desired category (e.g., \"Quadratic Equations\" with id='12345')\n3. Use category_id='12345' with sdamgia_get_category_problems to get actual problems\n\n**TYPICAL USE CASES:**\n- \"Show me all available topics for EGE mathematics\"\n- \"What categories exist under 'Algebra' for OGE?\"\n- \"Find the category ID for trigonometry problems\"\n- \"Browse the complete problem catalog structure\"",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "subject": {
+            "type": "string",
+            "enum": [
+              "math",
+              "mathb",
+              "rus",
+              "phys",
+              "chem",
+              "bio",
+              "geo",
+              "hist",
+              "soc",
+              "inf",
+              "en",
+              "de",
+              "fr",
+              "sp",
+              "lit"
+            ],
+            "description": "Subject code"
+          },
+          "response_format": {
+            "type": "string",
+            "enum": [
+              "json",
+              "markdown"
+            ],
+            "default": "markdown"
+          }
+        },
+        "required": [
+          "subject"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "parameters": [
+        {
+          "name": "subject",
+          "description": "Subject code",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "math",
+              "mathb",
+              "rus",
+              "phys",
+              "chem",
+              "bio",
+              "geo",
+              "hist",
+              "soc",
+              "inf",
+              "en",
+              "de",
+              "fr",
+              "sp",
+              "lit"
+            ],
+            "description": "Subject code"
+          },
+          "location": "object"
+        },
+        {
+          "name": "response_format",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "json",
+              "markdown"
+            ],
+            "default": "markdown"
+          },
+          "location": "object"
+        }
+      ],
+      "orderedParameters": [
+        "subject",
+        "response_format"
+      ],
+      "positionalOverload": true,
+      "invocation": {
+        "kind": "mcp",
+        "toolName": "sdamgia_get_catalog"
+      }
+    },
+    {
+      "originalName": "sdamgia_get_category_problems",
+      "methodName": "getCategoryProblems",
+      "description": "Retrieves all problem identifiers belonging to a specific problem category within a subject.\n\n**PURPOSE:**\nFetches the complete list of unique problem IDs for problems classified under a specific category. This enables you to identify exactly which problems exist in a category before retrieving their full details or solutions.\n\n**WHEN TO USE:**\n- Use AFTER obtaining a category_id from sdamgia_get_catalog (required prerequisite)\n- Use when you need to see all available problems in a specific category\n- Use when building problem sets from particular topics\n- Use when you need to count how many problems exist in a category\n- Use when selecting specific problems before fetching their full content\n- Essential for batch operations on category-level problem sets\n\n**KEY PARAMETERS:**\n- subject (required): The subject identifier (e.g., 'ege', 'oge', 'math')\n- category_id (required): Unique category identifier obtained from sdamgia_get_catalog\n- limit (optional): Maximum number of problem IDs to return (for pagination or sampling)\n- response_format (optional): Output format - 'json' for structured data, 'markdown' for formatted text (default: 'json')\n\n**PARAMETER CONSTRAINTS:**\n- category_id MUST be a valid ID from the catalog - invalid IDs will return errors\n- If category has no problems, returns empty array\n- limit parameter truncates results if specified; otherwise returns all problems\n- Category IDs are subject-specific - same ID may exist in multiple subjects but refer to different content\n\n**RESPONSE FORMAT:**\nReturns an array of problem ID strings/numbers:\n- Each ID represents a unique problem that can be fetched with other tools\n- IDs are typically numeric but returned as strings\n- Order of IDs may not be sequential or sorted\n- Array may be empty for new or unused categories\n- Total count of problems is included in response metadata\n\n**IMPORTANT NOTES:**\n- This tool ONLY returns problem IDs, NOT problem content, statements, or solutions\n- You MUST call sdamgia_get_catalog first to obtain valid category_id values\n- category_id values are case-sensitive and must match exactly from catalog\n- Large categories may return hundreds or thousands of IDs\n- The same problem ID may appear in multiple categories (cross-categorized content)\n- Invalid or expired category IDs will cause the request to fail\n\n**EXAMPLE WORKFLOW:**\n1. Call sdamgia_get_catalog(subject='ege') to browse categories\n2. Find desired category (e.g., id='12345' for \"Derivatives\")\n3. Call sdamgia_get_category_problems(subject='ege', category_id='12345')\n4. Receive array: [1001, 1002, 1005, 1102, ...]\n5. Use individual problem IDs with sdamgia_get_problem to get full content\n\n**TYPICAL USE CASES:**\n- \"Get all problems in the 'Quadratic Equations' category for EGE\"\n- \"List first 50 problems from category ID 54321\"\n- \"How many practice problems exist for this topic?\"\n- \"Collect all problem IDs for a specific category to analyze difficulty distribution\"\n- \"Build a randomized problem set from category 67890\"",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "subject": {
+            "type": "string",
+            "enum": [
+              "math",
+              "mathb",
+              "rus",
+              "phys",
+              "chem",
+              "bio",
+              "geo",
+              "hist",
+              "soc",
+              "inf",
+              "en",
+              "de",
+              "fr",
+              "sp",
+              "lit"
+            ],
+            "description": "Subject code"
+          },
+          "category_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 20,
+            "description": "Category ID"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50,
+            "default": 20,
+            "description": "Maximum number of results to return"
+          },
+          "response_format": {
+            "type": "string",
+            "enum": [
+              "json",
+              "markdown"
+            ],
+            "default": "markdown"
+          }
+        },
+        "required": [
+          "subject",
+          "category_id"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "parameters": [
+        {
+          "name": "subject",
+          "description": "Subject code",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "math",
+              "mathb",
+              "rus",
+              "phys",
+              "chem",
+              "bio",
+              "geo",
+              "hist",
+              "soc",
+              "inf",
+              "en",
+              "de",
+              "fr",
+              "sp",
+              "lit"
+            ],
+            "description": "Subject code"
+          },
+          "location": "object"
+        },
+        {
+          "name": "category_id",
+          "description": "Category ID",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 20,
+            "description": "Category ID"
+          },
+          "location": "object"
+        },
+        {
+          "name": "limit",
+          "description": "Maximum number of results to return",
+          "required": false,
+          "schema": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50,
+            "default": 20,
+            "description": "Maximum number of results to return"
+          },
+          "location": "object"
+        },
+        {
+          "name": "response_format",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "json",
+              "markdown"
+            ],
+            "default": "markdown"
+          },
+          "location": "object"
+        }
+      ],
+      "orderedParameters": [
+        "subject",
+        "category_id",
+        "limit",
+        "response_format"
+      ],
+      "positionalOverload": false,
+      "invocation": {
+        "kind": "mcp",
+        "toolName": "sdamgia_get_category_problems"
+      }
+    },
+    {
+      "originalName": "sdamgia_get_test",
+      "methodName": "getTest",
+      "description": "Retrieves all problem identifiers that comprise a specific test or examination variant.\n\n**PURPOSE:**\nFetches the complete list of problem IDs that make up a predefined test or exam variant. Tests are curated collections of problems designed to simulate actual exam conditions or assess specific skill sets.\n\n**WHEN TO USE:**\n- Use when you need to see all problems in a specific test variant or exam\n- Use when working with practice tests or mock exams\n- Use when you need the complete problem set for timed test simulations\n- Use when analyzing test composition or difficulty distribution\n- Use when preparing for real exams by reviewing official test variants\n- Essential for accessing complete, ready-made problem collections\n\n**KEY PARAMETERS:**\n- subject (required): The subject identifier (e.g., 'ege', 'oge', 'math')\n- test_id (required): Unique identifier for the specific test/variant to retrieve\n- response_format (optional): Output format - 'json' for structured data, 'markdown' for formatted text (default: 'json')\n\n**PARAMETER CONSTRAINTS:**\n- test_id must be a valid, existing test identifier for the specified subject\n- Invalid test IDs will result in errors or empty results\n- Test IDs are typically numeric but may include alphanumeric codes\n- Not all test IDs may be publicly accessible or available\n- Test availability may vary by subject and time period\n\n**RESPONSE FORMAT:**\nReturns an array of problem ID strings/numbers:\n- Each ID represents a problem in the test sequence\n- IDs are returned in test order (first problem to last)\n- Tests typically contain 5-25 problems depending on exam type\n- Total count of problems is included in response metadata\n- Problems are already curated and balanced by difficulty/topic\n\n**IMPORTANT NOTES:**\n- This tool ONLY returns problem IDs, NOT problem content, statements, or solutions\n- Test IDs are different from category IDs - they reference specific exam variants\n- Test composition is fixed and determined by test creators\n- The same problem may appear in multiple tests\n- Tests are designed to be completed within specific time limits\n- Some tests may include special instructions or sections not visible in ID list\n- Test availability may be limited by region, year, or exam board\n\n**DISTINCTION FROM CATEGORY QUERIES:**\nUnlike sdamgia_get_category_problems which fetches all problems from a topic, this tool fetches problems from a specific, curated test variant. Tests are pre-assembled problem sets, while categories are thematic collections.\n\n**EXAMPLE WORKFLOW:**\n1. Obtain test_id from external source (e.g., 'ege-2023-variant-123' or numeric ID)\n2. Call sdamgia_get_test(subject='ege', test_id='12345')\n3. Receive ordered array: [5001, 5002, 5003, 5004, 5005, ...]\n4. Use individual problem IDs with sdamgia_get_problem for full content\n5. Present problems in order to simulate actual exam experience\n\n**TYPICAL USE CASES:**\n- \"Get all problems from EGE 2023 variant 15\"\n- \"Show me the complete problem list for OGE practice test 7\"\n- \"Retrieve all problems in diagnostic test variant 42\"\n- \"What problems are included in the final exam simulation test?\"\n- \"Fetch the problem IDs for yesterday's practice test\"\n\n**PRACTICAL APPLICATIONS:**\n- Creating timed practice sessions with real exam variants\n- Analyzing difficulty patterns in official tests\n- Comparing problem distributions across different test years\n- Building test preparation schedules using official variants\n- Reviewing complete test content before exam day",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "subject": {
+            "type": "string",
+            "enum": [
+              "math",
+              "mathb",
+              "rus",
+              "phys",
+              "chem",
+              "bio",
+              "geo",
+              "hist",
+              "soc",
+              "inf",
+              "en",
+              "de",
+              "fr",
+              "sp",
+              "lit"
+            ],
+            "description": "Subject code"
+          },
+          "test_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 20,
+            "pattern": "^\\d+$",
+            "description": "Test ID (numeric string)"
+          },
+          "response_format": {
+            "type": "string",
+            "enum": [
+              "json",
+              "markdown"
+            ],
+            "default": "markdown"
+          }
+        },
+        "required": [
+          "subject",
+          "test_id"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "parameters": [
+        {
+          "name": "subject",
+          "description": "Subject code",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "math",
+              "mathb",
+              "rus",
+              "phys",
+              "chem",
+              "bio",
+              "geo",
+              "hist",
+              "soc",
+              "inf",
+              "en",
+              "de",
+              "fr",
+              "sp",
+              "lit"
+            ],
+            "description": "Subject code"
+          },
+          "location": "object"
+        },
+        {
+          "name": "test_id",
+          "description": "Test ID (numeric string)",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 20,
+            "pattern": "^\\d+$",
+            "description": "Test ID (numeric string)"
+          },
+          "location": "object"
+        },
+        {
+          "name": "response_format",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "json",
+              "markdown"
+            ],
+            "default": "markdown"
+          },
+          "location": "object"
+        }
+      ],
+      "orderedParameters": [
+        "subject",
+        "test_id",
+        "response_format"
+      ],
+      "positionalOverload": true,
+      "invocation": {
+        "kind": "mcp",
+        "toolName": "sdamgia_get_test"
+      }
+    }
+  ],
+  "risk": {
+    "warnings": [
+      "Tool \"sdamgia_get_problem\" does not declare an output schema.",
+      "Tool \"sdamgia_search_problems\" does not declare an output schema.",
+      "Tool \"sdamgia_search_by_text\" does not declare an output schema.",
+      "Tool \"sdamgia_batch_get_problems\" does not declare an output schema.",
+      "Tool \"sdamgia_get_catalog\" does not declare an output schema.",
+      "Tool \"sdamgia_get_category_problems\" does not declare an output schema.",
+      "Tool \"sdamgia_get_test\" does not declare an output schema."
+    ],
+    "blockers": [],
+    "inferred": []
+  },
+  "docs": {
+    "toolDescription": "Access the СДАМ ГИА educational database to retrieve, search, and explore exam problems, categories, and test variants.",
+    "usageMarkdown": "Use `getProblem` for specific IDs, `searchProblems` for keyword discovery, or `getCatalog` to browse subject structures. Use `batchGetProblems` for multiple IDs and `getTest` for exam variants.",
+    "methodDocs": {
+      "getProblem": "Retrieves full details (condition, solution, answer) for a specific problem ID.",
+      "searchProblems": "Performs a text-based search for problems within a subject using keywords.",
+      "searchByText": "Finds problems by matching against their full condition text using fuzzy similarity.",
+      "batchGetProblems": "Fetches up to 10 problems in a single request for efficient comparison.",
+      "getCatalog": "Returns the hierarchical structure of topics and categories for a given subject.",
+      "getCategoryProblems": "Lists all problem IDs associated with a specific category ID.",
+      "getTest": "Retrieves the sequence of problem IDs that constitute a specific exam test variant."
+    },
+    "sources": [
+      {
+        "name": "tool-inspection",
+        "kind": "inspection"
+      }
+    ],
+    "generatedWith": "gemini-3.1-flash-lite-preview"
+  },
+  "skills": {
+    "entries": [
+      {
+        "title": "Retrieving specific problem details",
+        "content": "Use the 'getProblem' method when you have a specific problem identifier and require the complete problem statement, solution, answer, and metadata. You must provide the 'subject' and the 'problem_id' (a numeric string). You can optionally set 'response_format' to 'json' or 'markdown'.",
+        "examples": [
+          "Give me the solution for math problem 12345.",
+          "Show me the full content of physics problem 9876.",
+          "Fetch details for informatics problem ID 55432 in markdown format."
+        ],
+        "scoreThreshold": 0.8
+      },
+      {
+        "title": "Searching for problems by topic or keywords",
+        "content": "Use the 'searchProblems' method to discover relevant problem IDs when you have a topic or keyword in mind but not a specific ID. Specify the 'subject' and a 'query' string of at least 3 characters. You can use 'limit' to control the number of results returned.",
+        "examples": [
+          "Find me problems about quadratic equations in math.",
+          "Search for chemistry problems involving oxidation reactions.",
+          "List 10 problems related to Newton's laws in physics."
+        ],
+        "scoreThreshold": 0.7
+      },
+      {
+        "title": "Finding problems by condition text similarity",
+        "content": "Use the 'searchByText' method to find problems that match a specific piece of condition text using fuzzy matching. This is ideal when you have the problem wording but not its ID. Provide the 'subject' and 'condition_text'. You can adjust the 'threshold' (0.0 to 1.0) to change how strict the matching is.",
+        "examples": [
+          "Find a math problem that has this condition: 'Calculate the area of a circle with radius 5'.",
+          "Search for a biology problem similar to this: 'Describe the process of photosynthesis in plants'.",
+          "Are there any physics problems matching this description: 'A ball is thrown vertically upwards with initial velocity...'?"
+        ],
+        "scoreThreshold": 0.85
+      },
+      {
+        "title": "Fetching multiple problems in a batch",
+        "content": "Use the 'batchGetProblems' method to retrieve full details for multiple problem IDs simultaneously. This is more efficient than calling 'getProblem' individually. Provide the 'subject' and an array of 'problem_ids'. Note that all problems must belong to the same subject and the batch size is limited to 10 IDs.",
+        "examples": [
+          "Fetch the full content for these math problems: 101, 102, and 103.",
+          "Get all details for chemistry problem IDs 500, 501, 502, 503, and 504.",
+          "I need the full solutions for these physics problems: 777, 788, 799."
+        ],
+        "scoreThreshold": 0.8
+      },
+      {
+        "title": "Exploring the subject catalog",
+        "content": "Use the 'getCatalog' method to view the hierarchical structure of topics and categories for a specific subject. This is the primary discovery tool for understanding what content is available and for obtaining 'category_id' values required for further exploration.",
+        "examples": [
+          "Show me all the topics available in the EGE mathematics catalog.",
+          "What categories are there for computer science?",
+          "List the hierarchy of physics topics."
+        ],
+        "scoreThreshold": 0.7
+      },
+      {
+        "title": "Retrieving problems within a category",
+        "content": "Use the 'getCategoryProblems' method to get a list of problem IDs belonging to a specific category. You must first obtain the correct 'category_id' by using the 'getCatalog' method. Provide the 'subject' and 'category_id' to retrieve the list of problem IDs.",
+        "examples": [
+          "Show me all problem IDs under the 'Trigonometry' category in math.",
+          "List all problems in category 12345 for history.",
+          "Give me the first 20 problems from the 'Mechanics' category in physics."
+        ],
+        "scoreThreshold": 0.85
+      },
+      {
+        "title": "Retrieving problems from a specific test",
+        "content": "Use the 'getTest' method to fetch all problem IDs associated with a specific, curated test or exam variant. Specify the 'subject' and the 'test_id'. This returns the problems in their original test order, which is useful for mock exam simulations.",
+        "examples": [
+          "Get all problem IDs for EGE math test variant 5.",
+          "What are the problems in physics practice exam 123?",
+          "List all questions included in the 2023 chemistry mock test."
+        ],
+        "scoreThreshold": 0.8
+      }
+    ],
+    "generatedWith": "gemini-3.1-flash-lite-preview",
+    "sourceSummary": "Generated from MCP tool descriptions and schemas."
+  },
+  "original": {
+    "promptsCount": 0,
+    "resourcesCount": 0,
+    "discoveredTools": [
+      {
+        "name": "sdamgia_get_problem",
+        "description": "**Retrieves a complete problem from the СДАМ ГИА database by its unique identifier.**\n\n**When to use:**\n- You have a specific problem ID and need its full details\n- You need to see the problem statement, solution, answer, and similar problems\n- You want to reference an exact problem from the СДАМ ГИА database\n\n**Parameters:**\n- `subject` (required): Subject code (e.g., 'math', 'phys', 'inf', 'rus', 'chem', 'bio', 'geo', 'hist', 'soc', 'en', 'de', 'fr', 'sp', 'lit')\n- `problem_id` (required): Numeric problem ID as a string (e.g., \"12345\")\n- `response_format` (optional): Output format - 'markdown' (default, human-readable) or 'json' (structured data)\n\n**Returns:**\nA complete problem object containing:\n- **condition**: The problem statement (text and optional HTML/images)\n- **solution**: Step-by-step solution with explanations\n- **answer**: The correct answer\n- **similar_problems**: List of related problem IDs for further practice\n- **metadata**: Problem ID, subject, difficulty level where available\n\n**Response format:**\n- **Markdown**: Formatted text with sections for condition, solution, answer, and similar problems\n- **JSON**: Structured object with all problem data as nested objects/arrays\n\n**Example:**\nGetting a specific math problem:\n```json\n{\n  \"subject\": \"math\",\n  \"problem_id\": \"54321\",\n  \"response_format\": \"markdown\"\n}\n```\n\n**Notes:**\n- Problem IDs must be numeric strings (digits only)\n- The problem_id must exist in the specified subject database\n- Some problems may not have solutions available\n- Similar problems are automatically included for practice\n- Use this tool when you need exact problem details, not for searching",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "subject": {
+              "type": "string",
+              "enum": [
+                "math",
+                "mathb",
+                "rus",
+                "phys",
+                "chem",
+                "bio",
+                "geo",
+                "hist",
+                "soc",
+                "inf",
+                "en",
+                "de",
+                "fr",
+                "sp",
+                "lit"
+              ],
+              "description": "Subject code (e.g., 'math', 'phys', 'inf')"
+            },
+            "problem_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 20,
+              "pattern": "^\\d+$",
+              "description": "Problem ID (numeric string)"
+            },
+            "response_format": {
+              "type": "string",
+              "enum": [
+                "json",
+                "markdown"
+              ],
+              "default": "markdown",
+              "description": "Output format: 'markdown' for readable text or 'json' for structured data"
+            }
+          },
+          "required": [
+            "subject",
+            "problem_id"
+          ],
+          "additionalProperties": false,
+          "$schema": "http://json-schema.org/draft-07/schema#"
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true
+        }
+      },
+      {
+        "name": "sdamgia_search_problems",
+        "description": "**Searches for problems in the СДАМ ГИА database using a text-based query.**\n\n**When to use:**\n- You want to find problems related to a specific topic (e.g., \"quadratic equations\", \"Newton's laws\")\n- You're exploring available problems in a subject area\n- You need to discover problem IDs before fetching full details\n- You want to browse problems by keywords or concepts\n\n**Parameters:**\n- `subject` (required): Subject code to search within (e.g., 'math', 'phys', 'inf')\n- `query` (required): Search text - minimum 3 characters, maximum 500 characters. Use descriptive terms like \"triangle area\", \"oxidation reactions\", \"grammar rules\"\n- `limit` (optional): Maximum number of results (1-50, default: 20)\n- `response_format` (optional): 'markdown' (default) or 'json'\n\n**Returns:**\nA list of matching problems with:\n- **problem_ids**: Array of problem IDs matching the search query\n- **total**: Count of results returned\n- In markdown format: numbered list with clickable links to each problem\n\n**Search behavior:**\n- Performs text-based matching against problem descriptions and metadata\n- Results are ranked by relevance to your query\n- Search is optimized for subject-specific terminology\n- Broad search that returns problem IDs only (not full problem details)\n\n**Response format:**\n- **Markdown**: Formatted list with problem IDs and subject context\n- **JSON**: Object with problem_ids array and total count\n\n**Example usage:**\n```json\n{\n  \"subject\": \"math\",\n  \"query\": \"derivative of trigonometric functions\",\n  \"limit\": 10,\n  \"response_format\": \"markdown\"\n}\n```\n\n**Follow-up workflow:**\n1. Use this tool to find relevant problem IDs\n2. Use `sdamgia_get_problem` or `sdamgia_batch_get_problems` to fetch full details\n\n**Notes:**\n- Query must be at least 3 characters for meaningful results\n- Maximum 50 results per search (use limit parameter)\n- Search returns IDs only - follow up with get_problem for details\n- For exact text matching with problem conditions, use `sdamgia_search_by_text` instead\n- Subject-specific terminology works best for quality results",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "subject": {
+              "type": "string",
+              "enum": [
+                "math",
+                "mathb",
+                "rus",
+                "phys",
+                "chem",
+                "bio",
+                "geo",
+                "hist",
+                "soc",
+                "inf",
+                "en",
+                "de",
+                "fr",
+                "sp",
+                "lit"
+              ],
+              "description": "Subject code to search in"
+            },
+            "query": {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 500,
+              "description": "Search query text"
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 20,
+              "description": "Maximum number of results to return"
+            },
+            "response_format": {
+              "type": "string",
+              "enum": [
+                "json",
+                "markdown"
+              ],
+              "default": "markdown"
+            }
+          },
+          "required": [
+            "subject",
+            "query"
+          ],
+          "additionalProperties": false,
+          "$schema": "http://json-schema.org/draft-07/schema#"
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true
+        }
+      },
+      {
+        "name": "sdamgia_search_by_text",
+        "description": "**Finds problems by matching against their full condition text using fuzzy text similarity algorithms.**\n\n**When to use:**\n- You have a problem's exact condition text but don't know its ID\n- You're looking for problems similar to one you've seen before\n- You want to find problems with nearly identical wording\n- You need to detect duplicate or similar problems across the database\n- You have partial problem text and want to find the closest matches\n\n**How it works:**\n1. Performs a broad search to find candidate problems\n2. Fetches the full condition text for each candidate\n3. Applies fuzzy text matching to calculate similarity scores\n4. Returns problems that exceed the similarity threshold\n\n**Parameters:**\n- `subject` (required): Subject code to search within\n- `condition_text` (required): The problem condition text to match against (10-1000 characters). Provide as much of the original problem text as possible for best results.\n- `threshold` (optional): Similarity threshold from 0.0 to 1.0 (default: 0.6). Higher values = stricter matching. Recommended: 0.5-0.7 for approximate matches, 0.8+ for exact matches.\n- `limit` (optional): Maximum number of matches to return (1-50, default: 20)\n- `response_format` (optional): 'markdown' (default) or 'json'\n\n**Returns:**\n- **matches**: Array of matching problems, each containing:\n  - `problem_id`: The matched problem's ID\n  - `similarity`: Score from 0-1 indicating how closely the text matches (higher = better match)\n- **total**: Number of matches found\n\n**Similarity scores:**\n- 1.0: Exact match (identical text)\n- 0.8-0.99: Very close match (minor differences in wording)\n- 0.6-0.79: Similar problem (same concept, different phrasing)\n- 0.4-0.59: Somewhat related (loosely connected)\n- <0.4: Poor match (not recommended)\n\n**Example usage:**\n```json\n{\n  \"subject\": \"math\",\n  \"condition_text\": \"Find the area of a triangle with sides 3, 4, and 5 units.\",\n  \"threshold\": 0.7,\n  \"limit\": 5,\n  \"response_format\": \"markdown\"\n}\n```\n\n**Best practices:**\n- Include the complete problem condition for best matching\n- For exact duplicates, set threshold to 0.9 or higher\n- For similar problems, use threshold around 0.6-0.7\n- If you get too many results, increase the threshold\n- If you get no results, decrease the threshold\n\n**Notes:**\n- Condition text must be at least 10 characters\n- Fuzzy matching is computationally intensive - results may take longer\n- Searches broader than the limit, then applies fuzzy filtering\n- Some results may have lower similarity than expected due to formatting differences\n- For keyword-based searches, use `sdamgia_search_problems` instead\n- Follow up with `sdamgia_get_problem` to see full problem details",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "subject": {
+              "type": "string",
+              "enum": [
+                "math",
+                "mathb",
+                "rus",
+                "phys",
+                "chem",
+                "bio",
+                "geo",
+                "hist",
+                "soc",
+                "inf",
+                "en",
+                "de",
+                "fr",
+                "sp",
+                "lit"
+              ],
+              "description": "Subject code to search in"
+            },
+            "condition_text": {
+              "type": "string",
+              "minLength": 10,
+              "maxLength": 1000,
+              "description": "Problem condition text to search for (supports fuzzy matching)"
+            },
+            "threshold": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1,
+              "default": 0.6,
+              "description": "Similarity threshold for fuzzy matching (0-1, higher = stricter)"
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 20,
+              "description": "Maximum number of results to return"
+            },
+            "response_format": {
+              "type": "string",
+              "enum": [
+                "json",
+                "markdown"
+              ],
+              "default": "markdown"
+            }
+          },
+          "required": [
+            "subject",
+            "condition_text"
+          ],
+          "additionalProperties": false,
+          "$schema": "http://json-schema.org/draft-07/schema#"
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true
+        }
+      },
+      {
+        "name": "sdamgia_batch_get_problems",
+        "description": "**Efficiently retrieves multiple complete problems from the СДАМ ГИА database in a single request.**\n\n**When to use:**\n- You have multiple problem IDs and need all their details\n- You want to compare several problems side-by-side\n- You're building a problem set or practice collection\n- You need to fetch related problems after a search\n- You want to reduce API calls compared to individual get_problem requests\n\n**Parameters:**\n- `subject` (required): Subject code for all problems (all IDs must belong to this subject)\n- `problem_ids` (required): Array of problem IDs to fetch. Must include 1-10 problem IDs as numeric strings (e.g., [\"12345\", \"67890\", \"54321\"])\n- `response_format` (optional): 'markdown' (default) or 'json'\n\n**Returns:**\n- **problems**: Array of complete problem objects, each containing:\n  - **condition**: Full problem statement with text and optional HTML/images\n  - **solution**: Detailed step-by-step solution\n  - **answer**: The correct answer\n  - **similar_problems**: Related problem IDs\n  - **metadata**: Problem ID, subject, difficulty level\n- **total**: Number of problems successfully fetched\n\n**Response format:**\n- **Markdown**: Formatted text with each problem in a separate section, clearly delineated with problem IDs\n- **JSON**: Structured object with problems array and metadata\n\n**Example usage:**\n```json\n{\n  \"subject\": \"math\",\n  \"problem_ids\": [\"12345\", \"67890\", \"54321\", \"11111\", \"22222\"],\n  \"response_format\": \"markdown\"\n}\n```\n\n**Typical workflow:**\n1. Use `sdamgia_search_problems` to find relevant problem IDs\n2. Pass the IDs to this tool for batch retrieval\n3. Review all problems together for comparison or practice\n\n**Performance benefits:**\n- Single API call instead of multiple individual calls\n- Faster than sequential `sdamgia_get_problem` requests\n- Ideal for fetching 2-10 problems at once\n- Reduces network overhead and latency\n\n**Constraints:**\n- Maximum 10 problems per batch request\n- All problem IDs must be valid numeric strings\n- All problems must be from the same subject\n- Invalid IDs will cause the entire batch to fail\n- Fetching many problems may return large responses\n\n**Error handling:**\n- If any problem ID is invalid or not found, the entire batch fails\n- Make sure all IDs exist in the subject before batching\n- Consider splitting into smaller batches if you encounter errors\n\n**Notes:**\n- Batch size is limited to 10 to prevent excessive response sizes\n- Use when you need full problem details, not just IDs\n- For searching, use `sdamgia_search_problems` first\n- Each problem includes similar problems for extended practice\n- All problems in batch are fetched in parallel for speed",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "subject": {
+              "type": "string",
+              "enum": [
+                "math",
+                "mathb",
+                "rus",
+                "phys",
+                "chem",
+                "bio",
+                "geo",
+                "hist",
+                "soc",
+                "inf",
+                "en",
+                "de",
+                "fr",
+                "sp",
+                "lit"
+              ],
+              "description": "Subject code"
+            },
+            "problem_ids": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 20,
+                "pattern": "^\\d+$",
+                "description": "Problem ID (numeric string)"
+              },
+              "minItems": 1,
+              "maxItems": 10,
+              "description": "Array of problem IDs to fetch"
+            },
+            "response_format": {
+              "type": "string",
+              "enum": [
+                "json",
+                "markdown"
+              ],
+              "default": "markdown"
+            }
+          },
+          "required": [
+            "subject",
+            "problem_ids"
+          ],
+          "additionalProperties": false,
+          "$schema": "http://json-schema.org/draft-07/schema#"
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true
+        }
+      },
+      {
+        "name": "sdamgia_get_catalog",
+        "description": "Retrieves the complete hierarchical catalog structure for a specified subject, including all topics, subtopics, and problem categories with their unique identifiers.\n\n**PURPOSE:**\nThis is the primary discovery tool for exploring what problem content is available on the platform. It returns the full taxonomy of problem categories organized by topics, enabling you to navigate and find specific types of problems.\n\n**WHEN TO USE:**\n- Always use this FIRST when exploring a new subject to understand its structure\n- Use when you need to find category IDs for other tools (required prerequisite for sdamgia_get_category_problems)\n- Use when you need to understand the organization and topics available for a subject\n- Use when building problem sets and need to browse available content\n- Essential for discovering what problem types exist before querying specific categories\n\n**KEY PARAMETERS:**\n- subject (required): The subject identifier (e.g., 'ege', 'oge', 'math')\n- response_format (optional): Output format - 'json' for structured data, 'markdown' for formatted text (default: 'json')\n\n**RESPONSE FORMAT:**\nReturns an array of catalog entries, where each entry contains:\n- name: Human-readable topic/category name\n- id: Unique category identifier (required for other tools)\n- children: Optional array of subcategories (nested hierarchy)\n\nThe response is hierarchical - categories may contain subcategories, and leaf nodes represent actual problem categories you can query.\n\n**IMPORTANT NOTES:**\n- This tool ONLY returns category structure and IDs, NOT actual problems\n- Must be called before using sdamgia_get_category_problems to obtain valid category_id values\n- Category IDs are specific to each subject - the same ID may mean different things across subjects\n- The catalog structure can change over time as new content is added\n- Response size can be large for comprehensive subjects\n\n**EXAMPLE WORKFLOW:**\n1. Call sdamgia_get_catalog(subject='ege') to get all EGE categories\n2. Parse response to find desired category (e.g., \"Quadratic Equations\" with id='12345')\n3. Use category_id='12345' with sdamgia_get_category_problems to get actual problems\n\n**TYPICAL USE CASES:**\n- \"Show me all available topics for EGE mathematics\"\n- \"What categories exist under 'Algebra' for OGE?\"\n- \"Find the category ID for trigonometry problems\"\n- \"Browse the complete problem catalog structure\"",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "subject": {
+              "type": "string",
+              "enum": [
+                "math",
+                "mathb",
+                "rus",
+                "phys",
+                "chem",
+                "bio",
+                "geo",
+                "hist",
+                "soc",
+                "inf",
+                "en",
+                "de",
+                "fr",
+                "sp",
+                "lit"
+              ],
+              "description": "Subject code"
+            },
+            "response_format": {
+              "type": "string",
+              "enum": [
+                "json",
+                "markdown"
+              ],
+              "default": "markdown"
+            }
+          },
+          "required": [
+            "subject"
+          ],
+          "additionalProperties": false,
+          "$schema": "http://json-schema.org/draft-07/schema#"
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true
+        }
+      },
+      {
+        "name": "sdamgia_get_category_problems",
+        "description": "Retrieves all problem identifiers belonging to a specific problem category within a subject.\n\n**PURPOSE:**\nFetches the complete list of unique problem IDs for problems classified under a specific category. This enables you to identify exactly which problems exist in a category before retrieving their full details or solutions.\n\n**WHEN TO USE:**\n- Use AFTER obtaining a category_id from sdamgia_get_catalog (required prerequisite)\n- Use when you need to see all available problems in a specific category\n- Use when building problem sets from particular topics\n- Use when you need to count how many problems exist in a category\n- Use when selecting specific problems before fetching their full content\n- Essential for batch operations on category-level problem sets\n\n**KEY PARAMETERS:**\n- subject (required): The subject identifier (e.g., 'ege', 'oge', 'math')\n- category_id (required): Unique category identifier obtained from sdamgia_get_catalog\n- limit (optional): Maximum number of problem IDs to return (for pagination or sampling)\n- response_format (optional): Output format - 'json' for structured data, 'markdown' for formatted text (default: 'json')\n\n**PARAMETER CONSTRAINTS:**\n- category_id MUST be a valid ID from the catalog - invalid IDs will return errors\n- If category has no problems, returns empty array\n- limit parameter truncates results if specified; otherwise returns all problems\n- Category IDs are subject-specific - same ID may exist in multiple subjects but refer to different content\n\n**RESPONSE FORMAT:**\nReturns an array of problem ID strings/numbers:\n- Each ID represents a unique problem that can be fetched with other tools\n- IDs are typically numeric but returned as strings\n- Order of IDs may not be sequential or sorted\n- Array may be empty for new or unused categories\n- Total count of problems is included in response metadata\n\n**IMPORTANT NOTES:**\n- This tool ONLY returns problem IDs, NOT problem content, statements, or solutions\n- You MUST call sdamgia_get_catalog first to obtain valid category_id values\n- category_id values are case-sensitive and must match exactly from catalog\n- Large categories may return hundreds or thousands of IDs\n- The same problem ID may appear in multiple categories (cross-categorized content)\n- Invalid or expired category IDs will cause the request to fail\n\n**EXAMPLE WORKFLOW:**\n1. Call sdamgia_get_catalog(subject='ege') to browse categories\n2. Find desired category (e.g., id='12345' for \"Derivatives\")\n3. Call sdamgia_get_category_problems(subject='ege', category_id='12345')\n4. Receive array: [1001, 1002, 1005, 1102, ...]\n5. Use individual problem IDs with sdamgia_get_problem to get full content\n\n**TYPICAL USE CASES:**\n- \"Get all problems in the 'Quadratic Equations' category for EGE\"\n- \"List first 50 problems from category ID 54321\"\n- \"How many practice problems exist for this topic?\"\n- \"Collect all problem IDs for a specific category to analyze difficulty distribution\"\n- \"Build a randomized problem set from category 67890\"",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "subject": {
+              "type": "string",
+              "enum": [
+                "math",
+                "mathb",
+                "rus",
+                "phys",
+                "chem",
+                "bio",
+                "geo",
+                "hist",
+                "soc",
+                "inf",
+                "en",
+                "de",
+                "fr",
+                "sp",
+                "lit"
+              ],
+              "description": "Subject code"
+            },
+            "category_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 20,
+              "description": "Category ID"
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 20,
+              "description": "Maximum number of results to return"
+            },
+            "response_format": {
+              "type": "string",
+              "enum": [
+                "json",
+                "markdown"
+              ],
+              "default": "markdown"
+            }
+          },
+          "required": [
+            "subject",
+            "category_id"
+          ],
+          "additionalProperties": false,
+          "$schema": "http://json-schema.org/draft-07/schema#"
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true
+        }
+      },
+      {
+        "name": "sdamgia_get_test",
+        "description": "Retrieves all problem identifiers that comprise a specific test or examination variant.\n\n**PURPOSE:**\nFetches the complete list of problem IDs that make up a predefined test or exam variant. Tests are curated collections of problems designed to simulate actual exam conditions or assess specific skill sets.\n\n**WHEN TO USE:**\n- Use when you need to see all problems in a specific test variant or exam\n- Use when working with practice tests or mock exams\n- Use when you need the complete problem set for timed test simulations\n- Use when analyzing test composition or difficulty distribution\n- Use when preparing for real exams by reviewing official test variants\n- Essential for accessing complete, ready-made problem collections\n\n**KEY PARAMETERS:**\n- subject (required): The subject identifier (e.g., 'ege', 'oge', 'math')\n- test_id (required): Unique identifier for the specific test/variant to retrieve\n- response_format (optional): Output format - 'json' for structured data, 'markdown' for formatted text (default: 'json')\n\n**PARAMETER CONSTRAINTS:**\n- test_id must be a valid, existing test identifier for the specified subject\n- Invalid test IDs will result in errors or empty results\n- Test IDs are typically numeric but may include alphanumeric codes\n- Not all test IDs may be publicly accessible or available\n- Test availability may vary by subject and time period\n\n**RESPONSE FORMAT:**\nReturns an array of problem ID strings/numbers:\n- Each ID represents a problem in the test sequence\n- IDs are returned in test order (first problem to last)\n- Tests typically contain 5-25 problems depending on exam type\n- Total count of problems is included in response metadata\n- Problems are already curated and balanced by difficulty/topic\n\n**IMPORTANT NOTES:**\n- This tool ONLY returns problem IDs, NOT problem content, statements, or solutions\n- Test IDs are different from category IDs - they reference specific exam variants\n- Test composition is fixed and determined by test creators\n- The same problem may appear in multiple tests\n- Tests are designed to be completed within specific time limits\n- Some tests may include special instructions or sections not visible in ID list\n- Test availability may be limited by region, year, or exam board\n\n**DISTINCTION FROM CATEGORY QUERIES:**\nUnlike sdamgia_get_category_problems which fetches all problems from a topic, this tool fetches problems from a specific, curated test variant. Tests are pre-assembled problem sets, while categories are thematic collections.\n\n**EXAMPLE WORKFLOW:**\n1. Obtain test_id from external source (e.g., 'ege-2023-variant-123' or numeric ID)\n2. Call sdamgia_get_test(subject='ege', test_id='12345')\n3. Receive ordered array: [5001, 5002, 5003, 5004, 5005, ...]\n4. Use individual problem IDs with sdamgia_get_problem for full content\n5. Present problems in order to simulate actual exam experience\n\n**TYPICAL USE CASES:**\n- \"Get all problems from EGE 2023 variant 15\"\n- \"Show me the complete problem list for OGE practice test 7\"\n- \"Retrieve all problems in diagnostic test variant 42\"\n- \"What problems are included in the final exam simulation test?\"\n- \"Fetch the problem IDs for yesterday's practice test\"\n\n**PRACTICAL APPLICATIONS:**\n- Creating timed practice sessions with real exam variants\n- Analyzing difficulty patterns in official tests\n- Comparing problem distributions across different test years\n- Building test preparation schedules using official variants\n- Reviewing complete test content before exam day",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "subject": {
+              "type": "string",
+              "enum": [
+                "math",
+                "mathb",
+                "rus",
+                "phys",
+                "chem",
+                "bio",
+                "geo",
+                "hist",
+                "soc",
+                "inf",
+                "en",
+                "de",
+                "fr",
+                "sp",
+                "lit"
+              ],
+              "description": "Subject code"
+            },
+            "test_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 20,
+              "pattern": "^\\d+$",
+              "description": "Test ID (numeric string)"
+            },
+            "response_format": {
+              "type": "string",
+              "enum": [
+                "json",
+                "markdown"
+              ],
+              "default": "markdown"
+            }
+          },
+          "required": [
+            "subject",
+            "test_id"
+          ],
+          "additionalProperties": false,
+          "$schema": "http://json-schema.org/draft-07/schema#"
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true
+        }
+      }
+    ]
+  },
+  "smokeTest": {
+    "passed": false,
+    "ranAt": "2026-03-18T12:29:46.922Z",
+    "outputPreview": "Pending smoke test."
+  }
+}

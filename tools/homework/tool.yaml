@@ -1,16 +1,26 @@
 name: homework
 description: |
+  - `homework.listDocuments(): Promise<Array<{ id, title, sectionType, pageOffset, pageCount, sectionCount, cachedSectionCount, sections }>>`
+    Returns the full library of stored textbooks/documents with their section mappings.
+    Use this first to discover available `documentId` values and section numbers.
+
+  - `homework.getSectionText(documentId: string, sectionNumber: number): Promise<string>`
+    Returns the full text of the requested paragraph/chapter/article/section.
+    Example: `const text = await homework.getSectionText("istoriya-rossii-8", 17);`
+
   - `homework.ask(bookId: string, question: string): Promise<string>`
-    Позволяет получить информацию, текст заданий или параграфов из школьных учебников.
-    Допустимые bookId: 'algebra', 'geometry', 'social_studies', 'history', 'russian'.
-    Пример: `const result = await homework.ask("algebra", "Выведи полный текст задания номер 156");`
+    NotebookLM CLI-backed access to the shared textbooks notebook.
+    Allowed `bookId`: `algebra`, `geometry`, `social_studies`, `history`, `russian`. The question is normalized to one line and sent through `notebooklm ask ... -n b14102a9-29f2-4cf9-ad2a-10238008c138`.
 
   - `homework.generateSVG(taskText: string): Promise<string>`
-    Генерирует чистый, ручной SVG код рисунка по тексту геометрической задачи при помощи LLM. Возвращает строку с кодом <svg>...</svg>.
-    Пример: `const svg = await homework.generateSVG("В треугольнике ABC угол C равен 90 градусов...");`
+    Generates a clean SVG drawing for a geometry problem.
 
   - `homework.formatHomework(taskContent: string, fileName: string): Promise<string>`
-    Форматирует выполненное задание в нужный для принтера (пишущего почерком) формат и сохраняет его в .txt файл.
-    Пример: `const result = await homework.formatHomework("Дано: ... Решение: ... Ответ: ...", "task_156.txt");`
+    Formats a completed homework solution and saves it to a `.txt` file.
 
+  - `homework.generateSectionVideo(documentId: string, sectionNumber: number): Promise<string>`
+    Generates an explainer video for a document section using NotebookLM.
+    Creates a notebook, uploads the section PDF, generates a Russian-language explainer video,
+    waits for completion (15-45 min), downloads it, and auto-sends to Telegram.
+    Example: `const result = await homework.generateSectionVideo("istoriya-rossii-8", 17);`
 module: index.ts

@@ -16,6 +16,10 @@ import type {
 import type { Session } from '../core/Session.js';
 import type { ExecutorOptions } from '../core/Executor.js';
 import type { ToolExecutionEngine } from '../core/ToolExecutionEngine.js';
+import {
+  buildCompletionWarning,
+  PRIMARY_COMPLETION_FUNCTION,
+} from '../core/completion.js';
 import { NoStreamRegistry } from '../providers/NoStreamRegistry.js';
 
 const DEFAULT_MAX_ITERATIONS = 500;
@@ -121,6 +125,7 @@ export class ProviderToolsLoop extends BaseLoop {
 
     for (let iteration = 0; iteration < maxIterations; iteration++) {
       await processFileMessages();
+      await session.refreshSkillsContext([], options.callbacks);
 
       const messages = session.getAllMessages();
       const providerConfig: ProviderConfig = {
@@ -148,7 +153,7 @@ export class ProviderToolsLoop extends BaseLoop {
         if (responseText.trim()) {
           session.addAssistantMessage(responseText);
         }
-        const warningMessage = 'SYSTEM: You haven\'t completed the task yet. To finish, you MUST call the `FINISH("message")` function with a description of what you have done and the result.';
+        const warningMessage = buildCompletionWarning();
 
         if (options.requireFinish) {
           session.addUserMessage(warningMessage);
@@ -215,7 +220,7 @@ export class ProviderToolsLoop extends BaseLoop {
     const forceNoStream = noStreamRegistry.isNoStream(provider.name, config.model);
 
     if (forceNoStream && config.stream) {
-      console.log(
+      console.error(
         `[ProviderToolsLoop] Model "${config.model}" is in no-stream registry for "${provider.name}", using non-streaming mode.`
       );
     }
@@ -307,7 +312,8 @@ export class ProviderToolsLoop extends BaseLoop {
   - \`cli(content)\` for shell command execution.
   - \`file(filename, content)\` for single-file write/edit.
 - Tool calls are executed sequentially.
-- To finish, you MUST call \`FINISH("message")\` inside \`action\` tool code.`;
+- To finish, call \`${PRIMARY_COMPLETION_FUNCTION}("final user-facing message")\` only when the task is truly complete.
+- If you need clarification from the user, use \`message.ask(...)\` inside \`action(...)\` instead of stopping early.`;
   }
 }
 

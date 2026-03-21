@@ -1,0 +1,31 @@
+name: base_strategist
+description: Base strategist for the Telos Ultimate Strategy Engine. Builds strategy candidates, gathers exhaustive intake, chooses a plan, and sets up heartbeat-based monitoring.
+
+model: gpt-5.4-mini
+provider: openai-codex
+systemPrompt: prompts/system.md
+
+modelSwitching:
+  mode: whitelist
+  whitelist:
+    - gpt-5.4-mini
+  selector:
+    model: openai/gpt-oss-20b
+    provider: openrouter
+
+tools:
+  - search
+  - message
+  - agents
+  - heartbeat
+  - strategy
+  - utils
+
+memory:
+  enabled: false
+
+loop: provider-tools
+syntax: markdown
+skillsTable: strategy_base_strategist
+injectAgentsList: true
+requireFinish: true
