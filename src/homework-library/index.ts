@@ -29,7 +29,7 @@ const METADATA_NAME = 'metadata.json';
 const CACHE_DIR_NAME = 'cache';
 const GEMINI_MODEL = 'gemini-3.1-flash-lite-preview';
 const OCR_SCRIPT_PATH = join(PROJECT_ROOT, 'scripts', 'homework_pdf_ocr.py');
-const SECTION_CACHE_VERSION = 2;
+const SECTION_CACHE_VERSION = 3;
 const RETRYABLE_GEMINI_STATUSES = new Set([429, 500, 502, 503, 504]);
 const GEMINI_MAX_RETRIES = 4;
 
@@ -84,6 +84,21 @@ function cleanPlainText(text: string): string {
   return strippedFence.replace(/\r\n/g, '\n').trim();
 }
 
+function describeDocumentUnit(sectionType: string): string {
+  const trimmed = String(sectionType || '').trim();
+  return trimmed || 'document unit';
+}
+
+function buildUnitScopeInstructions(sectionType: string, fullName: string): string[] {
+  const unitLabel = describeDocumentUnit(sectionType);
+  return [
+    `The requested document unit type is "${unitLabel}". The requested ${unitLabel} is titled: ${fullName}.`,
+    `Extract the full content that belongs to this ${unitLabel}, not just its opening fragment.`,
+    `If this ${unitLabel} contains nested headings, subsections, examples, or internal subparts that still belong to the same ${unitLabel}, keep them.`,
+    `Stop only when the next sibling ${unitLabel} begins or when clearly unrelated appendix or exercise material starts.`,
+  ];
+}
+
 function normalizeForSearch(text: string): string {
   return text
     .toLowerCase()
@@ -100,7 +115,7 @@ function findNormalizedIndex(source: string, query: string): number {
   const sourceIndexes: number[] = [];
 
   for (let index = 0; index < source.length; index += 1) {
-    const char = source[index];
+    const char = source.charAt(index);
     const normalizedChar = char.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ');
     if (!normalizedChar) continue;
 
@@ -277,6 +292,39 @@ function toSummary(metadata: HomeworkDocumentMetadata): HomeworkDocumentSummary 
   };
 }
 
+function validateTocInput(input: CreateHomeworkDocumentInput, pageCount: number): {
+  tocInputMode: 'page' | 'text';
+  tocPagePdf: number | null;
+  tocPageLogical: number | null;
+  tocText: string;
+} {
+  const tocText = String(input.tocText || '').trim();
+  const tocPagePdf =
+    typeof input.tocPagePdf === 'number' && Number.isFinite(input.tocPagePdf)
+      ? Math.floor(input.tocPagePdf)
+      : NaN;
+
+  if (tocText) {
+    return {
+      tocInputMode: 'text',
+      tocPagePdf: null,
+      tocPageLogical: null,
+      tocText,
+    };
+  }
+
+  if (!Number.isFinite(tocPagePdf) || tocPagePdf < 1 || tocPagePdf > pageCount) {
+    throw new Error(`tocPagePdf must be between 1 and ${pageCount}, or provide tocText.`);
+  }
+
+  return {
+    tocInputMode: 'page',
+    tocPagePdf,
+    tocPageLogical: tocPagePdf + input.pageOffset,
+    tocText: '',
+  };
+}
+
 async function ensureLibraryDirs(): Promise<void> {
   await mkdir(DOCUMENTS_DIR, { recursive: true });
 }
@@ -378,6 +426,69 @@ async function parseTableOfContentsPage(args: {
   return Array.isArray(payload.sections) ? payload.sections : [];
 }
 
+async function parseTableOfContentsText(args: {
+  tocText: string;
+  sectionType: string;
+}): Promise<Array<{ pageStart: number; pageEnd: number; sectionNumber: number; fullName: string }>> {
+  const ai = getClient();
+  const response = await runGeminiWithRetries('table-of-contents text parsing', () =>
+    ai.models.generateContent({
+      model: GEMINI_MODEL,
+      contents: [
+        {
+          role: 'user',
+          parts: [
+            {
+              text: [
+                `You are extracting a numbered table of contents for a document split into ${args.sectionType}.`,
+                `Read only the pasted table-of-contents text below.`,
+                `Return only numbered ${args.sectionType} entries from that text.`,
+                `Use the printed page numbers from the text, not any PDF viewer page indexes.`,
+                `If pageEnd is not explicitly inferable from the text itself, set it equal to pageStart.`,
+                `Preserve the full section name closely enough to identify the section.`,
+                `Do not include appendices, tasks, tests, glossaries, indexes, or unnumbered decorations.`,
+                '',
+                'Table of contents text:',
+                args.tocText,
+              ].join('\n'),
+            },
+          ],
+        },
+      ],
+      config: {
+        thinkingConfig: {
+          thinkingLevel: ThinkingLevel.MINIMAL,
+        },
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          required: ['sections'],
+          properties: {
+            sections: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                required: ['pageStart', 'pageEnd', 'sectionNumber', 'fullName'],
+                properties: {
+                  pageStart: { type: Type.NUMBER },
+                  pageEnd: { type: Type.NUMBER },
+                  sectionNumber: { type: Type.NUMBER },
+                  fullName: { type: Type.STRING },
+                },
+              },
+            },
+          },
+        },
+      },
+    })
+  );
+
+  const payload = JSON.parse(response.text || '{"sections":[]}') as {
+    sections?: Array<{ pageStart: number; pageEnd: number; sectionNumber: number; fullName: string }>;
+  };
+  return Array.isArray(payload.sections) ? payload.sections : [];
+}
+
 function normalizeSections(args: {
   rawSections: Array<{ pageStart: number; pageEnd: number; sectionNumber: number; fullName: string }>;
   pageOffset: number;
@@ -438,11 +549,8 @@ function normalizeSections(args: {
 
 async function buildDocumentMetadata(input: CreateHomeworkDocumentInput): Promise<HomeworkDocumentMetadata> {
   const pageCount = await readPdfPageCount(input.pdfBuffer);
-  if (!Number.isFinite(input.tocPagePdf) || input.tocPagePdf < 1 || input.tocPagePdf > pageCount) {
-    throw new Error(`tocPagePdf must be between 1 and ${pageCount}.`);
-  }
-
   const sectionType = input.sectionType.trim().toLowerCase() || 'paragraphs';
+  const tocInput = validateTocInput(input, pageCount);
   const title = normalizeTitle(input.title || '', input.originalFilename);
   const documentId = await uniqueDocumentId(title);
   const documentDir = join(DOCUMENTS_DIR, documentId);
@@ -452,11 +560,16 @@ async function buildDocumentMetadata(input: CreateHomeworkDocumentInput): Promis
   await writeFile(sourcePdfPath(documentId), input.pdfBuffer);
 
   try {
-    const tocPdf = await extractPdfPageRange(input.pdfBuffer, input.tocPagePdf, input.tocPagePdf);
-    const rawSections = await parseTableOfContentsPage({
-      tocPdf,
-      sectionType,
-    });
+    const rawSections =
+      tocInput.tocInputMode === 'text'
+        ? await parseTableOfContentsText({
+            tocText: tocInput.tocText,
+            sectionType,
+          })
+        : await parseTableOfContentsPage({
+            tocPdf: await extractPdfPageRange(input.pdfBuffer, tocInput.tocPagePdf!, tocInput.tocPagePdf!),
+            sectionType,
+          });
     const sections = normalizeSections({
       rawSections,
       pageOffset: input.pageOffset,
@@ -473,13 +586,14 @@ async function buildDocumentMetadata(input: CreateHomeworkDocumentInput): Promis
       title,
       originalFilename: input.originalFilename,
       sectionType,
-      tocPagePdf: input.tocPagePdf,
-      tocPageLogical: input.tocPagePdf + input.pageOffset,
+      tocPagePdf: tocInput.tocPagePdf,
+      tocPageLogical: tocInput.tocPageLogical,
       pageOffset: input.pageOffset,
       pageCount,
       createdAt: now,
       updatedAt: now,
       model: GEMINI_MODEL,
+      tocInputMode: tocInput.tocInputMode,
       sections,
       cachedSections: {},
     };
@@ -505,11 +619,12 @@ async function extractSectionTextWithGemini(args: {
           parts: [
             {
               text: [
-                `Extract the complete main text of ${args.sectionType} ${args.sectionNumber}: ${args.fullName}.`,
+                `Extract the complete text of ${args.sectionType} ${args.sectionNumber}: ${args.fullName}.`,
+                ...buildUnitScopeInstructions(args.sectionType, args.fullName),
                 `Return plain Russian text only.`,
-                `Keep the section heading and the core explanatory paragraphs that belong to this section.`,
+                `Keep the heading and all explanatory text that belongs to the requested document unit.`,
                 `Skip exercises, assignments, discussion prompts, recap blocks, sidebars, "Вспомним", "Подумаем", "В классе и дома", "Документ", "Мнения", questions, tests, appendices, and any unrelated additional materials.`,
-                `If the PDF chunk contains neighboring sections, keep only the requested one.`,
+                `If the PDF chunk contains neighboring units, keep only the requested ${describeDocumentUnit(args.sectionType)}.`,
                 `Do not add commentary or summaries.`,
               ].join('\n'),
             },
@@ -551,10 +666,11 @@ async function normalizeOcrTextWithGemini(args: {
             {
               text: [
                 `You will receive noisy OCR text for ${args.sectionType} ${args.sectionNumber}: ${args.fullName}.`,
+                ...buildUnitScopeInstructions(args.sectionType, args.fullName),
                 `Restore the Russian text, fix OCR mistakes, merge broken words, and preserve paragraph breaks.`,
                 `Return only the normalized text in Russian.`,
                 `Do not summarize, do not shorten, do not add commentary, and do not invent missing facts.`,
-                `If there are obvious exercise headings or side sections, keep only the main section text.`,
+                `If there are obvious exercise headings or side materials, remove them, but keep all text that still belongs to the requested ${describeDocumentUnit(args.sectionType)}.`,
                 '',
                 args.ocrText,
               ].join('\n'),
@@ -592,17 +708,18 @@ async function postProcessSectionTextWithGemini(args: {
             {
               text: [
                 `You will receive extracted Russian text for ${args.sectionType} ${args.sectionNumber}: ${args.fullName}.`,
+                ...buildUnitScopeInstructions(args.sectionType, args.fullName),
                 `Your task is to clean the extracted text, not to summarize it.`,
                 `Requirements:`,
-                `1. Keep only the main text of the requested section.`,
+                `1. Keep the full text of the requested ${describeDocumentUnit(args.sectionType)}, including nested subparts that belong to it.`,
                 `2. Remove exercises, questions, tasks, sidebars, captions, page furniture, "Вопросы и задания", "Думаем, сравниваем, размышляем", "Работаем с картой", "Документ", "Мнения", and similar extra materials if they are not part of the main section exposition.`,
                 `3. Fix obvious OCR mistakes, broken words, wrong letters, and bad paragraph joins.`,
                 `4. Preserve the Russian language and paragraph structure.`,
                 `5. Do not add any commentary, headings of your own, summaries, or explanations.`,
-                `6. If text from the next section appears, remove it.`,
+                `6. If text from the next sibling ${describeDocumentUnit(args.sectionType)} appears, remove it.`,
                 args.nextSectionName
-                  ? `7. The next section begins with: ${args.nextSectionName}. Exclude everything from that next section onward.`
-                  : `7. Do not include content from any later section.`,
+                  ? `7. The next ${describeDocumentUnit(args.sectionType)} begins with: ${args.nextSectionName}. Exclude everything from that next unit onward.`
+                  : `7. Do not include content from any later sibling ${describeDocumentUnit(args.sectionType)}.`,
                 ``,
                 `Return only the cleaned Russian text.`,
                 ``,

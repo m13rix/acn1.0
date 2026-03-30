@@ -1,0 +1,6 @@
+name: minecraft
+description: ""
+module: index.ts
+skills:
+  enabled: true
+  directory: skills

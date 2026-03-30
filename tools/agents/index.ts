@@ -8,7 +8,8 @@
 import * as fs from 'fs';
 import { join } from 'path';
 
-import { runAgent, listAgents, loadAgent } from '../../src/core/AgentRunner.js';
+import { listAgents, loadAgent } from '../../src/core/AgentRunner.js';
+import { getAgentInvocationService } from '../../src/core/AgentInvocationService.js';
 import { runInSandboxCallQueue } from '../../src/core/AgentCallQueue.js';
 import {
     getAgentDepth,
@@ -147,6 +148,7 @@ import { sendRequest } from '../srcAgent/index.js';
 import { LocalSandbox } from '../../src/sandbox/LocalSandbox.js';
 import { selectModel, SelectorConfig } from '../../src/services/model-selection/ModelSelector.js';
 import { normalizeAgentRequest } from './request.js';
+import { actionContext } from '../../src/core/ActionContext.js';
 
 /**
  * Get the calling agent's LoadedAgent — works across process boundaries.
@@ -201,6 +203,7 @@ async function runNamedAgentInCurrentSandbox(options: {
     request: string;
     parentDepth: number;
     stream: boolean;
+    interfaceOverride?: string;
     extraSystemPrompt?: string;
     modelOverride?: string;
     systemPromptOverride?: string;
@@ -214,7 +217,7 @@ async function runNamedAgentInCurrentSandbox(options: {
     }
 
     const sandboxKey = sandbox.directory;
-    const queued = await runInSandboxCallQueue(sandboxKey, async () => runAgent({
+    const queued = await runInSandboxCallQueue(sandboxKey, async () => getAgentInvocationService().callAgent({
         agent: options.agent,
         message: options.request,
         sandbox,
@@ -224,6 +227,8 @@ async function runNamedAgentInCurrentSandbox(options: {
         modelOverride: options.modelOverride,
         systemPromptOverride: options.systemPromptOverride,
         isSubagent: options.isSubagent,
+        interface: options.interfaceOverride,
+        routeEnv: actionContext.getStore()?.env,
     }));
 
     return queued.waited ? `${options.queueNotice || AGENT_CALL_QUEUE_NOTICE}\n\n${queued.value}` : queued.value;
@@ -388,7 +393,7 @@ export async function newAgent(prompt: string): Promise<string> {
  * @param request - Message to send to the agent
  * @returns Agent's response
  */
-export async function call(name: string, request: unknown): Promise<string> {
+export async function call(name: string, request: unknown, options?: { interface?: string }): Promise<string> {
     const parentDepth = getAgentDepth(); // Will be 0 in child process
     const stream = isStreamingEnabled();
     const currentAgent = await getCallingAgent();
@@ -454,6 +459,7 @@ export async function call(name: string, request: unknown): Promise<string> {
                 request: normalizedRequest,
                 parentDepth,
                 stream,
+                interfaceOverride: options?.interface,
                 extraSystemPrompt: subConfig.systemPrompt,
                 modelOverride,
                 systemPromptOverride: subConfig.baseSystemPrompt,
@@ -468,6 +474,7 @@ export async function call(name: string, request: unknown): Promise<string> {
             request: normalizedRequest,
             parentDepth,
             stream,
+            interfaceOverride: options?.interface,
             isSubagent: true,
         });
         console.error(`[agents] call("${name}") completed: ${summarizeAgentResult(result)}`);

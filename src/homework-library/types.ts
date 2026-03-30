@@ -21,13 +21,14 @@ export interface HomeworkDocumentMetadata {
   title: string;
   originalFilename: string;
   sectionType: string;
-  tocPagePdf: number;
-  tocPageLogical: number;
+  tocPagePdf: number | null;
+  tocPageLogical: number | null;
   pageOffset: number;
   pageCount: number;
   createdAt: string;
   updatedAt: string;
   model: string;
+  tocInputMode?: 'page' | 'text';
   sections: HomeworkDocumentSection[];
   cachedSections: Record<string, HomeworkSectionCacheEntry>;
 }
@@ -37,8 +38,8 @@ export interface HomeworkDocumentSummary {
   title: string;
   originalFilename: string;
   sectionType: string;
-  tocPagePdf: number;
-  tocPageLogical: number;
+  tocPagePdf: number | null;
+  tocPageLogical: number | null;
   pageOffset: number;
   pageCount: number;
   createdAt: string;
@@ -52,7 +53,8 @@ export interface CreateHomeworkDocumentInput {
   title?: string;
   originalFilename: string;
   pdfBuffer: Buffer;
-  tocPagePdf: number;
+  tocPagePdf?: number;
+  tocText?: string;
   pageOffset: number;
   sectionType: string;
 }

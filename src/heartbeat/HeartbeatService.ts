@@ -21,6 +21,7 @@ import { LocalSandbox } from '../sandbox/LocalSandbox.js';
 import { ToolLoader } from '../loaders/ToolLoader.js';
 import { AgentLoader } from '../loaders/AgentLoader.js';
 import { getAgentSandbox, getCurrentAgent } from '../core/AgentContext.js';
+import { runBackgroundTaskWhenForegroundIdle } from '../core/ExecutionGate.js';
 import { serializeHandlerSource, validateHandlerSource } from './handlerSource.js';
 import { structuredLlm } from '../utils/structuredLlm.js';
 import type { AgentMemoryConfig, LoadedAgent } from '../types/index.js';
@@ -830,19 +831,20 @@ export class HeartbeatService extends EventEmitter {
   }
 
   private async executeBinding(binding: HeartbeatBindingRecord, event: HeartbeatSensorEvent): Promise<void> {
-    const toolNames = normalizeToolSnapshot(binding.toolNames);
-    const tools = await this.toolLoader.loadByNames(toolNames);
-    const sandbox = new LocalSandbox();
+    await runBackgroundTaskWhenForegroundIdle(async () => {
+      const toolNames = normalizeToolSnapshot(binding.toolNames);
+      const tools = await this.toolLoader.loadByNames(toolNames);
+      const sandbox = new LocalSandbox();
 
-    try {
-      this.log(`Executing binding '${binding.id}' for event '${event.sensor}.${event.event}'.`);
-      await sandbox.initialize(tools, binding.skillsTable, binding.memoryConfig);
-      const runtimeEvent = {
-        ...event,
-        bindingId: binding.id,
-      };
+      try {
+        this.log(`Executing binding '${binding.id}' for event '${event.sensor}.${event.event}'.`);
+        await sandbox.initialize(tools, binding.skillsTable, binding.memoryConfig);
+        const runtimeEvent = {
+          ...event,
+          bindingId: binding.id,
+        };
 
-      const code = `
+        const code = `
 const __binding = ${JSON.stringify(cloneBinding(binding))};
 const __event = ${JSON.stringify(runtimeEvent)};
 const __handler = (${binding.handlerSource});
@@ -874,29 +876,30 @@ if (typeof __handlerResult !== 'undefined') {
 }
 `;
 
-      const result = await sandbox.execute(code, undefined, {
-        ACN_AGENT_NAME: binding.ownerAgent,
-        ACN_API_URL: process.env.ACN_API_URL || '',
-        ACN_CHAT_ID: 'HEARTBEAT_ROUTE',
-        HEARTBEAT_DATA_DIR: this.paths.dataDir,
-        HEARTBEAT_SENSORS_DIR: this.paths.sensorsDir,
-      }, (chunk) => process.stderr.write(chunk));
+        const result = await sandbox.execute(code, undefined, {
+          ACN_AGENT_NAME: binding.ownerAgent,
+          ACN_API_URL: process.env.ACN_API_URL || '',
+          ACN_CHAT_ID: 'HEARTBEAT_ROUTE',
+          HEARTBEAT_DATA_DIR: this.paths.dataDir,
+          HEARTBEAT_SENSORS_DIR: this.paths.sensorsDir,
+        }, (chunk) => process.stderr.write(chunk));
 
-      if (!result.success) {
-        console.error(`[Heartbeat] Binding '${binding.id}' failed:`, result.error || result.output);
-        return;
-      }
+        if (!result.success) {
+          console.error(`[Heartbeat] Binding '${binding.id}' failed:`, result.error || result.output);
+          return;
+        }
 
-      const output = String(result.output || '').trim();
-      if (output && output !== '(no output)') {
-        this.log(`Binding '${binding.id}' completed with output:\n${output}`);
-      } else {
-        this.log(`Binding '${binding.id}' completed successfully.`);
+        const output = String(result.output || '').trim();
+        if (output && output !== '(no output)') {
+          this.log(`Binding '${binding.id}' completed with output:\n${output}`);
+        } else {
+          this.log(`Binding '${binding.id}' completed successfully.`);
+        }
+      } catch (error) {
+        console.error(`[Heartbeat] Binding '${binding.id}' execution failed:`, error);
+      } finally {
+        await sandbox.cleanup();
       }
-    } catch (error) {
-      console.error(`[Heartbeat] Binding '${binding.id}' execution failed:`, error);
-    } finally {
-      await sandbox.cleanup();
-    }
+    });
   }
 }

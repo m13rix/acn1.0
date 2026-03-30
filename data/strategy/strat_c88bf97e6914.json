@@ -1,0 +1,93 @@
+{
+  "id": "strat_c88bf97e6914",
+  "name": "minecraft-32-diamonds-fastest",
+  "description": "Fastest evidence-based strategy to obtain 32 diamonds in Minecraft Java 1.21.11 / 1.18+ ore generation",
+  "divergence": {
+    "x": 0,
+    "y": 0,
+    "updatedAt": "2026-03-28T10:51:40.635Z"
+  },
+  "paths": [],
+  "routes": [
+    {
+      "id": "route_b5cba7e14f25",
+      "depth": 1,
+      "name": "ROOT",
+      "slug": "root",
+      "theme": "Minecraft 32 diamonds fast acquisition",
+      "category": "Top-level broad acquisition family comparison",
+      "summary": "Root placeholder for top-level branching under the 32-diamond speed strategy",
+      "folderPath": "strategy_workspace/routes/root",
+      "intakePath": "strategy_workspace/routes/root/root_intake.md",
+      "evalPath": "strategy_workspace/routes/root/root_eval.md",
+      "decision": "undecided",
+      "subroutesGenerated": true,
+      "subroutesGeneratedAt": "2026-03-28T10:56:50.324Z",
+      "generationNote": "Subroutes were created.",
+      "createdAt": "2026-03-28T10:55:29.683Z",
+      "updatedAt": "2026-03-28T10:56:50.324Z"
+    },
+    {
+      "id": "route_c88b45682677",
+      "parentRouteId": "route_b5cba7e14f25",
+      "depth": 2,
+      "name": "Cave Exploration",
+      "slug": "cave-exploration",
+      "theme": "Minecraft 32 diamonds fast acquisition",
+      "category": "Broad acquisition family",
+      "summary": "Exploring natural caves and deep systems to harvest exposed diamond ore quickly.",
+      "note": "Broad family covering ravines, dripstone caves, lush caves, and large deep-slate cave networks.",
+      "folderPath": "strategy_workspace/routes/root/cave-exploration",
+      "intakePath": "strategy_workspace/routes/root/cave-exploration/cave-exploration_intake.md",
+      "evalPath": "strategy_workspace/routes/root/cave-exploration/cave-exploration_eval.md",
+      "decision": "undecided",
+      "subroutesGenerated": false,
+      "createdAt": "2026-03-28T10:56:50.328Z",
+      "updatedAt": "2026-03-28T10:56:50.328Z"
+    },
+    {
+      "id": "route_e14fcc8b4ee6",
+      "parentRouteId": "route_b5cba7e14f25",
+      "depth": 2,
+      "name": "Structure Loot",
+      "slug": "structure-loot",
+      "theme": "Minecraft 32 diamonds fast acquisition",
+      "category": "Broad acquisition family",
+      "summary": "Obtaining diamonds from naturally generated structure loot, optionally accelerated by external maps or known locations.",
+      "note": "Broad family covering treasure chests and diamond-bearing structure loot.",
+      "folderPath": "strategy_workspace/routes/root/structure-loot",
+      "intakePath": "strategy_workspace/routes/root/structure-loot/structure-loot_intake.md",
+      "evalPath": "strategy_workspace/routes/root/structure-loot/structure-loot_eval.md",
+      "decision": "undecided",
+      "subroutesGenerated": false,
+      "createdAt": "2026-03-28T10:56:50.346Z",
+      "updatedAt": "2026-03-28T10:56:50.346Z"
+    },
+    {
+      "id": "route_2c96556ec674",
+      "parentRouteId": "route_b5cba7e14f25",
+      "depth": 2,
+      "name": "Tunnel Mining",
+      "slug": "tunnel-mining",
+      "theme": "Minecraft 32 diamonds fast acquisition",
+      "category": "Broad acquisition family",
+      "summary": "Controlled underground excavation with a main tunnel and branches to expose diamonds efficiently.",
+      "note": "Broad family covering branch mining, strip mining, and related deliberate mining layouts.",
+      "folderPath": "strategy_workspace/routes/root/tunnel-mining",
+      "intakePath": "strategy_workspace/routes/root/tunnel-mining/tunnel-mining_intake.md",
+      "evalPath": "strategy_workspace/routes/root/tunnel-mining/tunnel-mining_eval.md",
+      "decision": "undecided",
+      "subroutesGenerated": false,
+      "createdAt": "2026-03-28T10:56:50.324Z",
+      "updatedAt": "2026-03-28T10:56:50.324Z"
+    }
+  ],
+  "cycle": {
+    "maxDepth": 10,
+    "currentDepth": 1,
+    "status": "active",
+    "updatedAt": "2026-03-28T10:51:40.644Z"
+  },
+  "createdAt": "2026-03-28T10:51:40.635Z",
+  "updatedAt": "2026-03-28T10:56:50.346Z"
+}

@@ -169,7 +169,8 @@ body {
 }
 
 .field input,
-.field select {
+.field select,
+.field textarea {
   border: 1px solid rgba(20, 33, 61, 0.16);
   border-radius: 14px;
   padding: 12px 14px;
@@ -179,9 +180,16 @@ body {
 }
 
 .field input:focus,
-.field select:focus {
+.field select:focus,
+.field textarea:focus {
   outline: 2px solid rgba(182, 92, 45, 0.24);
   border-color: var(--accent);
+}
+
+.field textarea {
+  min-height: 180px;
+  resize: vertical;
+  line-height: 1.45;
 }
 
 .field-grid {

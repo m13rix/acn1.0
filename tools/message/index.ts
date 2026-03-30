@@ -45,6 +45,14 @@ function saveOwner(id: string) {
   }
 }
 
+function getBridgeApiUrl(): string | undefined {
+  return process.env.ACN_INTERFACE_API_URL || process.env.ACN_API_URL;
+}
+
+function getBridgeRouteId(): string | undefined {
+  return process.env.ACN_INTERFACE_ROUTE || process.env.ACN_CHAT_ID;
+}
+
 // Transcription helper
 async function transcribe(url: string): Promise<string> {
   const deepgram = createClient(DEEPGRAM_KEY);
@@ -99,14 +107,14 @@ export async function sendVoice(text: string, voiceName: string = 'Orus'): Promi
   const oggPath = wavPath.replace('.wav', '.ogg');
 
   // Determine Chat ID (Try API env first, then owner file)
-  const chatId = process.env.ACN_CHAT_ID || getOwner();
-  const apiUrl = process.env.ACN_API_URL;
+  const routeId = getBridgeRouteId() || getOwner();
+  const apiUrl = getBridgeApiUrl();
   const agentName = process.env.ACN_AGENT_NAME;
 
-  console.log(`[Message-Debug] Chat ID: ${chatId} (Env: ${process.env.ACN_CHAT_ID}, Owner: ${getOwner()})`);
+  console.log(`[Message-Debug] Route ID: ${routeId} (Env: ${getBridgeRouteId()}, Owner: ${getOwner()})`);
   console.log(`[Message-Debug] API URL: ${apiUrl}`);
 
-  if (!chatId) {
+  if (!routeId) {
     console.error('[Message] Cannot send voice: No owner and no Chat ID found.');
     return;
   }
@@ -169,13 +177,13 @@ export async function sendVoice(text: string, voiceName: string = 'Orus'): Promi
     }
 
     // Send via API if available
-    if (apiUrl && process.env.ACN_CHAT_ID) {
-      console.log(`[Message] Sending voice via API for Chat ID: ${chatId}`);
+    if (apiUrl && getBridgeRouteId()) {
+      console.log(`[Message] Sending voice via API for route: ${routeId}`);
       try {
         const apiResponse = await fetch(`${apiUrl}/api/sendVoice`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ chatId, file: oggPath, agentName })
+          body: JSON.stringify({ routeId, file: oggPath, agentName })
         });
 
         if (!apiResponse.ok) {
@@ -192,7 +200,7 @@ export async function sendVoice(text: string, voiceName: string = 'Orus'): Promi
       // Legacy: Send directly
       console.log('[Message-Debug] Sending via Legacy Mode (Telegraf directly)');
       const bot = new Telegraf(BOT_TOKEN);
-      await bot.telegram.sendVoice(chatId, { source: oggPath });
+      await bot.telegram.sendVoice(routeId, { source: oggPath });
     }
 
 
@@ -214,18 +222,17 @@ export async function sendVoice(text: string, voiceName: string = 'Orus'): Promi
  */
 export async function ask(question: string): Promise<string> {
   // 1. Check if running in a managed context with API access
-  const apiUrl = process.env.ACN_API_URL;
-  const chatId = process.env.ACN_CHAT_ID;
+  const apiUrl = getBridgeApiUrl();
+  const routeId = getBridgeRouteId();
   const agentName = process.env.ACN_AGENT_NAME;
 
-  if (apiUrl && chatId) {
-    console.log(`[Message] Asking via API for Chat ID: ${chatId}`);
+  if (apiUrl && routeId) {
+    console.log(`[Message] Asking via API for route: ${routeId}`);
     try {
-      // Step 1: Send the question — returns immediately with a questionId
       const askResponse = await fetch(`${apiUrl}/api/ask`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chatId, question, agentName })
+        body: JSON.stringify({ routeId, question, agentName })
       });
 
       if (!askResponse.ok) {
@@ -233,29 +240,9 @@ export async function ask(question: string): Promise<string> {
         throw new Error(err.error || 'API request failed');
       }
 
-      const { questionId } = await askResponse.json() as { questionId: string };
-      console.log(`[Message] Question sent (id: ${questionId}). Polling for answer...`);
-
-      // Step 2: Poll for the answer — no timeout, waits indefinitely
-      const POLL_INTERVAL_MS = 2000;
-      while (true) {
-        await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
-
-        const pollResponse = await fetch(`${apiUrl}/api/ask/poll?questionId=${encodeURIComponent(questionId)}`);
-
-        if (!pollResponse.ok) {
-          const err = await pollResponse.json();
-          throw new Error(err.error || 'Poll request failed');
-        }
-
-        const pollData = await pollResponse.json() as { status: string; response?: string };
-
-        if (pollData.status === 'answered') {
-          console.log("[Message] User Response: " + pollData.response);
-          return pollData.response!;
-        }
-        // status === 'waiting' → continue polling
-      }
+      const payload = await askResponse.json() as { status?: string; response?: string };
+      console.log("[Message] User Response: " + payload.response);
+      return payload.response || '';
     } catch (e: any) {
       console.error('[Message] API error:', e.message);
       throw e;
@@ -365,12 +352,12 @@ export async function ask(question: string): Promise<string> {
  * Sends files to the user.
  */
 export async function sendFiles(files: string[]): Promise<void> {
-  const apiUrl = process.env.ACN_API_URL;
-  const chatId = process.env.ACN_CHAT_ID;
+  const apiUrl = getBridgeApiUrl();
+  const routeId = getBridgeRouteId();
   const agentName = process.env.ACN_AGENT_NAME;
 
-  if (apiUrl && chatId) {
-    console.log(`[Message] Sending files via API for Chat ID: ${chatId}`);
+  if (apiUrl && routeId) {
+    console.log(`[Message] Sending files via API for route: ${routeId}`);
     try {
       const sandboxDir = getAgentSandbox()?.directory || process.cwd();
       const absoluteFiles = files.map(f => path.resolve(sandboxDir, f));
@@ -378,7 +365,7 @@ export async function sendFiles(files: string[]): Promise<void> {
       const response = await fetch(`${apiUrl}/api/sendFiles`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chatId, files: absoluteFiles, agentName })
+        body: JSON.stringify({ routeId, files: absoluteFiles, agentName })
       });
 
       if (!response.ok) {
@@ -418,17 +405,17 @@ export async function sendFiles(files: string[]): Promise<void> {
  * Sends a simple text message to the user.
  */
 export async function sendText(text: string): Promise<void> {
-  const apiUrl = process.env.ACN_API_URL;
-  const chatId = process.env.ACN_CHAT_ID;
+  const apiUrl = getBridgeApiUrl();
+  const routeId = getBridgeRouteId();
   const agentName = process.env.ACN_AGENT_NAME;
 
-  if (apiUrl && chatId) {
-    console.log(`[Message] Sending text via API for Chat ID: ${chatId}`);
+  if (apiUrl && routeId) {
+    console.log(`[Message] Sending text via API for route: ${routeId}`);
     try {
       const response = await fetch(`${apiUrl}/api/sendText`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chatId, text, agentName })
+        body: JSON.stringify({ routeId, text, agentName })
       });
 
       if (!response.ok) {

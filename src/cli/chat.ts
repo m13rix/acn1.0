@@ -21,6 +21,10 @@ import { HeartbeatService } from '../heartbeat/HeartbeatService.js';
 import { COLORS, SYMBOLS, StreamDisplay } from './display.js';
 import { runWithAgentContext } from '../core/AgentContext.js';
 import { setGlobalDisplay } from '../core/GlobalDisplay.js';
+import { InterfaceBridgeServer } from '../interfaces/InterfaceBridgeServer.js';
+import { InterfaceManager, setDefaultInterfaceManager } from '../interfaces/InterfaceManager.js';
+import { LocalVoiceInterfaceRuntime } from '../interfaces/local-voice.js';
+import { TelegramInterfaceRuntime } from '../interfaces/telegram-runtime.js';
 
 // Import to register all modules
 import '../providers/index.js';
@@ -41,7 +45,9 @@ let debugMode = false;
 
 
 async function selectAgent(): Promise<string> {
-  const agents = await agentLoader.getAvailableAgents();
+  const agents = (await agentLoader.loadAll())
+    .filter(agent => (agent.config.modality || 'text') === 'text')
+    .map(agent => agent.config.name);
 
   if (agents.length === 0) {
     console.log(COLORS.error('No agents found in ./agents directory'));
@@ -88,6 +94,9 @@ async function createSession(agentName: string): Promise<Session> {
   if (!agent) {
     throw new Error(`Agent "${agentName}" not found`);
   }
+  if ((agent.config.modality || 'text') !== 'text') {
+    throw new Error(`Agent "${agentName}" uses modality "${agent.config.modality}" and cannot be opened in the text CLI.`);
+  }
 
   const provider = getProvider(agent.config.provider || 'gemini');
   const syntax = getSyntax(agent.config.syntax);
@@ -133,8 +142,38 @@ function extractWords(text: string): string[] {
   return matches.filter(w => w.length > 1);
 }
 
-async function runChat(session: Session, telegramService?: TelegramService): Promise<void> {
+function installTerminalVoiceToggle(interfaceManager: InterfaceManager): (() => void) | null {
+  if (!process.stdin.isTTY) {
+    return null;
+  }
+
+  const localVoiceRuntime = interfaceManager.getRuntime<LocalVoiceInterfaceRuntime>('local-voice');
+  if (!localVoiceRuntime || !localVoiceRuntime.isTerminalHotkeyFallbackNeeded()) {
+    return null;
+  }
+
+  console.log(COLORS.muted('  Local voice test hotkey: press Ctrl+L in this terminal'));
+
+  const handler = (chunk: string | Buffer): void => {
+    const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+    if (!text.includes('\u000c')) {
+      return;
+    }
+
+    void localVoiceRuntime.toggleFromConsoleHotkey().catch((error) => {
+      console.error(COLORS.error(`[local-voice] Console Ctrl+L failed: ${error instanceof Error ? error.message : String(error)}`));
+    });
+  };
+
+  process.stdin.on('data', handler);
+  return () => {
+    process.stdin.off('data', handler);
+  };
+}
+
+async function runChat(session: Session, interfaceManager: InterfaceManager, telegramService?: TelegramService): Promise<void> {
   const display = new StreamDisplay();
+  const cleanupTerminalVoiceToggle = installTerminalVoiceToggle(interfaceManager);
 
   // Set global display for agents tool to use
   setGlobalDisplay(display);
@@ -248,6 +287,7 @@ async function runChat(session: Session, telegramService?: TelegramService): Pro
 
       if (lower === 'exit') {
         console.log(COLORS.muted('\nGoodbye!'));
+        cleanupTerminalVoiceToggle?.();
         await session.cleanup();
         process.exit(0);
       }
@@ -290,8 +330,13 @@ async function runChat(session: Session, telegramService?: TelegramService): Pro
       // Ctrl+C - exit
       if (chunk === '\u0003') {
         console.log(COLORS.muted('\n\nSession ended.'));
+        cleanupTerminalVoiceToggle?.();
         await session.cleanup();
         process.exit(0);
+      }
+
+      if (chunk === '\u000c') {
+        return;
       }
 
       // Backspace
@@ -406,6 +451,7 @@ async function runChat(session: Session, telegramService?: TelegramService): Pro
 
         if (cmd === 'exit') {
           console.log(COLORS.muted('\nGoodbye!'));
+          cleanupTerminalVoiceToggle?.();
           await session.cleanup();
           rl.close();
           process.exit(0);
@@ -486,6 +532,7 @@ async function runChat(session: Session, telegramService?: TelegramService): Pro
     // Handle Ctrl+C gracefully
     rl.on('close', async () => {
       console.log(COLORS.muted('\n\nSession ended.'));
+      cleanupTerminalVoiceToggle?.();
       await session.cleanup();
       process.exit(0);
     });
@@ -504,6 +551,18 @@ async function main(): Promise<void> {
   }
 
   let telegramService: TelegramService | undefined;
+  const bridgeServer = new InterfaceBridgeServer();
+  const interfaceManager = new InterfaceManager(agentLoader);
+  interfaceManager.registerRuntime(new TelegramInterfaceRuntime());
+  interfaceManager.registerRuntime(new LocalVoiceInterfaceRuntime());
+  setDefaultInterfaceManager(interfaceManager);
+
+  try {
+    await bridgeServer.start();
+    process.env.ACN_INTERFACE_API_URL = bridgeServer.getApiUrl();
+  } catch (error) {
+    console.error(COLORS.error('Failed to start Interface Bridge:'), error);
+  }
 
   // Start Telegram Bot Service
   try {
@@ -511,6 +570,12 @@ async function main(): Promise<void> {
     await telegramService.start();
   } catch (error) {
     console.error(COLORS.error('Failed to start Telegram Service:'), error);
+  }
+
+  try {
+    await interfaceManager.startConfiguredInterfaces();
+  } catch (error) {
+    console.error(COLORS.error('Failed to start interface runtimes:'), error);
   }
 
   // Initialize Heartbeat Service
@@ -526,7 +591,7 @@ async function main(): Promise<void> {
   try {
     const agentName = await selectAgent();
     const session = await createSession(agentName);
-    await runChat(session, telegramService);
+    await runChat(session, interfaceManager, telegramService);
   } catch (error) {
     console.error(COLORS.error(`\nFatal error: ${error instanceof Error ? error.message : 'Unknown error'}`));
     if (error instanceof Error && error.stack) {

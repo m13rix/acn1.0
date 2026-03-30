@@ -126,8 +126,9 @@ export class ToolLoader {
           const content = await readFile(configPath, 'utf-8');
           const config = this.parseConfig(content, configFile) as ToolConfig;
 
-          // Validate required fields
-          if (!config.name || !config.description) {
+          // Validate required fields.
+          // description may be intentionally empty for skill-driven tools.
+          if (!config.name || typeof config.description !== 'string') {
             console.warn(`Warning: Tool config in ${dir} missing required fields`);
             continue;
           }
@@ -265,10 +266,13 @@ export class ToolLoader {
     }
 
     const toolDocs = tools.map(tool => {
-      const embeddedSkillsNote = tool.skillEntries && tool.skillEntries.length > 0
+      const description = tool.config.description.trim();
+      const embeddedSkillsNote = description && tool.skillEntries && tool.skillEntries.length > 0
         ? `\n\nThis tool also ships embedded retrieval skills for detailed usage guidance.`
         : '';
-      return `### ${tool.config.name}\n\n${tool.config.description}${embeddedSkillsNote}`;
+      return description
+        ? `### ${tool.config.name}\n\n${description}${embeddedSkillsNote}`
+        : `### ${tool.config.name}`;
     }).join('\n\n');
 
     return `## Tools.

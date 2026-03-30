@@ -1,0 +1,554 @@
+{
+  "id": "strat_01a5413d811c",
+  "name": "minecraft-32-diamonds-fastest",
+  "description": "Find the fastest testable strategy to obtain 32 diamonds in Minecraft Java 1.21.11 from a surface start with iron-tier gear and no commands.",
+  "divergence": {
+    "x": 0,
+    "y": 0,
+    "updatedAt": "2026-03-27T16:21:13.057Z"
+  },
+  "paths": [
+    {
+      "id": "path_e10f95ba1121",
+      "name": "choose_cave_family",
+      "rootNodeId": "node_c8b789c1595f",
+      "nodes": [
+        {
+          "id": "node_c8b789c1595f",
+          "name": "root",
+          "kind": "root",
+          "createdAt": "2026-03-28T07:49:22.298Z",
+          "updatedAt": "2026-03-28T07:49:22.298Z"
+        },
+        {
+          "id": "node_4028bd85503f",
+          "name": "нормальная сухая пещера",
+          "kind": "intermediate",
+          "createdAt": "2026-03-28T08:00:19.227Z",
+          "updatedAt": "2026-03-28T12:54:23.261Z"
+        },
+        {
+          "id": "node_e19fc7b5aa7d",
+          "name": "большая сухая пещера",
+          "kind": "intermediate",
+          "createdAt": "2026-03-28T08:07:32.276Z",
+          "updatedAt": "2026-03-28T12:54:57.956Z"
+        },
+        {
+          "id": "node_087b1bdb8bbc",
+          "name": "узкая сухая пещера",
+          "kind": "intermediate",
+          "createdAt": "2026-03-28T08:12:15.948Z",
+          "updatedAt": "2026-03-28T12:50:17.009Z"
+        },
+        {
+          "id": "node_b795653d1cbf",
+          "name": "finds_vein",
+          "kind": "intermediate",
+          "createdAt": "2026-03-28T08:13:02.977Z",
+          "updatedAt": "2026-03-28T08:13:02.977Z"
+        },
+        {
+          "id": "node_2bb4b42a1a0a",
+          "name": "1_ore",
+          "kind": "goal",
+          "createdAt": "2026-03-28T08:15:37.186Z",
+          "updatedAt": "2026-03-28T08:15:44.837Z"
+        },
+        {
+          "id": "node_25886cf17605",
+          "name": "2_ore",
+          "kind": "goal",
+          "createdAt": "2026-03-28T08:16:11.608Z",
+          "updatedAt": "2026-03-28T08:16:11.608Z"
+        },
+        {
+          "id": "node_221e3b857102",
+          "name": "3_ore",
+          "kind": "goal",
+          "createdAt": "2026-03-28T08:16:21.122Z",
+          "updatedAt": "2026-03-28T08:16:21.122Z"
+        },
+        {
+          "id": "node_4baeb2ec1682",
+          "name": "4_ore",
+          "kind": "goal",
+          "createdAt": "2026-03-28T08:16:33.435Z",
+          "updatedAt": "2026-03-28T08:16:33.435Z"
+        },
+        {
+          "id": "node_82f921590b7e",
+          "name": "5_ore",
+          "kind": "goal",
+          "createdAt": "2026-03-28T08:16:46.348Z",
+          "updatedAt": "2026-03-28T08:16:46.348Z"
+        },
+        {
+          "id": "node_934db982f17b",
+          "name": "7_ore",
+          "kind": "goal",
+          "createdAt": "2026-03-28T08:17:01.540Z",
+          "updatedAt": "2026-03-28T08:17:15.117Z"
+        },
+        {
+          "id": "node_ddee8161c735",
+          "name": "8_ore",
+          "kind": "goal",
+          "createdAt": "2026-03-28T08:17:28.668Z",
+          "updatedAt": "2026-03-28T08:17:28.668Z"
+        },
+        {
+          "id": "node_9e8812f23a19",
+          "name": "6_ore",
+          "kind": "goal",
+          "createdAt": "2026-03-28T08:17:48.085Z",
+          "updatedAt": "2026-03-28T08:17:48.085Z"
+        },
+        {
+          "id": "node_d6cf185332dc",
+          "name": "no_vein",
+          "kind": "fail",
+          "createdAt": "2026-03-28T08:30:48.196Z",
+          "updatedAt": "2026-03-28T08:30:48.196Z"
+        },
+        {
+          "id": "node_a8f78c368fa1",
+          "name": "нормальная смешанная пещера",
+          "kind": "intermediate",
+          "createdAt": "2026-03-28T12:56:20.803Z",
+          "updatedAt": "2026-03-28T12:56:20.803Z"
+        },
+        {
+          "id": "node_9dbcde713dec",
+          "name": "большая смешанная пещера",
+          "kind": "intermediate",
+          "createdAt": "2026-03-28T12:57:49.518Z",
+          "updatedAt": "2026-03-28T12:57:49.518Z"
+        },
+        {
+          "id": "node_9de5f0bf1f80",
+          "name": "большая аквиферная пещера",
+          "kind": "intermediate",
+          "createdAt": "2026-03-28T12:58:24.118Z",
+          "updatedAt": "2026-03-28T12:58:24.118Z"
+        }
+      ],
+      "events": [
+        {
+          "id": "event_7f9ed84eccbb",
+          "fromNodeId": "node_c8b789c1595f",
+          "toNodeId": "node_4028bd85503f",
+          "name": "finds_normal_cave",
+          "probability": 0.18,
+          "stateDelta": 0,
+          "createdAt": "2026-03-28T08:11:23.953Z",
+          "updatedAt": "2026-03-28T12:54:42.142Z"
+        },
+        {
+          "id": "event_dd7b5ba1e433",
+          "fromNodeId": "node_c8b789c1595f",
+          "toNodeId": "node_e19fc7b5aa7d",
+          "name": "finds_large_cave",
+          "probability": 0.08,
+          "stateDelta": 0,
+          "createdAt": "2026-03-28T08:11:50.386Z",
+          "updatedAt": "2026-03-28T12:55:18.029Z"
+        },
+        {
+          "id": "event_e8c7605147f9",
+          "fromNodeId": "node_c8b789c1595f",
+          "toNodeId": "node_087b1bdb8bbc",
+          "name": "finds_small_cave",
+          "probability": 0.24,
+          "stateDelta": 0,
+          "createdAt": "2026-03-28T08:12:31.595Z",
+          "updatedAt": "2026-03-28T12:54:09.635Z"
+        },
+        {
+          "id": "event_c8832e170872",
+          "fromNodeId": "node_b795653d1cbf",
+          "toNodeId": "node_2bb4b42a1a0a",
+          "name": "1",
+          "probability": 0.15,
+          "stateDelta": 1,
+          "createdAt": "2026-03-28T08:18:39.236Z",
+          "updatedAt": "2026-03-28T08:26:19.015Z"
+        },
+        {
+          "id": "event_a9295443a3eb",
+          "fromNodeId": "node_b795653d1cbf",
+          "toNodeId": "node_25886cf17605",
+          "name": "2",
+          "probability": 0.15,
+          "stateDelta": 2,
+          "createdAt": "2026-03-28T08:19:14.948Z",
+          "updatedAt": "2026-03-28T08:26:26.473Z"
+        },
+        {
+          "id": "event_1474ad866363",
+          "fromNodeId": "node_b795653d1cbf",
+          "toNodeId": "node_221e3b857102",
+          "name": "3",
+          "probability": 0.15,
+          "stateDelta": 3,
+          "createdAt": "2026-03-28T08:19:43.961Z",
+          "updatedAt": "2026-03-28T08:26:36.664Z"
+        },
+        {
+          "id": "event_a06aa5b88590",
+          "fromNodeId": "node_b795653d1cbf",
+          "toNodeId": "node_4baeb2ec1682",
+          "name": "4",
+          "probability": 0.15,
+          "stateDelta": 4,
+          "createdAt": "2026-03-28T08:20:01.594Z",
+          "updatedAt": "2026-03-28T08:26:49.968Z"
+        },
+        {
+          "id": "event_440d30f7fe49",
+          "fromNodeId": "node_b795653d1cbf",
+          "toNodeId": "node_82f921590b7e",
+          "name": "5",
+          "probability": 0.15,
+          "stateDelta": 5,
+          "createdAt": "2026-03-28T08:20:33.295Z",
+          "updatedAt": "2026-03-28T08:26:58.302Z"
+        },
+        {
+          "id": "event_994197c3e14a",
+          "fromNodeId": "node_b795653d1cbf",
+          "toNodeId": "node_9e8812f23a19",
+          "name": "6",
+          "probability": 0.03,
+          "stateDelta": 6,
+          "createdAt": "2026-03-28T08:21:01.328Z",
+          "updatedAt": "2026-03-28T08:21:01.328Z"
+        },
+        {
+          "id": "event_eb61a9705887",
+          "fromNodeId": "node_b795653d1cbf",
+          "toNodeId": "node_934db982f17b",
+          "name": "7",
+          "probability": 0.03,
+          "stateDelta": 7,
+          "createdAt": "2026-03-28T08:21:35.526Z",
+          "updatedAt": "2026-03-28T08:21:35.526Z"
+        },
+        {
+          "id": "event_dc9d0ad60317",
+          "fromNodeId": "node_b795653d1cbf",
+          "toNodeId": "node_ddee8161c735",
+          "name": "8",
+          "probability": 0.19,
+          "stateDelta": 8,
+          "createdAt": "2026-03-28T08:21:55.189Z",
+          "updatedAt": "2026-03-28T08:27:19.491Z"
+        },
+        {
+          "id": "event_df7ab040afaa",
+          "fromNodeId": "node_c8b789c1595f",
+          "toNodeId": "node_a8f78c368fa1",
+          "name": "finds_normal_mixed",
+          "probability": 0.14,
+          "stateDelta": 0,
+          "createdAt": "2026-03-28T12:56:48.522Z",
+          "updatedAt": "2026-03-28T12:56:48.522Z"
+        },
+        {
+          "id": "event_11986d5cfb35",
+          "fromNodeId": "node_c8b789c1595f",
+          "toNodeId": "node_9dbcde713dec",
+          "name": "finds_large_mixed",
+          "probability": 0.09,
+          "stateDelta": 0,
+          "createdAt": "2026-03-28T12:58:06.526Z",
+          "updatedAt": "2026-03-28T12:58:06.526Z"
+        },
+        {
+          "id": "event_5779f75df7ed",
+          "fromNodeId": "node_c8b789c1595f",
+          "toNodeId": "node_9de5f0bf1f80",
+          "name": "finds_large_aqua",
+          "probability": 0.05,
+          "stateDelta": 0,
+          "createdAt": "2026-03-28T12:58:51.501Z",
+          "updatedAt": "2026-03-28T12:58:51.501Z"
+        },
+        {
+          "id": "event_96b353a024fa",
+          "fromNodeId": "node_c8b789c1595f",
+          "toNodeId": "node_d6cf185332dc",
+          "name": "no_cave",
+          "probability": 0.22,
+          "stateDelta": -0.1,
+          "createdAt": "2026-03-28T12:59:30.231Z",
+          "updatedAt": "2026-03-28T12:59:30.231Z"
+        },
+        {
+          "id": "event_916cd6d1402f",
+          "fromNodeId": "node_087b1bdb8bbc",
+          "toNodeId": "node_b795653d1cbf",
+          "name": "vein_узкая сухая пещера",
+          "probability": 0.1,
+          "stateDelta": 0,
+          "createdAt": "2026-03-28T13:00:43.769Z",
+          "updatedAt": "2026-03-28T13:00:43.769Z"
+        },
+        {
+          "id": "event_1ca7b6952481",
+          "fromNodeId": "node_087b1bdb8bbc",
+          "toNodeId": "node_d6cf185332dc",
+          "name": "no_vein_узкая сухая пещера",
+          "probability": 0.9,
+          "stateDelta": -0.1,
+          "createdAt": "2026-03-28T13:02:05.885Z",
+          "updatedAt": "2026-03-28T13:02:05.885Z"
+        },
+        {
+          "id": "event_8533c9d37482",
+          "fromNodeId": "node_4028bd85503f",
+          "toNodeId": "node_b795653d1cbf",
+          "name": "vein_нормальная сухая пещера",
+          "probability": 0.13,
+          "stateDelta": 0,
+          "createdAt": "2026-03-28T13:02:49.542Z",
+          "updatedAt": "2026-03-28T13:02:49.542Z"
+        },
+        {
+          "id": "event_9f1635438a16",
+          "fromNodeId": "node_4028bd85503f",
+          "toNodeId": "node_d6cf185332dc",
+          "name": "no_vein_нормальная сухая пещера",
+          "probability": 0.87,
+          "stateDelta": -0.1,
+          "createdAt": "2026-03-28T13:03:32.797Z",
+          "updatedAt": "2026-03-28T13:03:32.797Z"
+        },
+        {
+          "id": "event_3e02d0cbcd3f",
+          "fromNodeId": "node_e19fc7b5aa7d",
+          "toNodeId": "node_b795653d1cbf",
+          "name": "vein_большая сухая пещера",
+          "probability": 0.19,
+          "stateDelta": 0,
+          "createdAt": "2026-03-28T13:05:00.338Z",
+          "updatedAt": "2026-03-28T13:05:00.338Z"
+        },
+        {
+          "id": "event_8d7c6e7bec63",
+          "fromNodeId": "node_e19fc7b5aa7d",
+          "toNodeId": "node_d6cf185332dc",
+          "name": "no_vein_большая сухая пещера",
+          "probability": 0.81,
+          "stateDelta": -0.1,
+          "createdAt": "2026-03-28T13:05:44.533Z",
+          "updatedAt": "2026-03-28T13:05:44.533Z"
+        },
+        {
+          "id": "event_f9ccec294671",
+          "fromNodeId": "node_a8f78c368fa1",
+          "toNodeId": "node_b795653d1cbf",
+          "name": "vein_нормальная смешанная пещера",
+          "probability": 0.3,
+          "stateDelta": 0,
+          "createdAt": "2026-03-28T13:06:17.678Z",
+          "updatedAt": "2026-03-28T13:06:17.678Z"
+        },
+        {
+          "id": "event_bc0c38e4490a",
+          "fromNodeId": "node_a8f78c368fa1",
+          "toNodeId": "node_d6cf185332dc",
+          "name": "no_vein_нормальная смешанная пещера",
+          "probability": 0.7,
+          "stateDelta": -0.1,
+          "createdAt": "2026-03-28T13:06:45.748Z",
+          "updatedAt": "2026-03-28T13:06:45.748Z"
+        },
+        {
+          "id": "event_02e821b7198a",
+          "fromNodeId": "node_9dbcde713dec",
+          "toNodeId": "node_b795653d1cbf",
+          "name": "vein_большая смешанная пещера",
+          "probability": 0.42,
+          "stateDelta": 0,
+          "createdAt": "2026-03-28T13:07:17.472Z",
+          "updatedAt": "2026-03-28T13:07:17.472Z"
+        },
+        {
+          "id": "event_8cfb3ab1ded5",
+          "fromNodeId": "node_9dbcde713dec",
+          "toNodeId": "node_d6cf185332dc",
+          "name": "no_vein_большая смешанная пещера",
+          "probability": 0.58,
+          "stateDelta": -0.1,
+          "createdAt": "2026-03-28T13:07:48.557Z",
+          "updatedAt": "2026-03-28T13:08:07.282Z"
+        },
+        {
+          "id": "event_d17bf8cb9c75",
+          "fromNodeId": "node_9de5f0bf1f80",
+          "toNodeId": "node_b795653d1cbf",
+          "name": "vein_большая аквиферная пещера",
+          "probability": 0.58,
+          "stateDelta": 0,
+          "createdAt": "2026-03-28T13:08:37.972Z",
+          "updatedAt": "2026-03-28T13:08:37.972Z"
+        },
+        {
+          "id": "event_8af473c1668f",
+          "fromNodeId": "node_9de5f0bf1f80",
+          "toNodeId": "node_d6cf185332dc",
+          "name": "no_vein_большая аквиферная пещера",
+          "probability": 0.42,
+          "stateDelta": -0.1,
+          "createdAt": "2026-03-28T13:09:21.656Z",
+          "updatedAt": "2026-03-28T13:09:21.656Z"
+        }
+      ],
+      "createdAt": "2026-03-28T07:49:22.298Z",
+      "updatedAt": "2026-03-28T13:09:21.656Z"
+    },
+    {
+      "id": "path_58cf800dc6c4",
+      "name": "tunnel_mining",
+      "rootNodeId": "node_67cbbf648308",
+      "nodes": [
+        {
+          "id": "node_67cbbf648308",
+          "name": "root",
+          "kind": "root",
+          "createdAt": "2026-03-28T13:11:45.807Z",
+          "updatedAt": "2026-03-28T13:11:45.807Z"
+        },
+        {
+          "id": "node_ae8fc9528589",
+          "name": "finds_vein",
+          "kind": "goal",
+          "createdAt": "2026-03-28T13:12:41.413Z",
+          "updatedAt": "2026-03-28T13:12:41.413Z"
+        },
+        {
+          "id": "node_f1ee1b9d40c8",
+          "name": "no_vein",
+          "kind": "fail",
+          "createdAt": "2026-03-28T13:13:42.922Z",
+          "updatedAt": "2026-03-28T13:13:42.922Z"
+        }
+      ],
+      "events": [
+        {
+          "id": "event_afc2eb6f2864",
+          "fromNodeId": "node_67cbbf648308",
+          "toNodeId": "node_ae8fc9528589",
+          "name": "finds",
+          "probability": 0.3,
+          "stateDelta": 4,
+          "createdAt": "2026-03-28T13:14:11.364Z",
+          "updatedAt": "2026-03-28T13:17:10.993Z"
+        },
+        {
+          "id": "event_742f00e7fa0c",
+          "fromNodeId": "node_67cbbf648308",
+          "toNodeId": "node_f1ee1b9d40c8",
+          "name": "no_vein",
+          "probability": 0.7,
+          "stateDelta": -0.1,
+          "createdAt": "2026-03-28T13:14:36.516Z",
+          "updatedAt": "2026-03-28T13:14:36.516Z"
+        }
+      ],
+      "createdAt": "2026-03-28T13:11:45.807Z",
+      "updatedAt": "2026-03-28T13:17:10.993Z"
+    }
+  ],
+  "routes": [
+    {
+      "id": "route_020b6c494c6a",
+      "depth": 1,
+      "name": "Deep mining",
+      "slug": "deep-mining",
+      "category": "top-level diamond acquisition family",
+      "summary": "Get 32 diamonds by mining at the optimal diamond layer using branch mines, tunnels, or controlled excavation.",
+      "note": "Broad mining family.",
+      "folderPath": "strategy_workspace/routes/deep-mining",
+      "intakePath": "strategy_workspace/routes/deep-mining/deep-mining_intake.md",
+      "evalPath": "strategy_workspace/routes/deep-mining/deep-mining_eval.md",
+      "decision": "keep",
+      "decisionReason": "Best-confidence baseline: direct Y≈-59 mining is the most reliable and likely fastest broad family for 32 diamonds.",
+      "evidence": "Diamond ore concentrates at Y≈-59 in Java 1.21; mining avoids structure RNG and chest-loot uncertainty.",
+      "confidence": 0.92,
+      "rank": 1,
+      "subroutesGenerated": false,
+      "createdAt": "2026-03-27T16:57:49.987Z",
+      "updatedAt": "2026-03-27T17:01:51.816Z"
+    },
+    {
+      "id": "route_1a2ddeeab458",
+      "depth": 1,
+      "name": "Large cave spelunking",
+      "slug": "large-cave-spelunking",
+      "category": "top-level diamond acquisition family",
+      "summary": "Get 32 diamonds by harvesting exposed diamond ore from large cave systems and ravines.",
+      "note": "Broad cave family.",
+      "folderPath": "strategy_workspace/routes/large-cave-spelunking",
+      "intakePath": "strategy_workspace/routes/large-cave-spelunking/large-cave-spelunking_intake.md",
+      "evalPath": "strategy_workspace/routes/large-cave-spelunking/large-cave-spelunking_eval.md",
+      "decision": "keep",
+      "decisionReason": "Secondary contender: exposed-ore cave spelunking may outperform mining on cave-rich seeds and has meaningful information value.",
+      "evidence": "Large caves can expose diamonds directly, but seed dependence and search overhead keep it behind deep mining.",
+      "confidence": 0.66,
+      "rank": 2,
+      "subroutesGenerated": false,
+      "createdAt": "2026-03-27T16:57:49.991Z",
+      "updatedAt": "2026-03-27T17:01:51.823Z"
+    },
+    {
+      "id": "route_abbf62d8d2db",
+      "depth": 1,
+      "name": "Structure chest loot",
+      "slug": "structure-chest-loot",
+      "category": "top-level diamond acquisition family",
+      "summary": "Get 32 diamonds from loot chests in diamond-bearing structures such as buried treasure, ancient cities, bastions, and related loot sources.",
+      "note": "Broad loot family.",
+      "folderPath": "strategy_workspace/routes/structure-chest-loot",
+      "intakePath": "strategy_workspace/routes/structure-chest-loot/structure-chest-loot_intake.md",
+      "evalPath": "strategy_workspace/routes/structure-chest-loot/structure-chest-loot_eval.md",
+      "decision": "kill",
+      "decisionReason": "Chest-structure route is not competitive: verified buried treasure summaries do not support fast diamond throughput, and bastion/ancient-city evidence is inconsistent and hazard-heavy.",
+      "evidence": "Buried treasure summaries center on Heart of the Sea, iron, gold, fish, potions, TNT, and emeralds; structure search and combat overhead are substantial.",
+      "confidence": 0.9,
+      "rank": 4,
+      "subroutesGenerated": false,
+      "createdAt": "2026-03-27T16:57:50.018Z",
+      "updatedAt": "2026-03-27T17:01:51.825Z"
+    },
+    {
+      "id": "route_a8fee9766a09",
+      "depth": 1,
+      "name": "Hybrid exploration-first",
+      "slug": "hybrid-exploration-first",
+      "category": "top-level diamond acquisition family",
+      "summary": "Use movement-heavy exploration with opportunistic mining and structure detours to reach 32 diamonds quickly.",
+      "note": "Broad mixed family.",
+      "folderPath": "strategy_workspace/routes/hybrid-exploration-first",
+      "intakePath": "strategy_workspace/routes/hybrid-exploration-first/hybrid-exploration-first_intake.md",
+      "evalPath": "strategy_workspace/routes/hybrid-exploration-first/hybrid-exploration-first_eval.md",
+      "decision": "kill",
+      "decisionReason": "Too vague and too decision-heavy; no evidence it beats specialist families for fastest 32 diamonds.",
+      "evidence": "Hybrid routes add overhead without clear throughput advantage or verified dominance over focused mining/cave routes.",
+      "confidence": 0.9,
+      "rank": 5,
+      "subroutesGenerated": false,
+      "createdAt": "2026-03-27T16:57:50.019Z",
+      "updatedAt": "2026-03-27T17:01:51.827Z"
+    }
+  ],
+  "cycle": {
+    "maxDepth": 10,
+    "currentDepth": 1,
+    "status": "active",
+    "updatedAt": "2026-03-27T16:57:49.987Z"
+  },
+  "createdAt": "2026-03-27T16:21:13.057Z",
+  "updatedAt": "2026-03-28T13:17:10.993Z"
+}

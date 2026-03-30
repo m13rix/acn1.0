@@ -1,0 +1,10 @@
+{
+  "title": "Testing Minecraft mechanics and scenarios",
+  "content": "Choose `minecraft.conductTest(...)` for requests about reproducing Minecraft mechanics, setting up worlds or arenas, checking behavior with commands, or simulating gameplay situations in the live world. The prompt should describe the goal, setup, success criteria, and any constraints you care about.",
+  "examples": [
+    "Проверь механику редстоуна в майнкрафте через настоящий запуск.",
+    "Set up a Minecraft scenario and verify that it works in practice.",
+    "Симулируй ситуацию в игре и посмотри, что реально произойдет."
+  ],
+  "scoreThreshold": 0.8
+}

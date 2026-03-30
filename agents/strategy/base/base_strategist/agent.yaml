@@ -1,9 +1,10 @@
 name: base_strategist
-description: Base strategist for the Telos Ultimate Strategy Engine. Builds strategy candidates, gathers exhaustive intake, chooses a plan, and sets up heartbeat-based monitoring.
+description: Main recursive strategy-design agent for the Telos Ultimate Strategy Engine. Builds intake and goal files, explores route trees, evaluates branches, and synthesizes the final strategy.
 
 model: gpt-5.4-mini
 provider: openai-codex
 systemPrompt: prompts/system.md
+subagentPrompt: prompts/subagent.md
 
 modelSwitching:
   mode: whitelist
@@ -17,9 +18,10 @@ tools:
   - search
   - message
   - agents
-  - heartbeat
   - strategy
   - utils
+  - minecraft
+  - memory
 
 memory:
   enabled: false

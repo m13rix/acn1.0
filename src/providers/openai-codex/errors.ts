@@ -35,6 +35,12 @@ export class TokenRefreshFailedError extends OpenAICodexError {
   }
 }
 
+export class TokenRefreshLockTimeoutError extends OpenAICodexError {
+  constructor(message = 'Timed out waiting for the openai-codex token refresh lock.') {
+    super('TokenRefreshLockTimeout', message);
+  }
+}
+
 export class SubscriptionAuthRequiredError extends OpenAICodexError {
   constructor(message = 'ChatGPT subscription authentication is required for openai-codex.') {
     super('SubscriptionAuthRequired', message);

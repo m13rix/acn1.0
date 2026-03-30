@@ -37,6 +37,42 @@ interface UiBridgePayload {
     agentName?: string;
 }
 
+const UI_BRIDGE_LIMITS: Partial<Record<keyof UiBridgePayload, number>> = {
+    accumulated: 20000,
+    text: 24000,
+    code: 12000,
+    command: 4000,
+    filename: 500,
+    content: 24000,
+    agentName: 200,
+};
+
+function truncateUiBridgeValue(value: string, maxChars: number, label: string): string {
+    if (value.length <= maxChars) {
+        return value;
+    }
+
+    const reserved = Math.min(220, Math.max(100, Math.floor(maxChars * 0.18)));
+    const headLength = Math.max(0, Math.floor((maxChars - reserved) * 0.75));
+    const tailLength = Math.max(0, maxChars - reserved - headLength);
+    const removed = value.length - headLength - tailLength;
+    const notice = `\n\n[${label} truncated: removed ${removed} chars]\n\n`;
+    return `${value.slice(0, headLength)}${notice}${value.slice(value.length - tailLength)}`;
+}
+
+function sanitizeUiBridgePayload(payload: UiBridgePayload): UiBridgePayload {
+    const sanitized: UiBridgePayload = { ...payload };
+
+    for (const [key, limit] of Object.entries(UI_BRIDGE_LIMITS) as Array<[keyof UiBridgePayload, number]>) {
+        const value = sanitized[key];
+        if (typeof value === 'string') {
+            sanitized[key] = truncateUiBridgeValue(value, limit, String(key)) as never;
+        }
+    }
+
+    return sanitized;
+}
+
 function createTelegramUiBridge(scopeId: string, agentName: string): ExecutorCallbacks | null {
     const apiUrl = process.env.ACN_API_URL;
     const chatId = process.env.ACN_CHAT_ID;
@@ -47,6 +83,7 @@ function createTelegramUiBridge(scopeId: string, agentName: string): ExecutorCal
 
     let queue = Promise.resolve();
     const post = (payload: UiBridgePayload): void => {
+        const sanitizedPayload = sanitizeUiBridgePayload(payload);
         queue = queue
             .then(async () => {
                 const response = await fetch(`${apiUrl}/api/ui/event`, {
@@ -56,7 +93,7 @@ function createTelegramUiBridge(scopeId: string, agentName: string): ExecutorCal
                         chatId,
                         scopeId,
                         agentName,
-                        ...payload,
+                        ...sanitizedPayload,
                     }),
                 });
                 if (!response.ok) {
@@ -65,7 +102,7 @@ function createTelegramUiBridge(scopeId: string, agentName: string): ExecutorCal
                 }
             })
             .catch((error) => {
-                console.warn(`[AgentRunner] Failed to forward UI event "${payload.event}":`, error);
+                console.warn(`[AgentRunner] Failed to forward UI event "${sanitizedPayload.event}":`, error);
             });
     };
 

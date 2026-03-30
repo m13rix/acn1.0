@@ -16,10 +16,12 @@ import {
   buildCompletionContinuationMessage,
   buildCompletionWarning,
   COMPLETION_SIGNAL_REGEX,
+  extractCompletionMessage,
 } from './completion.js';
 import type { Session } from './Session.js';
 import type { ProviderConfig, ProviderStreamEvent } from '../types/index.js';
 import { ToolExecutionEngine } from './ToolExecutionEngine.js';
+import { runForegroundTask } from './ExecutionGate.js';
 import { readFile, unlink, writeFile, mkdir } from 'fs/promises';
 import { join, dirname } from 'path';
 
@@ -62,6 +64,21 @@ export interface ExecutorOptions {
 }
 
 const DEFAULT_MAX_ITERATIONS = 500;
+const MAX_OBSERVATION_CHARS = 32000;
+const MAX_NO_PROGRESS_TURNS = 3;
+
+function truncateMiddle(text: string, maxChars: number, label: string): string {
+  if (text.length <= maxChars) {
+    return text;
+  }
+
+  const reserved = Math.min(240, Math.max(120, Math.floor(maxChars * 0.18)));
+  const headLength = Math.max(0, Math.floor((maxChars - reserved) * 0.72));
+  const tailLength = Math.max(0, maxChars - reserved - headLength);
+  const removed = text.length - headLength - tailLength;
+  const notice = `\n\n[${label} truncated: removed ${removed} chars]\n\n`;
+  return `${text.slice(0, headLength)}${notice}${text.slice(text.length - tailLength)}`;
+}
 
 export class Executor {
   private session: Session;
@@ -81,34 +98,38 @@ export class Executor {
    * Execute a user message and return the final response
    */
   async execute(userMessage: string): Promise<string> {
-    this.session.addUserMessage(userMessage);
+    return runForegroundTask(async () => {
+      this.session.addUserMessage(userMessage);
 
-    // Shared execution helper for action/cli/file flows
-    const toolEngine = new ToolExecutionEngine(this.session, {
-      onAction: this.options.callbacks?.onAction,
-      onCli: this.options.callbacks?.onCli,
-      onFile: this.options.callbacks?.onFile,
-    });
-
-    // Provider-native loop path (loop owns provider round-trips and tool orchestration)
-    if (this.session.loop.run) {
-      const delegated = await this.session.loop.run({
-        session: this.session,
-        options: this.options,
-        processFileMessages: this.processFileMessages.bind(this),
-        toolEngine,
+      // Shared execution helper for action/cli/file flows
+      const toolEngine = new ToolExecutionEngine(this.session, {
+        onAction: this.options.callbacks?.onAction,
+        onCli: this.options.callbacks?.onCli,
+        onFile: this.options.callbacks?.onFile,
       });
-      if (delegated !== null) {
-        return delegated;
+
+      // Provider-native loop path (loop owns provider round-trips and tool orchestration)
+      if (this.session.loop.run) {
+        const delegated = await this.session.loop.run({
+          session: this.session,
+          options: this.options,
+          processFileMessages: this.processFileMessages.bind(this),
+          toolEngine,
+        });
+        if (delegated !== null) {
+          return delegated;
+        }
       }
-    }
+    
 
-    let iterations = 0;
-    let currentAssistantContent = '';
-    let continuationUserMessage = buildCompletionContinuationMessage();
+      let iterations = 0;
+      let currentAssistantContent = '';
+      let continuationUserMessage = buildCompletionContinuationMessage();
+      let noProgressTurns = 0;
+      let lastModelTurnContent = '';
 
-    while (iterations < (this.options.maxIterations ?? DEFAULT_MAX_ITERATIONS)) {
-      iterations++;
+      while (iterations < (this.options.maxIterations ?? DEFAULT_MAX_ITERATIONS)) {
+        iterations++;
 
       // Load any pending file messages (e.g., screenshots) into context
       await this.processFileMessages();
@@ -166,6 +187,9 @@ export class Executor {
 
       // Combine for processing. We want to find actions in both.
       const responseToProcess = wrappedReasoning + (wrappedReasoning && responseText ? '\n' : '') + responseText;
+      if (responseToProcess.trim()) {
+        lastModelTurnContent = responseToProcess;
+      }
 
       // Process the combined response to detect actions
       const processed = this.session.loop.processResponse(
@@ -183,6 +207,17 @@ export class Executor {
         this.options.callbacks.onThinking(thinking);
       }
 
+      const inlineCompletionMessage = extractCompletionMessage(responseToProcess);
+      if (inlineCompletionMessage) {
+        this.session.addAssistantMessage(currentAssistantContent);
+
+        if (this.options.callbacks?.onResponse) {
+          this.options.callbacks.onResponse(inlineCompletionMessage);
+        }
+
+        return inlineCompletionMessage;
+      }
+
       const hasFiles = processed.filesToWrite && processed.filesToWrite.length > 0;
       const hasDiffs = processed.diffs && processed.diffs.length > 0;
       const hasEdits = processed.edits && processed.edits.length > 0;
@@ -192,6 +227,20 @@ export class Executor {
         // We now REQUIRE TASK_DONE()/FINISH() to be called.
         // If we have no new actions, we must tell the agent to finish.
         if (this.options.requireFinish) {
+          noProgressTurns += 1;
+          if (noProgressTurns >= MAX_NO_PROGRESS_TURNS) {
+            const baseMessage = lastModelTurnContent.trim() || currentAssistantContent.trim() || '(no content generated)';
+            const fallbackMessage = `${baseMessage}\n\n[Automatic stop: the agent stopped making progress and never called TASK_DONE/FINISH.]`;
+
+            this.session.addAssistantMessage(currentAssistantContent || baseMessage);
+
+            if (this.options.callbacks?.onResponse) {
+              this.options.callbacks.onResponse(fallbackMessage);
+            }
+
+            return fallbackMessage;
+          }
+
           const warningMessage = buildCompletionWarning();
 
           // Append warning and continue loop
@@ -220,6 +269,8 @@ export class Executor {
           return message;
         }
       }
+
+      noProgressTurns = 0;
 
       // Execute the action or CLI command
       let observationParts: string[] = [];
@@ -281,8 +332,10 @@ export class Executor {
         observation = '(no executable content found)';
       }
 
+      const observationForLoop = truncateMiddle(observation, MAX_OBSERVATION_CHARS, 'Observation');
+
       if (this.options.callbacks?.onObservation) {
-        this.options.callbacks.onObservation(observation);
+        this.options.callbacks.onObservation(observationForLoop);
       }
 
       // Check for completion signal
@@ -302,7 +355,7 @@ export class Executor {
 
           // Commit the final state
           this.session.addAssistantMessage(currentAssistantContent);
-          this.session.addUserMessage(observation); // Add final observation
+          this.session.addUserMessage(observationForLoop); // Add final observation
 
           if (this.options.callbacks?.onResponse) {
             this.options.callbacks.onResponse(finishMessage);
@@ -316,10 +369,22 @@ export class Executor {
         }
       }
 
+      const fallbackCompletionMessage = extractCompletionMessage(observation);
+      if (fallbackCompletionMessage) {
+        this.session.addAssistantMessage(currentAssistantContent);
+        this.session.addUserMessage(observationForLoop);
+
+        if (this.options.callbacks?.onResponse) {
+          this.options.callbacks.onResponse(fallbackCompletionMessage);
+        }
+
+        return fallbackCompletionMessage;
+      }
+
       // Build continuation - use the accumulated content (which now includes the new response)
       const continuation = this.session.loop.buildContinuationMessages(
         currentAssistantContent,
-        observation,
+        observationForLoop,
         this.session.syntax,
         filename,
         userMessage
@@ -345,30 +410,31 @@ export class Executor {
       }
     }
 
-    // Max iterations reached
-    // If currentAssistantContent is empty, we've committed all messages (message-passthrough loop)
-    // In that case, the conversation is already in a good state
-    if (currentAssistantContent) {
-      const finalMessage = currentAssistantContent +
-        '\n\n[Max iterations reached. Please continue with a new message if needed.]';
+      // Max iterations reached
+      // If currentAssistantContent is empty, we've committed all messages (message-passthrough loop)
+      // In that case, the conversation is already in a good state
+      if (currentAssistantContent) {
+        const finalMessage = currentAssistantContent +
+          '\n\n[Max iterations reached. Please continue with a new message if needed.]';
 
-      this.session.addAssistantMessage(finalMessage);
+        this.session.addAssistantMessage(finalMessage);
 
-      if (this.options.callbacks?.onResponse) {
-        this.options.callbacks.onResponse(finalMessage);
+        if (this.options.callbacks?.onResponse) {
+          this.options.callbacks.onResponse(finalMessage);
+        }
+
+        return finalMessage;
+      } else {
+        // All messages have been committed, conversation is complete
+        const message = '[Max iterations reached. Please continue with a new message if needed.]';
+
+        if (this.options.callbacks?.onResponse) {
+          this.options.callbacks.onResponse(message);
+        }
+
+        return message;
       }
-
-      return finalMessage;
-    } else {
-      // All messages have been committed, conversation is complete
-      const message = '[Max iterations reached. Please continue with a new message if needed.]';
-
-      if (this.options.callbacks?.onResponse) {
-        this.options.callbacks.onResponse(message);
-      }
-
-      return message;
-    }
+    });
   }
 
   /**

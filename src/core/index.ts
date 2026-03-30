@@ -6,3 +6,5 @@ export { Session, type SessionComponents } from './Session.js';
 export { Executor, type ExecutorCallbacks, type ExecutorOptions } from './Executor.js';
 export { PromptBuilder } from './PromptBuilder.js';
 export { runAgent, listAgents, loadAgent, type RunAgentOptions } from './AgentRunner.js';
+export { AgentInvocationService, getAgentInvocationService, type CallAgentOptions } from './AgentInvocationService.js';
+export { VoiceAgentSessionController, type VoiceAgentSessionCallbacks } from './VoiceAgentSessionController.js';

@@ -19,6 +19,8 @@ import express from 'express';
 import { Server } from 'http';
 import { AddressInfo } from 'net';
 import { COLORS, SYMBOLS, StreamDisplay } from '../cli/display.js';
+import { getInterfaceRouteRegistry } from '../interfaces/registry.js';
+import type { InterfaceRouteHandler, InterfaceUiEventPayload } from '../interfaces/base.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const AUTHORIZED_USERS_FILE = path.join(__dirname, '..', '..', 'tools', 'message', 'authorized_users.json');
@@ -114,7 +116,7 @@ export class TelegramService {
         this.display = new StreamDisplay();
 
         this.app = express();
-        this.app.use(express.json());
+        this.app.use(express.json({ limit: '2mb' }));
         this.setupApiRoutes();
 
         this.loadAuthorizedUsers();
@@ -289,43 +291,57 @@ export class TelegramService {
                     throw new Error(`No session for route "${routeKey}"`);
                 }
 
-                switch (event) {
-                    case 'executor.before_provider_call':
-                        this.resetUiScope(routeKey, scopeId);
-                        break;
-                    case 'executor.reasoning_delta':
-                        this.pushReasoningPreview(routeKey, scopeId, accumulated || '');
-                        break;
-                    case 'executor.text_delta':
-                        this.pushTextPreview(routeKey, scopeId, accumulated || '');
-                        break;
-                    case 'executor.text_done':
-                        this.finalizeScopeText(routeKey, scopeId, text || '');
-                        break;
-                    case 'executor.action':
-                        this.showExecutionForScope(routeKey, scopeId, 'Executing action...', code || '');
-                        break;
-                    case 'executor.cli':
-                        this.showExecutionForScope(routeKey, scopeId, 'Executing action...', command || '');
-                        break;
-                    case 'executor.file':
-                        this.showExecutionForScope(routeKey, scopeId, 'Executing action...', `// file: ${filename || '(unknown)'}\n${content || ''}`);
-                        break;
-                    case 'executor.observation':
-                        this.showObservationForScope(routeKey, scopeId, content || '');
-                        break;
-                    case 'executor.response':
-                        this.finalizeUiScope(routeKey, scopeId, content || text || '');
-                        break;
-                    default:
-                        throw new Error(`Unsupported UI event "${event}"`);
-                }
+                await this.handleUiEvent(routeKey, {
+                    scopeId,
+                    event,
+                    agentName,
+                    accumulated,
+                    text,
+                    code,
+                    command,
+                    filename,
+                    content,
+                });
 
                 res.json({ success: true });
             } catch (e: any) {
                 res.status(500).json({ error: e.message });
             }
         });
+    }
+
+    private async handleUiEvent(routeKey: string, payload: InterfaceUiEventPayload): Promise<void> {
+        switch (payload.event) {
+            case 'executor.before_provider_call':
+                this.resetUiScope(routeKey, payload.scopeId);
+                break;
+            case 'executor.reasoning_delta':
+                this.pushReasoningPreview(routeKey, payload.scopeId, payload.accumulated || '');
+                break;
+            case 'executor.text_delta':
+                this.pushTextPreview(routeKey, payload.scopeId, payload.accumulated || '');
+                break;
+            case 'executor.text_done':
+                this.finalizeScopeText(routeKey, payload.scopeId, payload.text || '');
+                break;
+            case 'executor.action':
+                this.showExecutionForScope(routeKey, payload.scopeId, 'Executing action...', payload.code || '');
+                break;
+            case 'executor.cli':
+                this.showExecutionForScope(routeKey, payload.scopeId, 'Executing action...', payload.command || '');
+                break;
+            case 'executor.file':
+                this.showExecutionForScope(routeKey, payload.scopeId, 'Executing action...', `// file: ${payload.filename || '(unknown)'}\n${payload.content || ''}`);
+                break;
+            case 'executor.observation':
+                this.showObservationForScope(routeKey, payload.scopeId, payload.content || '');
+                break;
+            case 'executor.response':
+                this.finalizeUiScope(routeKey, payload.scopeId, payload.content || payload.text || '');
+                break;
+            default:
+                throw new Error(`Unsupported UI event "${payload.event}"`);
+        }
     }
 
     private loadAuthorizedUsers(): void {
@@ -550,8 +566,33 @@ export class TelegramService {
         };
     }
 
+    private registerRouteHandler(routeKey: string): void {
+        const handler: InterfaceRouteHandler = {
+            routeId: routeKey,
+            interfaceName: 'telegram',
+            getAgentName: () => this.sessions.get(routeKey)?.agentName,
+            ensureAgent: async (preferredAgentName?: string) => {
+                const session = this.sessions.get(routeKey);
+                if (!session) return;
+                await this.ensureSessionAgent(routeKey, session.route, preferredAgentName);
+            },
+            ask: async (question: string, preferredAgentName?: string) => this.ask(routeKey, question, preferredAgentName),
+            sendText: async (text: string, preferredAgentName?: string) => this.sendText(routeKey, text, preferredAgentName),
+            sendVoice: async (filePath: string, preferredAgentName?: string) => this.sendVoice(routeKey, filePath, preferredAgentName),
+            sendFiles: async (files: string[], preferredAgentName?: string) => this.sendFiles(routeKey, files, preferredAgentName),
+            sendAuthLink: async (text: string, url: string, label?: string, preferredAgentName?: string) =>
+                this.sendAuthLink(routeKey, text, url, label, preferredAgentName),
+            emitUiEvent: async (payload: InterfaceUiEventPayload) => {
+                await this.handleUiEvent(routeKey, payload);
+            },
+        };
+        getInterfaceRouteRegistry().register(handler);
+    }
+
     private async showAgentMenu(ctx: Context): Promise<void> {
-        const agents = await this.agentLoader.getAvailableAgents();
+        const agents = (await this.agentLoader.loadAll())
+            .filter(agent => (agent.config.interface || 'telegram') === 'telegram')
+            .map(agent => agent.config.name);
         const route = this.extractRouteFromContext(ctx);
         const buttons = agents.map((a) => [Markup.button.text(`Select: ${a}`)]);
         const keyboard = Markup.keyboard(buttons).oneTime().resize();
@@ -562,6 +603,7 @@ export class TelegramService {
         const existing = this.sessions.get(routeKey) || this.createEmptySession(route);
         existing.route = route;
         existing.agentName = agentName;
+        this.registerRouteHandler(routeKey);
 
         let agent = await this.agentLoader.loadByName(agentName);
         if (!agent) {
@@ -573,6 +615,14 @@ export class TelegramService {
         }
         if (!agent) {
             await this.sendMessageToRoute(route, 'Agent not found.');
+            return;
+        }
+        if ((agent.config.interface || 'telegram') !== 'telegram') {
+            await this.sendMessageToRoute(route, `Agent "${agent.config.name}" is bound to interface "${agent.config.interface}" and cannot be launched in Telegram.`);
+            return;
+        }
+        if ((agent.config.modality || 'text') !== 'text') {
+            await this.sendMessageToRoute(route, `Agent "${agent.config.name}" uses modality "${agent.config.modality}" and cannot run in Telegram chat mode.`);
             return;
         }
         existing.agentName = agent.config.name;
@@ -784,6 +834,7 @@ export class TelegramService {
             session = this.createEmptySession(route);
             session.agentName = 'core';
             this.sessions.set(routeKey, session);
+            this.registerRouteHandler(routeKey);
 
             await this.initializeSession(routeKey, route, 'core');
             await this.handleUserActivity(routeKey, route, activity);
@@ -864,8 +915,10 @@ export class TelegramService {
             }
 
             const env = {
-                ACN_API_URL: this.apiUrl,
+                ACN_API_URL: process.env.ACN_INTERFACE_API_URL || this.apiUrl,
                 ACN_CHAT_ID: routeKey,
+                ACN_INTERFACE_API_URL: process.env.ACN_INTERFACE_API_URL || this.apiUrl,
+                ACN_INTERFACE_ROUTE: routeKey,
             };
 
             await actionContext.run({ chatId: routeKey, telegramService: this, sessionId: session.session?.id, env }, async () => {
@@ -1278,6 +1331,7 @@ export class TelegramService {
             session = this.createEmptySession(route);
             session.agentName = this.normalizePreferredAgentName(preferredAgentName) || 'CORE';
             this.sessions.set(routeKey, session);
+            this.registerRouteHandler(routeKey);
             await this.initializeSession(routeKey, route, session.agentName);
             session = this.sessions.get(routeKey);
         } else {
@@ -1294,6 +1348,7 @@ export class TelegramService {
 
         const direct = this.sessions.get(chatIdOrRouteKey);
         if (direct) {
+            this.registerRouteHandler(chatIdOrRouteKey);
             return { routeKey: chatIdOrRouteKey, route: direct.route, session: direct };
         }
 

@@ -9,6 +9,7 @@ import { existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { parse as parseYaml } from 'yaml';
 import { fileURLToPath } from 'url';
+import { normalizeAgentConfig, validateAgentConfig } from './agent-config.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // Use PROJECT_ROOT from environment if available (for sandbox context)
@@ -109,13 +110,15 @@ export class AgentLoader {
         const configStat = await stat(configPath);
         if (configStat.isFile()) {
           const content = await readFile(configPath, 'utf-8');
-          const config = this.parseConfig(content, configFile) as AgentConfig;
+          const parsedConfig = this.parseConfig(content, configFile) as AgentConfig;
+          const config = normalizeAgentConfig(parsedConfig);
 
           // Validate required fields
           if (!config.name || !config.model || !config.systemPrompt) {
             console.warn(`Warning: Agent config in ${dir} missing required fields (name, model, systemPrompt)`);
             continue;
           }
+          validateAgentConfig(config);
 
           // Apply defaults
           config.tools = config.tools || [];

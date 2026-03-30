@@ -80,12 +80,13 @@ async function startServer(): Promise<void> {
       }
 
       const tocPagePdf = asInteger(req.body?.tocPagePdf, NaN);
+      const tocText = String(req.body?.tocText || '').trim();
       const pageOffset = asInteger(req.body?.pageOffset, 0);
       const sectionType = String(req.body?.sectionType || '').trim() || 'paragraphs';
       const title = String(req.body?.title || '').trim();
 
-      if (!Number.isFinite(tocPagePdf) || tocPagePdf < 1) {
-        res.status(400).json({ ok: false, error: 'tocPagePdf must be a positive integer' });
+      if (!tocText && (!Number.isFinite(tocPagePdf) || tocPagePdf < 1)) {
+        res.status(400).json({ ok: false, error: 'Provide either tocPagePdf or tocText.' });
         return;
       }
 
@@ -93,7 +94,8 @@ async function startServer(): Promise<void> {
         title,
         originalFilename: file.originalname,
         pdfBuffer: file.buffer,
-        tocPagePdf,
+        tocPagePdf: Number.isFinite(tocPagePdf) ? tocPagePdf : undefined,
+        tocText,
         pageOffset,
         sectionType,
       });

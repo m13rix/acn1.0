@@ -1,46 +1,43 @@
 /**
  * Search Tool
  *
- * Provides web search, answer, content retrieval, and research capabilities
- * using the Exa API.
+ * Provides Tavily-backed search, answer, and crawl capabilities,
+ * plus Exa-backed long-form research and Google Image Search.
  */
 
-import Exa from 'exa-js';
+import { tavily } from '@tavily/core';
+import { Exa } from 'exa-js';
 import {
-    GOOGLE_IMG_SCRAP
+  GOOGLE_IMG_SCRAP
 } from 'google-img-scrap';
 
-// Initialize Exa client
+const tavilyClient = tavily({ apiKey: process.env.TAVILY_API_KEY });
 const exa = new Exa(process.env.EXA_API_KEY);
+const MAX_RESULT_CONTENT_CHARS = 4000;
+const MAX_RESULT_RAW_CONTENT_CHARS = 12000;
+const MAX_CRAWL_RAW_CONTENT_CHARS = 12000;
 
 // ============================================================================
 // Types
 // ============================================================================
 
-export type SearchType = 'auto' | 'keyword' | 'neural';
-
-export type Category =
-  | 'company'
-  | 'research paper'
-  | 'news'
-  | 'pdf'
-  | 'github'
-  | 'tweet'
-  | 'personal site'
-  | 'people'
-  | 'financial report';
-
-export type ContentMode = 'none' | 'snippet' | 'summary' | 'full';
+export type SearchDepth = 'basic' | 'advanced' | 'fast' | 'ultra-fast';
+export type SearchTopic = 'general' | 'news' | 'finance';
+export type SearchOutputMode = 'urls' | 'full';
+export type AnswerOutputMode = 'answer' | 'answerAndUrls' | 'answerAndSources';
 
 export interface SearchOptions {
-  numResults?: number;
-  type?: SearchType;
-  category?: Category;
-  content?: ContentMode;
+  maxResults?: number;
+  topic?: SearchTopic;
+  searchDepth?: SearchDepth;
+  output?: SearchOutputMode;
 }
 
-export interface ContentOptions {
-  content?: ContentMode;
+export interface AnswerOptions {
+  topic?: SearchTopic;
+  searchDepth?: SearchDepth;
+  maxResults?: number;
+  output?: AnswerOutputMode;
 }
 
 export interface ResearchOptions {
@@ -50,21 +47,24 @@ export interface ResearchOptions {
 export interface SearchResult {
   title: string;
   url: string;
-  id: string;
-  publishedDate?: string;
-  author?: string;
+  content?: string;
+  rawContent?: string;
   score?: number;
-  highlights?: string[];
-  summary?: string;
-  text?: string;
+  publishedDate?: string;
+  favicon?: string;
 }
 
 export interface AnswerResult {
   answer: string;
-  citations: Array<{
-    title: string;
+  sources?: string[] | SearchResult[];
+}
+
+export interface CrawlResult {
+  baseUrl: string;
+  results: Array<{
     url: string;
-    id: string;
+    rawContent: string;
+    favicon?: string;
   }>;
 }
 
@@ -91,139 +91,158 @@ export interface ImageSearchOptions {
   limit?: number;
 }
 
-// ============================================================================
-// Helper Functions
-// ============================================================================
-
-/**
- * Build contents options based on content mode
- */
-function buildContentsOptions(mode: ContentMode = 'none'): Record<string, boolean> | false {
-  switch (mode) {
-    case 'snippet':
-      return { highlights: true };
-    case 'summary':
-      return { summary: true };
-    case 'full':
-      return { text: true };
-    case 'none':
-    default:
-      return false;
+function truncateText(value: string | undefined, maxChars: number, label: string): string | undefined {
+  if (!value || value.length <= maxChars) {
+    return value;
   }
+
+  const reserved = Math.min(220, Math.max(100, Math.floor(maxChars * 0.18)));
+  const headLength = Math.max(0, Math.floor((maxChars - reserved) * 0.75));
+  const tailLength = Math.max(0, maxChars - reserved - headLength);
+  const removed = value.length - headLength - tailLength;
+  const notice = `\n\n[${label} truncated: removed ${removed} chars]\n\n`;
+  return `${value.slice(0, headLength)}${notice}${value.slice(value.length - tailLength)}`;
 }
 
-// ============================================================================
-// Exported Functions
-// ============================================================================
+function mapTavilyResult(result: {
+  title: string;
+  url: string;
+  content: string;
+  rawContent?: string;
+  score: number;
+  publishedDate: string;
+  favicon?: string;
+}): SearchResult {
+  return {
+    title: result.title || 'Untitled',
+    url: result.url,
+    content: truncateText(result.content, MAX_RESULT_CONTENT_CHARS, 'content'),
+    rawContent: truncateText(result.rawContent, MAX_RESULT_RAW_CONTENT_CHARS, 'rawContent'),
+    score: result.score,
+    publishedDate: result.publishedDate,
+    favicon: result.favicon,
+  };
+}
 
 /**
- * Get a quick answer to a question using Exa's Answer API
+ * Main way to search: asks Tavily for an answer and source grounding.
  *
  * @param query - The question to answer
- * @returns Answer with citations
+ * @param options - Output and Tavily search options
+ * @returns Answer only, answer with source URLs, or answer with full sources
  */
-export async function answer(query: string): Promise<AnswerResult> {
-  console.log(`[Search] Getting answer for: "${query}"`);
+export async function answer(
+  query: string,
+  options: AnswerOptions = {}
+): Promise<AnswerResult> {
+  const {
+    topic = 'general',
+    searchDepth = 'advanced',
+    maxResults = 5,
+    output = 'answerAndUrls',
+  } = options;
+
+  console.log(`[Search] Getting Tavily answer for: "${query}"`);
 
   try {
-    const response = await exa.answer(query);
+    const response = await tavilyClient.search(query, {
+      topic,
+      searchDepth,
+      maxResults,
+      includeAnswer: 'advanced',
+      includeFavicon: true,
+      includeRawContent: output === 'answerAndSources' ? 'markdown' : false,
+    });
+
+    const answerText = typeof response.answer === 'string' ? response.answer : '';
+    const sources = response.results.map(mapTavilyResult);
+
+    if (output === 'answer') {
+      return { answer: answerText };
+    }
+
+    if (output === 'answerAndSources') {
+      return {
+        answer: answerText,
+        sources,
+      };
+    }
 
     return {
-      answer: typeof response.answer === 'string' ? response.answer : JSON.stringify(response.answer),
-      citations: response.citations.map((c) => ({
-        title: c.title || 'Untitled',
-        url: c.url,
-        id: c.id,
-      })),
+      answer: answerText,
+      sources: sources.map((source) => source.url),
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
-    throw new Error(`Exa answer failed: ${message}`);
+    throw new Error(`Tavily answer failed: ${message}`);
   }
 }
 
 /**
- * Perform a web search using Exa's Search API
+ * Perform a normal web search with Tavily.
  *
  * @param query - The search query
  * @param options - Search configuration options
- * @returns Array of search results
+ * @returns URLs only by default; `full` returns the normal Tavily result objects
  */
 export async function search(
   query: string,
   options: SearchOptions = {}
-): Promise<SearchResult[]> {
+): Promise<string[] | SearchResult[]> {
   const {
-    numResults = 5,
-    type = 'fast',
-    category,
-    content = 'summary',
+    maxResults = 5,
+    topic = 'general',
+    searchDepth = 'advanced',
+    output = 'urls',
   } = options;
 
-  console.log(`[Search] Searching for: "${query}" (type: ${type}, results: ${numResults})`);
-  if (category) {
-    console.log(`[Search] Category: ${category}`);
-  }
+  console.log(`[Search] Tavily search for: "${query}" (results: ${maxResults})`);
 
   try {
-    const searchParams: any = {
-      numResults,
-      type,
-      contents: buildContentsOptions(content),
-    };
+    const response = await tavilyClient.search(query, {
+      topic,
+      searchDepth,
+      maxResults,
+      includeFavicon: true,
+    includeRawContent: false,
+    });
 
-    if (category) {
-      searchParams.category = category;
-    }
-
-    const response = await exa.search(query, searchParams);
-
-    console.log(response)
-
-    return response.results;
+    const results = response.results.map(mapTavilyResult);
+    return output === 'full' ? results : results.map((result) => result.url);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
-    throw new Error(`Exa search failed: ${message}`);
+    throw new Error(`Tavily search failed: ${message}`);
   }
 }
 
 /**
- * Get content from specific URLs using Exa's getContents API
+ * Crawl a page and its subpages to answer a focused prompt.
  *
- * @param urls - URL or array of URLs to fetch content from
- * @param options - Content retrieval options
- * @returns Array of content results
+ * @param url - Starting URL to crawl
+ * @param prompt - Instructions for what to find across the crawled content
+ * @returns Crawled raw content grouped by source page
  */
-export async function getContent(
-  urls: string | string[],
-  options: ContentOptions = {}
-): Promise<SearchResult[]> {
-  const { content = 'full' } = options;
-  const urlArray = Array.isArray(urls) ? urls : [urls];
-
-  console.log(`[Search] Fetching content from ${urlArray.length} URL(s)`);
-  urlArray.forEach(url => console.log(`  - ${url}`));
+export async function crawl(url: string, prompt: string): Promise<CrawlResult> {
+  console.log(`[Search] Tavily crawl starting at: ${url}`);
+  console.log(`[Search] Crawl prompt: "${prompt}"`);
 
   try {
-    const contentsOpts = buildContentsOptions(content);
-    const response = await exa.getContents(
-      urlArray,
-      contentsOpts === false ? undefined : contentsOpts
-    );
+    const response = await tavilyClient.crawl(url, {
+      instructions: prompt,
+      extractDepth: 'advanced',
+    });
 
-    return response.results.map((r: any) => ({
-      title: r.title || 'Untitled',
-      url: r.url,
-      id: r.id,
-      publishedDate: r.publishedDate,
-      author: r.author,
-      highlights: r.highlights,
-      summary: r.summary,
-      text: r.text,
-    }));
+    return {
+      baseUrl: response.baseUrl,
+      results: response.results.map((result) => ({
+        url: result.url,
+        rawContent: truncateText(result.rawContent, MAX_CRAWL_RAW_CONTENT_CHARS, 'rawContent') || '',
+        favicon: result.favicon,
+      })),
+    };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
-    throw new Error(`Exa getContents failed: ${message}`);
+    throw new Error(`Tavily crawl failed: ${message}`);
   }
 }
 
@@ -251,7 +270,6 @@ export async function imageSearch(
       throw new Error('Invalid response from Google Image Search');
     }
 
-    // Deduplicate results by ID
     const seenIds = new Set<string>();
     const deduplicatedResults: ImageSearchResult[] = [];
 
@@ -291,10 +309,9 @@ export async function research(
   const { stream = true } = options;
 
   console.log(`[Search] Researching: "${topic}"`);
-  console.log(`[Search] Using model: exa-research-fast`);
+  console.log('[Search] Using model: exa-research-fast');
 
   try {
-    // Create the research request
     const createResponse = await exa.research.create({
       instructions: topic,
       model: 'exa-research-fast',
@@ -304,15 +321,12 @@ export async function research(
     console.log(`[Search] Research ID: ${researchId}`);
 
     if (stream) {
-      // Stream mode - poll and display progress
-      console.log(`[Search] Streaming research progress...`);
+      console.log('[Search] Streaming research progress...');
       console.log('---');
 
-      // Get streaming updates
       const streamGen = await exa.research.get(researchId, { stream: true, events: true });
 
       for await (const event of streamGen) {
-        // Log different event types
         if (event.eventType === 'task-operation') {
           const taskOp = event as any;
           if (taskOp.data?.type === 'think') {
@@ -332,10 +346,9 @@ export async function research(
       }
     }
 
-    // Poll until finished and get final result
     const result = await exa.research.pollUntilFinished(researchId, {
       pollInterval: 2000,
-      timeoutMs: 300000, // 5 minutes
+      timeoutMs: 300000,
       events: false,
     });
 
@@ -352,15 +365,17 @@ export async function research(
           numPages: completedResult.costDollars.numPages,
         } : undefined,
       };
-    } else if (result.status === 'failed') {
+    }
+
+    if (result.status === 'failed') {
       const failedResult = result as any;
       throw new Error(`Research failed: ${failedResult.error || 'Unknown error'}`);
-    } else {
-      return {
-        output: '',
-        status: result.status as 'canceled',
-      };
     }
+
+    return {
+      output: '',
+      status: result.status as 'canceled',
+    };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     throw new Error(`Exa research failed: ${message}`);

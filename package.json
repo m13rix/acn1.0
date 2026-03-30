@@ -17,7 +17,8 @@
       "imports:studio": "tsx src/imported-tools-studio/server/index.ts",
       "skills-test": "tsx src/skills_system/test/server.ts",
       "memory:viz": "tsx src/memory-viz/server/index.ts",
-      "homework:viz": "tsx src/homework-viz/server/index.ts"
+      "homework:viz": "tsx src/homework-viz/server/index.ts",
+      "strategy:viz": "tsx tools/strategy/viz/server.ts"
    },
    "keywords": [
       "ai",
@@ -47,6 +48,7 @@
       "@lancedb/lancedb": "^0.23.0",
       "@modelcontextprotocol/sdk": "^1.27.1",
       "@openrouter/sdk": "^0.3.11",
+      "@tavily/core": "^0.7.2",
       "@types/multer": "^2.1.0",
       "chalk": "^5.3.0",
       "commander": "^14.0.3",
@@ -58,8 +60,11 @@
       "google-img-scrap": "^1.1.4",
       "js-yaml": "^4.1.1",
       "mime-types": "^3.0.2",
+      "mineflayer": "^4.35.0",
+      "mineflayer-pathfinder": "^2.4.5",
       "multer": "^2.1.1",
       "netschoolapi": "^1.12.2",
+      "node-global-key-listener": "^0.3.0",
       "ollama": "^0.6.3",
       "open": "^11.0.0",
       "pdf-lib": "^1.17.1",
@@ -69,6 +74,7 @@
       "puppeteer-extra": "^3.3.6",
       "puppeteer-extra-plugin-stealth": "^2.11.2",
       "sharp": "^0.33.5",
+      "speaker": "^0.5.5",
       "telegraf": "^4.16.3",
       "uuid": "^11.1.0",
       "wav": "^1.0.2",

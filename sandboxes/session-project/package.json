@@ -1,0 +1,10 @@
+{
+  "name": "sandbox-70cb1b0f",
+  "version": "1.0.0",
+  "description": "ACN agent sandbox",
+  "private": true,
+  "dependencies": {
+    "@xmldom/xmldom": "^0.8.11",
+    "fast-xml-parser": "^5.5.8"
+  }
+}

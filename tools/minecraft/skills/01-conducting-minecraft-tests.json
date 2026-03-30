@@ -1,0 +1,10 @@
+{
+  "title": "Conducting real Minecraft tests",
+  "content": "Use `minecraft.conductTest(prompt)` when you need a real in-game Minecraft test or simulation. Give a detailed prompt describing the mechanic, scenario, or player-ability test you want. The tool asks a model to write a full mineflayer CommonJS script, runs it in the actual game, retries with execution errors in history if it fails, and returns the script's console.log output. For player ability tests, the player under test is `M13RIX` and the bot name is always `Telos`.",
+  "examples": [
+    "Проведи тест боевых способностей игрока в Minecraft.",
+    "Simulate a Minecraft mechanic in the real game and report the result.",
+    "Сделай реальный тест для игрока M13RIX через mineflayer."
+  ],
+  "scoreThreshold": 0.8
+}

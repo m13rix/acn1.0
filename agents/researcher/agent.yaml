@@ -1,15 +1,13 @@
 name: researcher
 description: Specialized agent for high-quality and efficient research. Automatically selects the best search method (answer, search, or deep research) based on query complexity.
 
-model: minimax/minimax-m2.5
-provider: openrouter
+model: gpt-5.4-mini
+provider: openai-codex
 systemPrompt: prompts/system.md
 
 modelSwitching:
   whitelist:
-    - x-ai/grok-4.1-fast
-    - google/gemini-3-flash-preview
-    - moonshotai/kimi-k2.5
+    - gpt-5.4-mini
   selector:
     model: openai/gpt-oss-20b
     provider: openrouter
@@ -19,7 +17,7 @@ tools:
   - message
   - utils
 
-loop: provider_tools
+loop: provider-tools
 syntax: markdown
 skillsTable: researcher_skills
 injectAgentsList: false

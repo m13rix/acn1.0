@@ -40,3 +40,28 @@ test('ToolLoader loads embedded tool skills from the tool directory', async () =
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('ToolLoader accepts tools with intentionally empty descriptions', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'acn-tool-loader-empty-desc-'));
+  try {
+    const toolDir = join(root, 'skill-only-tool');
+    await mkdir(toolDir, { recursive: true });
+
+    await writeFile(join(toolDir, 'tool.yaml'), [
+      'name: skillOnly',
+      'description: ""',
+      'module: index.ts',
+      '',
+    ].join('\n'));
+    await writeFile(join(toolDir, 'index.ts'), 'export {};');
+
+    const loader = new ToolLoader(root);
+    const tools = await loader.loadAll();
+
+    assert.equal(tools.length, 1);
+    assert.equal(tools[0]?.config.description, '');
+    assert.match(loader.getToolDocumentation(tools), /### skillOnly/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

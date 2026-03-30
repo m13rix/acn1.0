@@ -1,0 +1,69 @@
+{
+  "id": "strat_c3df1cf800be",
+  "name": "minecraft-32-diamonds-fastest-test",
+  "description": "Develop the fastest evidence-based Minecraft Java strategy to obtain 32 diamonds from a surface start under the user’s constraints",
+  "divergence": {
+    "x": 0,
+    "y": 0,
+    "updatedAt": "2026-03-28T12:26:04.493Z"
+  },
+  "paths": [],
+  "routes": [
+    {
+      "id": "route_87dda339e8de",
+      "depth": 1,
+      "name": "Branch Mining",
+      "slug": "branch-mining",
+      "theme": "diamond acquisition families from a surface start",
+      "category": "root acquisition family",
+      "summary": "Systematic Y-level mining with main tunnels and side branches in deepslate to maximize exposed ore density.",
+      "folderPath": "strategy_workspace/routes/branch-mining",
+      "intakePath": "strategy_workspace/routes/branch-mining/branch-mining_intake.md",
+      "evalPath": "strategy_workspace/routes/branch-mining/branch-mining_eval.md",
+      "decision": "undecided",
+      "subroutesGenerated": false,
+      "createdAt": "2026-03-28T12:33:45.816Z",
+      "updatedAt": "2026-03-28T12:33:45.816Z"
+    },
+    {
+      "id": "route_ccff4c6f94a2",
+      "depth": 1,
+      "name": "Cave and Aquifer Mining",
+      "slug": "cave-aquifer-mining",
+      "theme": "diamond acquisition families from a surface start",
+      "category": "root acquisition family",
+      "summary": "Exploit large natural caves, ravines, and flooded aquifers for exposed diamond blocks and fast first finds.",
+      "folderPath": "strategy_workspace/routes/cave-aquifer-mining",
+      "intakePath": "strategy_workspace/routes/cave-aquifer-mining/cave-aquifer-mining_intake.md",
+      "evalPath": "strategy_workspace/routes/cave-aquifer-mining/cave-aquifer-mining_eval.md",
+      "decision": "undecided",
+      "subroutesGenerated": false,
+      "createdAt": "2026-03-28T12:33:45.822Z",
+      "updatedAt": "2026-03-28T12:33:45.822Z"
+    },
+    {
+      "id": "route_6d44419accfa",
+      "depth": 1,
+      "name": "Structure Looting",
+      "slug": "structure-looting",
+      "theme": "diamond acquisition families from a surface start",
+      "category": "root acquisition family",
+      "summary": "Target naturally generated loot-bearing structures that can directly award diamonds or diamond-rich loot.",
+      "folderPath": "strategy_workspace/routes/structure-looting",
+      "intakePath": "strategy_workspace/routes/structure-looting/structure-looting_intake.md",
+      "evalPath": "strategy_workspace/routes/structure-looting/structure-looting_eval.md",
+      "decision": "undecided",
+      "subroutesGenerated": false,
+      "createdAt": "2026-03-28T12:33:45.843Z",
+      "updatedAt": "2026-03-28T12:33:45.843Z"
+    }
+  ],
+  "cycle": {
+    "maxDepth": 10,
+    "currentDepth": 1,
+    "status": "active",
+    "updatedAt": "2026-03-28T12:26:04.500Z"
+  },
+  "createdAt": "2026-03-28T12:26:04.493Z",
+  "updatedAt": "2026-03-28T12:33:45.843Z"
+}

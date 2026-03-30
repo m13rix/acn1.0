@@ -1,0 +1,98 @@
+{
+  "id": "semejnyj-kodeks-rossijskoj-federaczii",
+  "title": "semejnyj-kodeks-rossijskoj-federaczii",
+  "originalFilename": "semejnyj-kodeks-rossijskoj-federaczii.pdf",
+  "sectionType": "раздел",
+  "tocPagePdf": null,
+  "tocPageLogical": null,
+  "pageOffset": 0,
+  "pageCount": 65,
+  "createdAt": "2026-03-23T13:39:05.507Z",
+  "updatedAt": "2026-03-23T18:18:18.152Z",
+  "model": "gemini-3.1-flash-lite-preview",
+  "tocInputMode": "text",
+  "sections": [
+    {
+      "sectionNumber": 1,
+      "fullName": "Общие положения",
+      "pageStart": 2,
+      "pageEnd": 3,
+      "pdfPageStart": 2,
+      "pdfPageEnd": 3
+    },
+    {
+      "sectionNumber": 2,
+      "fullName": "Заключение и прекращение брака",
+      "pageStart": 4,
+      "pageEnd": 10,
+      "pdfPageStart": 4,
+      "pdfPageEnd": 10
+    },
+    {
+      "sectionNumber": 3,
+      "fullName": "Права и обязанности супругов",
+      "pageStart": 11,
+      "pageEnd": 15,
+      "pdfPageStart": 11,
+      "pdfPageEnd": 15
+    },
+    {
+      "sectionNumber": 4,
+      "fullName": "Права и обязанности родителей и детей",
+      "pageStart": 16,
+      "pageEnd": 28,
+      "pdfPageStart": 16,
+      "pdfPageEnd": 28
+    },
+    {
+      "sectionNumber": 5,
+      "fullName": "Алиментные обязательства членов семьи",
+      "pageStart": 29,
+      "pageEnd": 40,
+      "pdfPageStart": 29,
+      "pdfPageEnd": 40
+    },
+    {
+      "sectionNumber": 6,
+      "fullName": "Формы воспитания детей, оставшихся без попечения родителей",
+      "pageStart": 41,
+      "pageEnd": 58,
+      "pdfPageStart": 41,
+      "pdfPageEnd": 58
+    },
+    {
+      "sectionNumber": 7,
+      "fullName": "Применение семейного законодательства к семейным отношениям с участием иностранных граждан и лиц без гражданства",
+      "pageStart": 59,
+      "pageEnd": 62,
+      "pdfPageStart": 59,
+      "pdfPageEnd": 62
+    },
+    {
+      "sectionNumber": 8,
+      "fullName": "Заключительные положения",
+      "pageStart": 63,
+      "pageEnd": 65,
+      "pdfPageStart": 63,
+      "pdfPageEnd": 65
+    }
+  ],
+  "cachedSections": {
+    "3": {
+      "sectionNumber": 3,
+      "cacheFile": "cache\\section-3.txt",
+      "cachedAt": "2026-03-23T18:18:18.152Z",
+      "charCount": 13492,
+      "version": 3,
+      "strategy": "pdf-text+gemini-post"
+    },
+    "4": {
+      "sectionNumber": 4,
+      "cacheFile": "cache\\section-4.txt",
+      "cachedAt": "2026-03-23T14:53:05.543Z",
+      "charCount": 404,
+      "version": 3,
+      "strategy": "pdf-text+gemini-post"
+    }
+  }
+}

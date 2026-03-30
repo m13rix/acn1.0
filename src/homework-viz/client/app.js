@@ -18,7 +18,11 @@ const elements = {
   customTypeField: document.getElementById('custom-type-field'),
   customTypeInput: document.getElementById('custom-type-input'),
   pageOffset: document.getElementById('page-offset'),
+  tocInputMode: document.getElementById('toc-input-mode'),
+  tocPageField: document.getElementById('toc-page-field'),
   tocPage: document.getElementById('toc-page'),
+  tocTextField: document.getElementById('toc-text-field'),
+  tocTextInput: document.getElementById('toc-text-input'),
   ingestButton: document.getElementById('ingest-button'),
   ingestStatus: document.getElementById('ingest-status'),
   jumpFirst: document.getElementById('jump-first'),
@@ -54,12 +58,24 @@ function updateTypeVisibility() {
   elements.customTypeField.classList.toggle('hidden', !custom);
 }
 
+function updateTocInputVisibility() {
+  const useText = elements.tocInputMode.value === 'text';
+  elements.tocPageField.classList.toggle('hidden', useText);
+  elements.tocTextField.classList.toggle('hidden', !useText);
+  elements.useCurrentPage.disabled = useText;
+}
+
 function updatePageMeta() {
   const offset = Number(elements.pageOffset.value || 0);
   const tocPage = Number(elements.tocPage.value || 1);
+  const tocUsesText = elements.tocInputMode.value === 'text';
   elements.currentPageLabel.textContent = state.pdfDoc ? String(state.currentPage) : '-';
   elements.logicalPageLabel.textContent = state.pdfDoc ? String(state.currentPage + offset) : '-';
-  elements.tocPageLabel.textContent = state.pdfDoc ? `${tocPage} / ${tocPage + offset}` : '-';
+  elements.tocPageLabel.textContent = tocUsesText
+    ? 'manual'
+    : state.pdfDoc
+      ? `${tocPage} / ${tocPage + offset}`
+      : '-';
   elements.totalPagesLabel.textContent = state.pdfDoc ? String(state.totalPages) : '-';
 }
 
@@ -149,8 +165,16 @@ async function ingestCurrentPdf() {
     return;
   }
 
+  const useText = elements.tocInputMode.value === 'text';
+  const tocText = elements.tocTextInput.value.trim();
   const tocPagePdf = Number(elements.tocPage.value || 0);
-  if (!Number.isFinite(tocPagePdf) || tocPagePdf < 1 || tocPagePdf > state.totalPages) {
+
+  if (useText) {
+    if (!tocText) {
+      setStatus('Paste the table of contents text first.', true);
+      return;
+    }
+  } else if (!Number.isFinite(tocPagePdf) || tocPagePdf < 1 || tocPagePdf > state.totalPages) {
     setStatus(`TOC page must be between 1 and ${state.totalPages}.`, true);
     return;
   }
@@ -159,10 +183,18 @@ async function ingestCurrentPdf() {
   formData.set('pdf', state.file);
   formData.set('title', elements.titleInput.value.trim());
   formData.set('sectionType', getSectionTypeValue());
-  formData.set('tocPagePdf', String(tocPagePdf));
+  if (useText) {
+    formData.set('tocText', tocText);
+  } else {
+    formData.set('tocPagePdf', String(tocPagePdf));
+  }
   formData.set('pageOffset', String(Number(elements.pageOffset.value || 0)));
 
-  setStatus('Uploading PDF and asking Gemini to map sections...');
+  setStatus(
+    useText
+      ? 'Uploading PDF and parsing the pasted table of contents...'
+      : 'Uploading PDF and asking Gemini to map sections...'
+  );
 
   const response = await fetch('/api/documents', {
     method: 'POST',
@@ -240,6 +272,10 @@ function attachEvents() {
   });
 
   elements.sectionType.addEventListener('change', updateTypeVisibility);
+  elements.tocInputMode.addEventListener('change', () => {
+    updateTocInputVisibility();
+    updatePageMeta();
+  });
   elements.pageOffset.addEventListener('input', updatePageMeta);
   elements.tocPage.addEventListener('input', updatePageMeta);
 
@@ -278,6 +314,7 @@ function attachEvents() {
 
 async function main() {
   updateTypeVisibility();
+  updateTocInputVisibility();
   bindDragAndDrop();
   attachEvents();
   await loadDocuments();

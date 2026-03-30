@@ -63,10 +63,25 @@
           </label>
 
           <label class="field">
+            <span>TOC source</span>
+            <select id="toc-input-mode">
+              <option value="page">TOC page in PDF</option>
+              <option value="text">Paste TOC text manually</option>
+            </select>
+          </label>
+        </div>
+
+        <div id="toc-page-field" class="field">
+          <label class="field">
             <span>TOC page (PDF)</span>
             <input id="toc-page" type="number" min="1" value="1">
           </label>
         </div>
+
+        <label id="toc-text-field" class="field hidden">
+          <span>TOC text</span>
+          <textarea id="toc-text-input" rows="8" placeholder="Paste the full table of contents text here"></textarea>
+        </label>
 
         <div class="quick-actions">
           <button id="jump-first" class="ghost-button" type="button">Jump to first</button>
@@ -104,7 +119,7 @@
         <div class="viewer-stage">
           <canvas id="pdf-canvas"></canvas>
           <div id="viewer-placeholder" class="viewer-placeholder">
-            Load a PDF to preview the last page first and choose the table of contents page.
+            Load a PDF to preview the last page first and choose the table of contents page, or switch to manual TOC text.
           </div>
         </div>
       </section>

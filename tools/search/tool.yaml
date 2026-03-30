@@ -1,19 +1,34 @@
 name: search
 description: |
-  Web search and research via Exa API, plus Google Image Search.  
+  Web search, deep research, plus Image Search.
 
-  search.answer(query: string): { answer, citations[] }
-  - Quick factual answer with sources
+  `search.answer(...)` is the main way to search.
+  Use it by default when you want the most useful grounded result, because it returns a synthesized answer plus sources.
 
-  search.search(query, options?): SearchResult[]
-  - options: { numResults?, type?, category?, content? }
-  - type: 'auto' | 'keyword' | 'neural'
-  - category: 'company' | 'research paper' | 'news' | 'pdf' | 'github' | 'tweet' | 'personal site' | 'people' | 'financial report'
-  - content: 'none' | 'snippet' | 'summary' | 'full' (default: 'snippet')
-  - returns: an array of objects with fields "url", "title", "author", "summary" if enabled, etc.
+  search.answer(query, options?): { answer, sources? }
+  - Main search path
+  - options: { topic?, searchDepth?, maxResults?, output? }
+  - topic: 'general' | 'news' | 'finance'
+  - searchDepth: 'basic' | 'advanced' | 'fast' | 'ultra-fast' (default: 'advanced', recommended)
+  - output:
+    - 'answer' -> only the answer
+    - 'answerAndUrls' -> answer plus source URLs (default)
+    - 'answerAndSources' -> answer plus full source objects
 
-  search.getContent(urls, options?): SearchResult[]
-  - options: { content? } - same as above, default: 'full'
+  search.search(query, options?): string[] | SearchResult[]
+  - Normal search without synthesized answer
+  - options: { topic?, searchDepth?, maxResults?, output? }
+  - output:
+    - 'urls' -> only URLs (default)
+    - 'full' -> normal Tavily result objects with title, url, content, score, publishedDate?, favicon? (no rawContent)
+
+  search.crawl(url, prompt): { baseUrl, results[] }
+  - Most useful and usually the slowest search function
+  - Use when the model has a starting URL and a focused request
+  - Crawls the page and relevant subpages automatically
+  - No optional arguments; defaults are built in
+  - Returns: { baseUrl, results: [{ url, rawContent, favicon? }] }
+  - Large raw page bodies may be intelligently truncated to keep observations usable
 
   search.imageSearch(query, options?): ImageSearchResult[] - the only way to SEARCH FOR IMAGES
   - Search for images using Google Image Search
@@ -21,7 +36,7 @@ description: |
   - Returns: [{ id, title, url, originalUrl, height, width }, ...]
 
   search.research(topic, options?): { output, status, costDollars? }
-  - Deep research with exa-research-fast model
+  - Deep research
   - options: { stream? } - streams progress (default: true)
   Returns .output -> the result of the research
 

@@ -1,0 +1,338 @@
+{
+  "id": "strat_9c91b525bd7b",
+  "name": "minecraft_10_diamonds_fast_no_death",
+  "divergence": {
+    "x": 0,
+    "y": 0,
+    "updatedAt": "2026-03-21T15:43:01.076Z"
+  },
+  "paths": [
+    {
+      "id": "path_c59a02089a81",
+      "name": "Candidate A",
+      "description": "Deep-cave rush and exposed-ore hunting",
+      "rootNodeId": "node_4980929f51bc",
+      "nodes": [
+        {
+          "id": "node_4980929f51bc",
+          "name": "Start",
+          "kind": "root",
+          "createdAt": "2026-03-21T15:46:18.003Z",
+          "updatedAt": "2026-03-21T15:46:18.003Z"
+        },
+        {
+          "id": "node_36737ba2fc25",
+          "name": "Surface scan",
+          "kind": "action",
+          "note": "Briefly search for cave/ravine opening",
+          "createdAt": "2026-03-21T15:46:59.201Z",
+          "updatedAt": "2026-03-21T15:46:59.201Z"
+        },
+        {
+          "id": "node_b1952f906bff",
+          "name": "Safe descent",
+          "kind": "action",
+          "note": "Stair-step or wide slope descent only",
+          "createdAt": "2026-03-21T15:46:59.203Z",
+          "updatedAt": "2026-03-21T15:46:59.203Z"
+        },
+        {
+          "id": "node_0820a0f865ca",
+          "name": "Deep cave exploitation",
+          "kind": "action",
+          "note": "Hunt exposed ore while avoiding combat",
+          "createdAt": "2026-03-21T15:46:59.205Z",
+          "updatedAt": "2026-03-21T15:46:59.205Z"
+        },
+        {
+          "id": "node_7169f4897a6f",
+          "name": "10 diamonds acquired",
+          "kind": "goal",
+          "createdAt": "2026-03-21T15:46:59.207Z",
+          "updatedAt": "2026-03-21T15:46:59.207Z"
+        },
+        {
+          "id": "node_424ed6bb3d2d",
+          "name": "Death / mission fail",
+          "kind": "fail",
+          "createdAt": "2026-03-21T15:46:59.209Z",
+          "updatedAt": "2026-03-21T15:46:59.209Z"
+        }
+      ],
+      "events": [
+        {
+          "id": "event_a32e95187bf8",
+          "fromNodeId": "node_4980929f51bc",
+          "toNodeId": "node_36737ba2fc25",
+          "name": "start",
+          "probability": 1,
+          "stateDelta": 0,
+          "createdAt": "2026-03-21T15:46:59.211Z",
+          "updatedAt": "2026-03-21T15:46:59.211Z"
+        },
+        {
+          "id": "event_50c53303f585",
+          "fromNodeId": "node_36737ba2fc25",
+          "toNodeId": "node_b1952f906bff",
+          "name": "found usable cave or commit to staircase",
+          "probability": 0.85,
+          "stateDelta": 0.2,
+          "createdAt": "2026-03-21T15:46:59.212Z",
+          "updatedAt": "2026-03-21T15:46:59.212Z"
+        },
+        {
+          "id": "event_c26881c86808",
+          "fromNodeId": "node_36737ba2fc25",
+          "toNodeId": "node_424ed6bb3d2d",
+          "name": "wasted time / unsafe exploration",
+          "probability": 0.15,
+          "stateDelta": -0.4,
+          "createdAt": "2026-03-21T15:46:59.214Z",
+          "updatedAt": "2026-03-21T15:46:59.214Z"
+        },
+        {
+          "id": "event_082d3f88784c",
+          "fromNodeId": "node_b1952f906bff",
+          "toNodeId": "node_0820a0f865ca",
+          "name": "reach deep level safely",
+          "probability": 0.9,
+          "stateDelta": 0.4,
+          "createdAt": "2026-03-21T15:46:59.215Z",
+          "updatedAt": "2026-03-21T15:46:59.215Z"
+        },
+        {
+          "id": "event_5679992a551c",
+          "fromNodeId": "node_b1952f906bff",
+          "toNodeId": "node_424ed6bb3d2d",
+          "name": "bad drop / mob hit / lava",
+          "probability": 0.1,
+          "stateDelta": -0.8,
+          "createdAt": "2026-03-21T15:46:59.217Z",
+          "updatedAt": "2026-03-21T15:46:59.217Z"
+        },
+        {
+          "id": "event_24a40b15f9eb",
+          "fromNodeId": "node_0820a0f865ca",
+          "toNodeId": "node_7169f4897a6f",
+          "name": "find enough exposed ore",
+          "probability": 0.74,
+          "stateDelta": 0.8,
+          "createdAt": "2026-03-21T15:46:59.219Z",
+          "updatedAt": "2026-03-21T15:46:59.219Z"
+        },
+        {
+          "id": "event_aaaa3f1e7c73",
+          "fromNodeId": "node_0820a0f865ca",
+          "toNodeId": "node_424ed6bb3d2d",
+          "name": "skeleton / creeper / fall loss",
+          "probability": 0.26,
+          "stateDelta": -1,
+          "createdAt": "2026-03-21T15:46:59.220Z",
+          "updatedAt": "2026-03-21T15:46:59.220Z"
+        }
+      ],
+      "createdAt": "2026-03-21T15:46:18.003Z",
+      "updatedAt": "2026-03-21T15:46:59.220Z"
+    },
+    {
+      "id": "path_2a5e021d4f43",
+      "name": "Candidate B",
+      "description": "Controlled branch mining at optimal depth",
+      "rootNodeId": "node_7bd08a962758",
+      "nodes": [
+        {
+          "id": "node_7bd08a962758",
+          "name": "Start",
+          "kind": "root",
+          "createdAt": "2026-03-21T15:46:18.006Z",
+          "updatedAt": "2026-03-21T15:46:18.006Z"
+        },
+        {
+          "id": "node_a04b60cdf05c",
+          "name": "Staircase descent",
+          "kind": "action",
+          "note": "Direct safe descent to diamond depth",
+          "createdAt": "2026-03-21T15:46:59.223Z",
+          "updatedAt": "2026-03-21T15:46:59.223Z"
+        },
+        {
+          "id": "node_5cfdecc97eec",
+          "name": "Branch mine",
+          "kind": "action",
+          "note": "Low-risk tunnel and side branches",
+          "createdAt": "2026-03-21T15:46:59.224Z",
+          "updatedAt": "2026-03-21T15:46:59.224Z"
+        },
+        {
+          "id": "node_8459fd615a84",
+          "name": "10 diamonds acquired",
+          "kind": "goal",
+          "createdAt": "2026-03-21T15:46:59.226Z",
+          "updatedAt": "2026-03-21T15:46:59.226Z"
+        },
+        {
+          "id": "node_08749a4ba35c",
+          "name": "Death / mission fail",
+          "kind": "fail",
+          "createdAt": "2026-03-21T15:46:59.228Z",
+          "updatedAt": "2026-03-21T15:46:59.228Z"
+        }
+      ],
+      "events": [
+        {
+          "id": "event_e706a926bf53",
+          "fromNodeId": "node_7bd08a962758",
+          "toNodeId": "node_a04b60cdf05c",
+          "name": "start",
+          "probability": 1,
+          "stateDelta": 0,
+          "createdAt": "2026-03-21T15:46:59.230Z",
+          "updatedAt": "2026-03-21T15:46:59.230Z"
+        },
+        {
+          "id": "event_4d5cc33a45ee",
+          "fromNodeId": "node_a04b60cdf05c",
+          "toNodeId": "node_5cfdecc97eec",
+          "name": "reach target depth safely",
+          "probability": 0.94,
+          "stateDelta": 0.25,
+          "createdAt": "2026-03-21T15:46:59.231Z",
+          "updatedAt": "2026-03-21T15:46:59.231Z"
+        },
+        {
+          "id": "event_5bdc2878cef7",
+          "fromNodeId": "node_a04b60cdf05c",
+          "toNodeId": "node_08749a4ba35c",
+          "name": "accident during descent",
+          "probability": 0.06,
+          "stateDelta": -0.7,
+          "createdAt": "2026-03-21T15:46:59.233Z",
+          "updatedAt": "2026-03-21T15:46:59.233Z"
+        },
+        {
+          "id": "event_a7ba4ed24181",
+          "fromNodeId": "node_5cfdecc97eec",
+          "toNodeId": "node_8459fd615a84",
+          "name": "mine enough ore",
+          "probability": 0.88,
+          "stateDelta": 0.85,
+          "createdAt": "2026-03-21T15:46:59.235Z",
+          "updatedAt": "2026-03-21T15:46:59.235Z"
+        },
+        {
+          "id": "event_9c3d14e1b2c9",
+          "fromNodeId": "node_5cfdecc97eec",
+          "toNodeId": "node_08749a4ba35c",
+          "name": "lava / bad mining mistake",
+          "probability": 0.12,
+          "stateDelta": -0.9,
+          "createdAt": "2026-03-21T15:46:59.236Z",
+          "updatedAt": "2026-03-21T15:46:59.236Z"
+        }
+      ],
+      "createdAt": "2026-03-21T15:46:18.006Z",
+      "updatedAt": "2026-03-21T15:46:59.236Z"
+    },
+    {
+      "id": "path_ab69a6cb125d",
+      "name": "Candidate C",
+      "description": "Structure / mineshaft / cave hybrid",
+      "rootNodeId": "node_82a4227e3279",
+      "nodes": [
+        {
+          "id": "node_82a4227e3279",
+          "name": "Start",
+          "kind": "root",
+          "createdAt": "2026-03-21T15:46:18.008Z",
+          "updatedAt": "2026-03-21T15:46:18.008Z"
+        },
+        {
+          "id": "node_44604a0c87e3",
+          "name": "Find structure",
+          "kind": "action",
+          "note": "Seek ravine/mineshaft/cave intersection",
+          "createdAt": "2026-03-21T15:46:59.238Z",
+          "updatedAt": "2026-03-21T15:46:59.238Z"
+        },
+        {
+          "id": "node_bb14bd744350",
+          "name": "Enter structure",
+          "kind": "action",
+          "note": "Exploit shortcut, avoid unnecessary fights",
+          "createdAt": "2026-03-21T15:46:59.240Z",
+          "updatedAt": "2026-03-21T15:46:59.240Z"
+        },
+        {
+          "id": "node_249d6fc5556e",
+          "name": "10 diamonds acquired",
+          "kind": "goal",
+          "createdAt": "2026-03-21T15:46:59.242Z",
+          "updatedAt": "2026-03-21T15:46:59.242Z"
+        },
+        {
+          "id": "node_c02ea58c287a",
+          "name": "Death / mission fail",
+          "kind": "fail",
+          "createdAt": "2026-03-21T15:46:59.243Z",
+          "updatedAt": "2026-03-21T15:46:59.243Z"
+        }
+      ],
+      "events": [
+        {
+          "id": "event_e1df4b0217af",
+          "fromNodeId": "node_82a4227e3279",
+          "toNodeId": "node_44604a0c87e3",
+          "name": "start",
+          "probability": 1,
+          "stateDelta": 0,
+          "createdAt": "2026-03-21T15:46:59.245Z",
+          "updatedAt": "2026-03-21T15:46:59.245Z"
+        },
+        {
+          "id": "event_6c97a11b7d09",
+          "fromNodeId": "node_44604a0c87e3",
+          "toNodeId": "node_bb14bd744350",
+          "name": "find viable structure fast",
+          "probability": 0.7,
+          "stateDelta": 0.35,
+          "createdAt": "2026-03-21T15:46:59.247Z",
+          "updatedAt": "2026-03-21T15:46:59.247Z"
+        },
+        {
+          "id": "event_52ada4550dba",
+          "fromNodeId": "node_44604a0c87e3",
+          "toNodeId": "node_c02ea58c287a",
+          "name": "search drags on",
+          "probability": 0.3,
+          "stateDelta": -0.25,
+          "createdAt": "2026-03-21T15:46:59.248Z",
+          "updatedAt": "2026-03-21T15:46:59.248Z"
+        },
+        {
+          "id": "event_9c82ec977fe0",
+          "fromNodeId": "node_bb14bd744350",
+          "toNodeId": "node_249d6fc5556e",
+          "name": "loot exposed ore",
+          "probability": 0.66,
+          "stateDelta": 0.8,
+          "createdAt": "2026-03-21T15:46:59.250Z",
+          "updatedAt": "2026-03-21T15:46:59.250Z"
+        },
+        {
+          "id": "event_cea4e41624b6",
+          "fromNodeId": "node_bb14bd744350",
+          "toNodeId": "node_c02ea58c287a",
+          "name": "skeleton / ravine fall",
+          "probability": 0.34,
+          "stateDelta": -1,
+          "createdAt": "2026-03-21T15:46:59.252Z",
+          "updatedAt": "2026-03-21T15:46:59.252Z"
+        }
+      ],
+      "createdAt": "2026-03-21T15:46:18.008Z",
+      "updatedAt": "2026-03-21T15:46:59.252Z"
+    }
+  ],
+  "createdAt": "2026-03-21T15:43:01.076Z",
+  "updatedAt": "2026-03-21T15:46:59.252Z"
+}

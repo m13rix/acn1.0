@@ -3,7 +3,7 @@ description: |
   Manage and orchestrate agents and sub-agents.
   
   Methods:
-  - agents.call(name, request): Call any agent/sub-agent. Uses the same pipeline as user messages.
+  - agents.call(name, request, options?): Call any agent/sub-agent. Uses the same pipeline as user messages. `options.interface` can override the configured interface when compatible.
   - agents.callSelf(request): Re-run the current agent as itself (not as a sub-agent), useful from heartbeat handlers.
   - agents.subAgent(name, config): Create session-exclusive sub-agent (copy of caller with additive prompt + model override)
   - agents.newAgent(prompt): Create new permanent agent via Gemini CLI

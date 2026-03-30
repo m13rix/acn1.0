@@ -1,0 +1,83 @@
+{
+  "id": "strat_b1d81ea12f5e",
+  "name": "Minecraft 32 Diamonds Fast",
+  "description": "Design the fastest evidence-based Minecraft Java 1.21.11 strategy to obtain 32 diamonds from a surface start without commands; prep cost excluded from evaluation.",
+  "divergence": {
+    "x": 0,
+    "y": 0,
+    "updatedAt": "2026-03-27T16:26:18.376Z"
+  },
+  "paths": [],
+  "routes": [
+    {
+      "id": "route_2e1d590f8467",
+      "depth": 1,
+      "name": "Hybrid cave-then-mine",
+      "slug": "hybrid-cave-then-mine",
+      "category": "root-acquisition-method",
+      "summary": "Spend a limited time searching for a high-value cave; if exposure is poor, switch to branch mining at the diamond layer.",
+      "note": "Balances upside and consistency.",
+      "folderPath": "strategy_workspace/routes/hybrid-cave-then-mine",
+      "intakePath": "strategy_workspace/routes/hybrid-cave-then-mine/hybrid-cave-then-mine_intake.md",
+      "evalPath": "strategy_workspace/routes/hybrid-cave-then-mine/hybrid-cave-then-mine_eval.md",
+      "decision": "keep",
+      "decisionReason": "Potentially best overall expected-time route if the cave search is kept strictly bounded.",
+      "confidence": 0.63,
+      "rank": 1,
+      "subroutesGenerated": true,
+      "subroutesGeneratedAt": "2026-03-27T16:28:53.226Z",
+      "generationNote": "Root depth 1 routes evaluated.",
+      "createdAt": "2026-03-27T16:28:10.112Z",
+      "updatedAt": "2026-03-27T16:28:53.226Z"
+    },
+    {
+      "id": "route_3ff69e4f2582",
+      "depth": 1,
+      "name": "Direct branch mine at diamond layer",
+      "slug": "direct-branch-mine",
+      "category": "root-acquisition-method",
+      "summary": "Go straight to Y -54 to -59 and mine a systematic branch network until 32 diamonds are collected.",
+      "note": "Stable fallback and baseline.",
+      "folderPath": "strategy_workspace/routes/direct-branch-mine",
+      "intakePath": "strategy_workspace/routes/direct-branch-mine/direct-branch-mine_intake.md",
+      "evalPath": "strategy_workspace/routes/direct-branch-mine/direct-branch-mine_eval.md",
+      "decision": "keep",
+      "decisionReason": "Reliable baseline and strong evidence for consistent diamond acquisition at the optimal layer.",
+      "confidence": 0.82,
+      "rank": 2,
+      "subroutesGenerated": true,
+      "subroutesGeneratedAt": "2026-03-27T16:28:53.224Z",
+      "generationNote": "Root depth 1 routes evaluated.",
+      "createdAt": "2026-03-27T16:28:10.110Z",
+      "updatedAt": "2026-03-27T16:28:53.224Z"
+    },
+    {
+      "id": "route_ba7cd35f13cb",
+      "depth": 1,
+      "name": "Cave-first deepslate sweep",
+      "slug": "cave-first-deepslate-sweep",
+      "category": "root-acquisition-method",
+      "summary": "Prioritize quickly locating a large deep cave or ravine, then aggressively harvest exposed diamond ore and nearby pockets.",
+      "note": "High upside if terrain cooperates.",
+      "folderPath": "strategy_workspace/routes/cave-first-deepslate-sweep",
+      "intakePath": "strategy_workspace/routes/cave-first-deepslate-sweep/cave-first-deepslate-sweep_intake.md",
+      "evalPath": "strategy_workspace/routes/cave-first-deepslate-sweep/cave-first-deepslate-sweep_eval.md",
+      "decision": "kill",
+      "decisionReason": "Too seed-dependent and too risky as a fastest general strategy.",
+      "confidence": 0.76,
+      "subroutesGenerated": true,
+      "subroutesGeneratedAt": "2026-03-27T16:28:53.227Z",
+      "generationNote": "Root depth 1 routes evaluated.",
+      "createdAt": "2026-03-27T16:28:10.106Z",
+      "updatedAt": "2026-03-27T16:28:53.227Z"
+    }
+  ],
+  "cycle": {
+    "maxDepth": 10,
+    "currentDepth": 1,
+    "status": "active",
+    "updatedAt": "2026-03-27T16:28:10.106Z"
+  },
+  "createdAt": "2026-03-27T16:26:18.376Z",
+  "updatedAt": "2026-03-27T16:28:53.227Z"
+}

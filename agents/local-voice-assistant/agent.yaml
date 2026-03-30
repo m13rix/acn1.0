@@ -1,0 +1,71 @@
+name: local-voice-assistant
+description: Local real-time voice assistant powered by Gemini Live API.
+
+model: gemini-3.1-flash-live-preview
+provider: gemini-voice
+modality: voice
+interface: local-voice
+systemPrompt: prompts/system.md
+
+# Gemini Live thinking level is controlled by the normal ACN reasoning field:
+# off -> minimal, low -> low, medium -> medium, high -> high
+reasoning: medium
+
+# Standard generation controls still work for gemini-voice.
+
+tools:
+  - search
+  - agents
+  - utils
+
+memory:
+  enabled: false
+
+loop: provider-tools
+syntax: markdown
+injectAgentsList: true
+requireFinish: false
+
+# Voice-provider-specific knobs for Gemini Live API.
+providerOptions:
+
+  # Both transcriptions are enabled by default by the runtime, but you can keep
+  # them explicit in the config for clarity or tweak them later.
+  inputAudioTranscription: {}
+  outputAudioTranscription: {}
+
+  # Live API session resiliency / continuity.
+  # `transparent` is not supported in Gemini API mode, so keep this block empty
+  # until you need to pass a resumable `handle`.
+  sessionResumption: {}
+
+  # Realtime behavior tuning.
+  realtimeInputConfig:
+    automaticActivityDetection:
+      disabled: false
+      startOfSpeechSensitivity: START_SENSITIVITY_LOW
+      endOfSpeechSensitivity: END_SENSITIVITY_LOW
+      prefixPaddingMs: 80
+      silenceDurationMs: 400
+
+  # Useful place for future Gemini Live flags:
+  # contextWindowCompression:
+  #   slidingWindow:
+  #     targetTokens: "32000"
+  # proactivity: {}
+
+# Interface-specific knobs for the local background voice runtime.
+interfaceOptions:
+  launchDefault: true
+  hotkey: CTRL+L
+
+  # Leave these unset to use the default system devices.
+  # inputDeviceId: audio=default
+  # outputDeviceId: default
+
+  # Prevent the mic from immediately re-streaming assistant audio from speakers.
+  # Set to 0 to disable this temporary half-duplex echo guard.
+  speakerGuardMs: 1400
+
+  # Reserved for future interface policies such as auto-end on inactivity.
+  # inactivityTimeoutMs: 45000

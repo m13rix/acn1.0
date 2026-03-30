@@ -11,6 +11,8 @@ export type { SessionComponents, ExecutorCallbacks, ExecutorOptions } from './co
 // Providers
 export { BaseProvider, registerProvider, getProvider, getAvailableProviders } from './providers/base.js';
 export { GeminiProvider } from './providers/gemini.js';
+export { BaseVoiceProvider, getVoiceProvider, getAvailableVoiceProviders } from './providers/voice/index.js';
+export { GeminiVoiceProvider } from './providers/voice/gemini-voice.js';
 
 // Syntax
 export { BaseSyntax, registerSyntax, getSyntax, getAvailableSyntax } from './syntax/base.js';
@@ -27,6 +29,9 @@ export { ToolLoader } from './loaders/ToolLoader.js';
 // Sandbox
 export { Sandbox } from './sandbox/Sandbox.js';
 
+// Interfaces
+export * from './interfaces/index.js';
+
 // Types
 export * from './types/index.js';
 
@@ -35,5 +40,6 @@ export { loadEnv, hasEnvFile } from './utils/env.js';
 
 // Register all built-in modules
 import './providers/index.js';
+import './providers/voice/index.js';
 import './syntax/index.js';
 import './loops/index.js';

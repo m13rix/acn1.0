@@ -7,6 +7,7 @@ import { createPkcePair } from '../src/providers/openai-codex/auth/pkce.js';
 import { buildAuthorizeUrl } from '../src/providers/openai-codex/auth/login.js';
 import { parseRedirectUrl } from '../src/providers/openai-codex/auth/manual-paste.js';
 import { OpenAICodexAuthStore } from '../src/providers/openai-codex/auth/auth-store.js';
+import { withRefreshLock } from '../src/providers/openai-codex/auth/auth-lock.js';
 import { extractAccountId, parseJwtClaims } from '../src/providers/openai-codex/auth/token-claims.js';
 import { getValidProfile } from '../src/providers/openai-codex/auth/refresh.js';
 import { resolveOpenAICodexModel } from '../src/providers/openai-codex/models.js';
@@ -159,5 +160,23 @@ test('getValidProfile refreshes expired token once under lock', async () => {
     assert.equal(refreshCalls, 1);
     assert.equal(first?.accessToken, 'new-access');
     assert.equal(second?.accessToken, 'new-access');
+  });
+});
+
+test('withRefreshLock clears a stale lock left by a crashed process', async () => {
+  await withTempDir(async (dir) => {
+    const lockPath = path.join(dir, 'refresh.lock');
+    const staleLockPath = `${lockPath}.lock`;
+    await fs.writeFile(staleLockPath, '', 'utf8');
+    const staleMtime = new Date(Date.now() - 120_000);
+    await fs.utimes(staleLockPath, staleMtime, staleMtime);
+
+    let ran = false;
+    await withRefreshLock(lockPath, async () => {
+      ran = true;
+    });
+
+    assert.equal(ran, true);
+    await assert.rejects(fs.access(staleLockPath));
   });
 });

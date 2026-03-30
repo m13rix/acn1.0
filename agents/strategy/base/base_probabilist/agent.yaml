@@ -1,9 +1,10 @@
 name: base_probabilist
-description: Base probabilistic validation agent for the Telos Ultimate Strategy Engine. Builds path models, estimates success/failure probabilities, and scores candidate strategies.
+description: Optional world-branch analysis specialist for the Telos Ultimate Strategy Engine. Evaluates a specific route or scenario when probability/utility modeling is needed.
 
 model: gpt-5.4-mini
 provider: openai-codex
 systemPrompt: prompts/system.md
+subagentPrompt: prompts/subagent.md
 
 modelSwitching:
   mode: whitelist
@@ -19,6 +20,7 @@ tools:
   - agents
   - strategy
   - utils
+  - memory
 
 memory:
   enabled: false

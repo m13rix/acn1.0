@@ -1,0 +1,13 @@
+{
+  "id": "strat_a3016937d1fa",
+  "name": "candidate_validation_diamonds",
+  "description": "Validation model for three diamond routes",
+  "divergence": {
+    "x": 0,
+    "y": 0,
+    "updatedAt": "2026-03-21T15:44:05.023Z"
+  },
+  "paths": [],
+  "createdAt": "2026-03-21T15:44:05.023Z",
+  "updatedAt": "2026-03-21T15:44:05.032Z"
+}

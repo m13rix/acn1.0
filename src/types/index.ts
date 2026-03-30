@@ -17,6 +17,9 @@ export interface Message {
   toolName?: string; // Optional tool name for role=tool
 }
 
+export type AgentModality = 'text' | 'voice';
+export type AgentInterfaceName = 'telegram' | 'local-voice' | string;
+
 // ============================================================================
 // Provider Types
 // ============================================================================
@@ -167,6 +170,64 @@ export interface Provider {
   logout?(profileId?: string): Promise<void>;
 }
 
+export interface ProviderToolResult {
+  id: string;
+  name?: string;
+  response: Record<string, unknown>;
+}
+
+export interface VoiceRealtimeInput {
+  audio?: {
+    data: Buffer | string;
+    mimeType: string;
+  };
+  video?: {
+    data: Buffer | string;
+    mimeType: string;
+  };
+  text?: string;
+  audioStreamEnd?: boolean;
+}
+
+export interface VoiceTextTurn {
+  text: string;
+  turnComplete?: boolean;
+}
+
+export type VoiceSessionEvent =
+  | { type: 'session.open'; sessionId?: string }
+  | { type: 'session.close'; reason?: string }
+  | { type: 'session.resumption'; handle?: string; resumable?: boolean; lastConsumedClientMessageIndex?: string }
+  | { type: 'audio.output'; data: Buffer | string; mimeType: string }
+  | { type: 'transcript.input'; text: string }
+  | { type: 'transcript.output'; text: string }
+  | { type: 'turn.complete'; reason?: string }
+  | { type: 'turn.interrupted' }
+  | { type: 'turn.waiting_for_input' }
+  | { type: 'tool.call'; toolCalls: ProviderToolCall[] }
+  | { type: 'tool.call.cancel'; ids: string[] }
+  | { type: 'error'; error: Error };
+
+export interface VoiceSessionConfig extends ProviderConfig {
+  systemInstruction?: string;
+  tools?: ProviderToolDefinition[];
+  providerOptions?: Record<string, unknown>;
+}
+
+export interface VoiceSession {
+  sendRealtimeInput(input: VoiceRealtimeInput): Promise<void>;
+  sendTextTurn(turn: VoiceTextTurn): Promise<void>;
+  sendToolResults(results: ProviderToolResult[]): Promise<void>;
+  receive(): AsyncIterable<VoiceSessionEvent>;
+  close(): Promise<void>;
+}
+
+export interface VoiceProvider {
+  name: string;
+  connect(config: VoiceSessionConfig): Promise<VoiceSession>;
+  buildConnectRequest?(config: VoiceSessionConfig): any;
+}
+
 // ============================================================================
 // Agent Types
 // ============================================================================
@@ -186,6 +247,10 @@ export interface AgentConfig {
   description?: string;
   model: string;
   provider?: string;
+  modality?: AgentModality;
+  interface?: AgentInterfaceName;
+  providerOptions?: Record<string, unknown>;
+  interfaceOptions?: Record<string, unknown>;
   temperature?: number;
   maxTokens?: number;
   top_p?: number;
@@ -220,6 +285,10 @@ export interface LoadedAgent {
   systemPromptContent: string;
   subagentPromptContent?: string;
   directory: string;
+}
+
+export interface AgentInvocationOptions {
+  interface?: AgentInterfaceName;
 }
 
 export interface AgentMemoryConfig {

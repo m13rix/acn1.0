@@ -60,6 +60,14 @@ export const OPENAI_CODEX_MODELS: OpenAICodexModelDefinition[] = [
     oauthOnly: true,
     auth: 'chatgpt',
   },
+  {
+    ref: 'gpt-5.4',
+    displayName: 'GPT-5.4 (ChatGPT subscription)',
+    publicId: 'gpt-5.4',
+    backendId: 'gpt-5.4',
+    oauthOnly: true,
+    auth: 'chatgpt',
+  },
 ];
 
 const MODEL_BY_REF = new Map(OPENAI_CODEX_MODELS.map(model => [model.ref, model]));

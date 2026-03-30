@@ -1,17 +1,15 @@
 name: analyzer
 description: Super-human analytical agent. Deconstructs data using structured Tree-of-Thought reasoning, Bayesian updating, and detective-level deduction to extract maximum truth from minimum information.
 
-model: moonshotai/kimi-k2.5
-provider: openrouter
+model: gpt-5.4-mini
+provider: openai-codex
 systemPrompt: prompts/system.md
 subagentPrompt: prompts/subagent.md
 
 modelSwitching:
   mode: whitelist
   whitelist:
-    - moonshotai/kimi-k2.5
-    - minimax/minimax-m2.5
-    - deepseek/deepseek-v3.2
+    - gpt-5.4-mini
   selector:
     model: openai/gpt-oss-20b
     provider: openrouter

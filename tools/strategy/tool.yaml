@@ -1,12 +1,35 @@
 name: strategy
 description: |
-  Persistent strategy graphs with scalar stateDelta transitions and an exact finite-horizon solver.
+  Persistent strategy system with two layers:
+  1. Route exploration for action-branch strategy design.
+  2. World-branch path graphs for probability/utility analysis.
 
   Core namespaces:
   - strategy.strategies.create(name, description?)
   - strategy.strategies.list()
   - strategy.strategies.get(strategyId)
   - strategy.strategies.remove(strategyId)
+
+  Route exploration:
+  - strategy.routes.create(strategyId, { name, parentRouteId?, theme?, category?, summary?, slug?, note?, rank? })
+  - strategy.routes.createBatch(strategyId, { parentRouteId?, theme?, category?, routes: [...] })
+  - strategy.routes.list(strategyId, { parentRouteId?, depth?, decision? }?)
+  - strategy.routes.get(strategyId, routeId)
+  - strategy.routes.update(strategyId, routeId, patch)
+  - strategy.routes.keep(strategyId, routeId, { reason, evidence?, confidence?, rank? })
+  - strategy.routes.kill(strategyId, routeId, { reason, evidence?, confidence?, rank? })
+  - strategy.routes.reopen(strategyId, routeId, reason?)
+  - strategy.routes.markSubroutesGenerated(strategyId, routeId, { note? })
+  - strategy.routes.listPendingExpansion(strategyId, depth?)
+  - strategy.routes.remove(strategyId, routeId)
+
+  Depth cycle:
+  - strategy.cycle.get(strategyId)
+  - strategy.cycle.configure(strategyId, { maxDepth?, currentDepth?, status? })
+  - strategy.cycle.depthSummary(strategyId, depth?)
+  - strategy.cycle.getExpansionParents(strategyId, targetDepth?)
+  - strategy.cycle.canAdvance(strategyId)
+  - strategy.cycle.advance(strategyId)
 
   - strategy.paths.create(strategyId, { name, description?, rootName? })
   - strategy.paths.list(strategyId)
@@ -47,5 +70,32 @@ description: |
   - strategy.calculatePathUtility(...)
   - strategy.getDivergence(...)
   - strategy.setDivergence(...)
+  - strategy.createRoute(...)
+  - strategy.createRouteBatch(...)
+  - strategy.listRoutes(...)
+  - strategy.getRoute(...)
+  - strategy.keepRoute(...)
+  - strategy.killRoute(...)
+  - strategy.reopenRoute(...)
+  - strategy.markRouteSubroutesGenerated(...)
+  - strategy.listPendingRouteExpansion(...)
+  - strategy.getCycle(...)
+  - strategy.configureCycle(...)
+  - strategy.advanceCycle(...)
+
+  Modeling guidance for agents:
+  - Use `routes` for action branching: broad family -> subfamily -> concrete tactic.
+  - Every sibling set should share one `theme` and one `category` question.
+  - At root depth for a resource-acquisition task, prefer broad acquisition families before tactics.
+  - Use `paths/nodes/events` only for world branching: what the environment might do to one candidate route.
+  - Each node should represent a discrete world state or progress band.
+  - Each outgoing event set from a non-terminal node must sum to probability 1.
+  - For accumulation goals, discretize progress into bands or loop states instead of trying to put all math into one edge.
+  - For evaluation, use:
+    - `probabilityReachGoal` for success odds
+    - `expectedStepsToGoal` for speed
+    - `expectedStateDelta` / `calculatePathUtility` for scalar payoff
+  - If one step represents a fixed time chunk, then `expectedStepsToGoal * chunkDuration` gives expected time to goal.
+  - Use the path layer for evidence, not vibes: model good events, bad events, dead ends, and retries explicitly.
 
 module: index.ts

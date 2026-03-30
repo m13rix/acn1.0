@@ -1,0 +1,449 @@
+{
+  "id": "strat_16462f9ad025",
+  "name": "minecraft_diamond_route_validation",
+  "description": "Validation of 3 candidate diamond routes",
+  "divergence": {
+    "x": 0,
+    "y": 0,
+    "updatedAt": "2026-03-21T15:45:05.352Z"
+  },
+  "paths": [
+    {
+      "id": "path_ee92dca5018b",
+      "name": "Candidate A - deep cave rush",
+      "description": "Deep-cave rush and exposed-ore hunting",
+      "rootNodeId": "node_7be7be288a41",
+      "nodes": [
+        {
+          "id": "node_7be7be288a41",
+          "name": "start",
+          "kind": "root",
+          "createdAt": "2026-03-21T15:45:05.361Z",
+          "updatedAt": "2026-03-21T15:45:05.361Z"
+        },
+        {
+          "id": "node_78d35afd2094",
+          "name": "surface_scan",
+          "kind": "normal",
+          "createdAt": "2026-03-21T15:45:05.363Z",
+          "updatedAt": "2026-03-21T15:45:05.363Z"
+        },
+        {
+          "id": "node_48a2202e776b",
+          "name": "cave_route",
+          "kind": "normal",
+          "createdAt": "2026-03-21T15:45:05.364Z",
+          "updatedAt": "2026-03-21T15:45:05.364Z"
+        },
+        {
+          "id": "node_565b16dc2559",
+          "name": "safe_staircase",
+          "kind": "normal",
+          "createdAt": "2026-03-21T15:45:05.366Z",
+          "updatedAt": "2026-03-21T15:45:05.366Z"
+        },
+        {
+          "id": "node_ed5b6afcd057",
+          "name": "deep_level",
+          "kind": "normal",
+          "createdAt": "2026-03-21T15:45:05.367Z",
+          "updatedAt": "2026-03-21T15:45:05.367Z"
+        },
+        {
+          "id": "node_4e9d24e3f834",
+          "name": "diamond_hunt",
+          "kind": "normal",
+          "createdAt": "2026-03-21T15:45:05.368Z",
+          "updatedAt": "2026-03-21T15:45:05.368Z"
+        },
+        {
+          "id": "node_6fa6439efe6b",
+          "name": "goal",
+          "kind": "goal",
+          "createdAt": "2026-03-21T15:45:05.370Z",
+          "updatedAt": "2026-03-21T15:45:05.370Z"
+        },
+        {
+          "id": "node_2af58123f59d",
+          "name": "fail",
+          "kind": "fail",
+          "createdAt": "2026-03-21T15:45:05.371Z",
+          "updatedAt": "2026-03-21T15:45:05.371Z"
+        }
+      ],
+      "events": [
+        {
+          "id": "event_55261d21b329",
+          "fromNodeId": "node_7be7be288a41",
+          "toNodeId": "node_78d35afd2094",
+          "name": "begin",
+          "probability": 1,
+          "stateDelta": -1,
+          "createdAt": "2026-03-21T15:45:05.373Z",
+          "updatedAt": "2026-03-21T15:45:05.373Z"
+        },
+        {
+          "id": "event_23c8dc28a1f4",
+          "fromNodeId": "node_78d35afd2094",
+          "toNodeId": "node_48a2202e776b",
+          "name": "find_good_cave",
+          "probability": 0.65,
+          "stateDelta": -1,
+          "reason": "surface scan finds good cave/ravine",
+          "createdAt": "2026-03-21T15:45:05.374Z",
+          "updatedAt": "2026-03-21T15:45:05.374Z"
+        },
+        {
+          "id": "event_ac2e3520b996",
+          "fromNodeId": "node_78d35afd2094",
+          "toNodeId": "node_565b16dc2559",
+          "name": "no_good_cave_fallback",
+          "probability": 0.35,
+          "stateDelta": -2,
+          "reason": "fallback to safe staircase",
+          "createdAt": "2026-03-21T15:45:05.376Z",
+          "updatedAt": "2026-03-21T15:45:05.376Z"
+        },
+        {
+          "id": "event_441d67e145a9",
+          "fromNodeId": "node_48a2202e776b",
+          "toNodeId": "node_ed5b6afcd057",
+          "name": "descend_cave",
+          "probability": 1,
+          "stateDelta": -1,
+          "createdAt": "2026-03-21T15:45:05.377Z",
+          "updatedAt": "2026-03-21T15:45:05.377Z"
+        },
+        {
+          "id": "event_486b3380bf82",
+          "fromNodeId": "node_565b16dc2559",
+          "toNodeId": "node_ed5b6afcd057",
+          "name": "descend_stair",
+          "probability": 1,
+          "stateDelta": -3,
+          "createdAt": "2026-03-21T15:45:05.379Z",
+          "updatedAt": "2026-03-21T15:45:05.379Z"
+        },
+        {
+          "id": "event_3291ab75ae1d",
+          "fromNodeId": "node_ed5b6afcd057",
+          "toNodeId": "node_4e9d24e3f834",
+          "name": "start_hunt",
+          "probability": 1,
+          "stateDelta": -1,
+          "createdAt": "2026-03-21T15:45:05.380Z",
+          "updatedAt": "2026-03-21T15:45:05.380Z"
+        },
+        {
+          "id": "event_df77a53a195c",
+          "fromNodeId": "node_4e9d24e3f834",
+          "toNodeId": "node_6fa6439efe6b",
+          "name": "find_enough_diamonds",
+          "probability": 0.34,
+          "stateDelta": 20,
+          "createdAt": "2026-03-21T15:45:05.381Z",
+          "updatedAt": "2026-03-21T15:45:05.381Z"
+        },
+        {
+          "id": "event_15d92803e311",
+          "fromNodeId": "node_4e9d24e3f834",
+          "toNodeId": "node_2af58123f59d",
+          "name": "death_or_irrecoverable_risk",
+          "probability": 0.12,
+          "stateDelta": -20,
+          "createdAt": "2026-03-21T15:45:05.382Z",
+          "updatedAt": "2026-03-21T15:45:05.382Z"
+        },
+        {
+          "id": "event_8ed1890697ed",
+          "fromNodeId": "node_4e9d24e3f834",
+          "toNodeId": "node_4e9d24e3f834",
+          "name": "continue_hunting",
+          "probability": 0.54,
+          "stateDelta": -1,
+          "createdAt": "2026-03-21T15:45:05.384Z",
+          "updatedAt": "2026-03-21T15:45:05.384Z"
+        }
+      ],
+      "createdAt": "2026-03-21T15:45:05.361Z",
+      "updatedAt": "2026-03-21T15:45:05.384Z"
+    },
+    {
+      "id": "path_c66e2e6c9de8",
+      "name": "Candidate B - controlled branch mining",
+      "description": "Controlled branch mining at optimal depth",
+      "rootNodeId": "node_5a151b2a0270",
+      "nodes": [
+        {
+          "id": "node_5a151b2a0270",
+          "name": "start",
+          "kind": "root",
+          "createdAt": "2026-03-21T15:45:05.385Z",
+          "updatedAt": "2026-03-21T15:45:05.385Z"
+        },
+        {
+          "id": "node_df28c2be4069",
+          "name": "surface_scan",
+          "kind": "normal",
+          "createdAt": "2026-03-21T15:45:05.387Z",
+          "updatedAt": "2026-03-21T15:45:05.387Z"
+        },
+        {
+          "id": "node_c08d7b83d440",
+          "name": "deep_level",
+          "kind": "normal",
+          "createdAt": "2026-03-21T15:45:05.388Z",
+          "updatedAt": "2026-03-21T15:45:05.388Z"
+        },
+        {
+          "id": "node_42411d77db90",
+          "name": "diamond_hunt",
+          "kind": "normal",
+          "createdAt": "2026-03-21T15:45:05.390Z",
+          "updatedAt": "2026-03-21T15:45:05.390Z"
+        },
+        {
+          "id": "node_439b56251d9e",
+          "name": "goal",
+          "kind": "goal",
+          "createdAt": "2026-03-21T15:45:05.391Z",
+          "updatedAt": "2026-03-21T15:45:05.391Z"
+        },
+        {
+          "id": "node_bff9e6fd398e",
+          "name": "fail",
+          "kind": "fail",
+          "createdAt": "2026-03-21T15:45:05.392Z",
+          "updatedAt": "2026-03-21T15:45:05.392Z"
+        }
+      ],
+      "events": [
+        {
+          "id": "event_3c056a5aaa77",
+          "fromNodeId": "node_5a151b2a0270",
+          "toNodeId": "node_df28c2be4069",
+          "name": "begin",
+          "probability": 1,
+          "stateDelta": -1,
+          "createdAt": "2026-03-21T15:45:05.394Z",
+          "updatedAt": "2026-03-21T15:45:05.394Z"
+        },
+        {
+          "id": "event_3338db5966bf",
+          "fromNodeId": "node_df28c2be4069",
+          "toNodeId": "node_c08d7b83d440",
+          "name": "safe_staircase_only",
+          "probability": 1,
+          "stateDelta": -3,
+          "reason": "direct safe staircase descent",
+          "createdAt": "2026-03-21T15:45:05.395Z",
+          "updatedAt": "2026-03-21T15:45:05.395Z"
+        },
+        {
+          "id": "event_006b5fc4ccdd",
+          "fromNodeId": "node_c08d7b83d440",
+          "toNodeId": "node_42411d77db90",
+          "name": "start_hunt",
+          "probability": 1,
+          "stateDelta": -1,
+          "createdAt": "2026-03-21T15:45:05.396Z",
+          "updatedAt": "2026-03-21T15:45:05.396Z"
+        },
+        {
+          "id": "event_0f5224f84895",
+          "fromNodeId": "node_42411d77db90",
+          "toNodeId": "node_439b56251d9e",
+          "name": "accumulate_10_diamonds",
+          "probability": 0.18,
+          "stateDelta": 20,
+          "createdAt": "2026-03-21T15:45:05.398Z",
+          "updatedAt": "2026-03-21T15:45:05.398Z"
+        },
+        {
+          "id": "event_9b164ac93981",
+          "fromNodeId": "node_42411d77db90",
+          "toNodeId": "node_bff9e6fd398e",
+          "name": "lava_or_skeleton_or_mistake",
+          "probability": 0.02,
+          "stateDelta": -20,
+          "createdAt": "2026-03-21T15:45:05.399Z",
+          "updatedAt": "2026-03-21T15:45:05.399Z"
+        },
+        {
+          "id": "event_898e864f2bec",
+          "fromNodeId": "node_42411d77db90",
+          "toNodeId": "node_42411d77db90",
+          "name": "continue_branching",
+          "probability": 0.8,
+          "stateDelta": -1,
+          "createdAt": "2026-03-21T15:45:05.400Z",
+          "updatedAt": "2026-03-21T15:45:05.400Z"
+        }
+      ],
+      "createdAt": "2026-03-21T15:45:05.385Z",
+      "updatedAt": "2026-03-21T15:45:05.400Z"
+    },
+    {
+      "id": "path_d7fd3f430deb",
+      "name": "Candidate C - structure hybrid",
+      "description": "Structure / mineshaft / cave hybrid",
+      "rootNodeId": "node_a3da7e76ebd0",
+      "nodes": [
+        {
+          "id": "node_a3da7e76ebd0",
+          "name": "start",
+          "kind": "root",
+          "createdAt": "2026-03-21T15:45:05.402Z",
+          "updatedAt": "2026-03-21T15:45:05.402Z"
+        },
+        {
+          "id": "node_185fe1d3949e",
+          "name": "surface_scan",
+          "kind": "normal",
+          "createdAt": "2026-03-21T15:45:05.403Z",
+          "updatedAt": "2026-03-21T15:45:05.403Z"
+        },
+        {
+          "id": "node_28b719f5f471",
+          "name": "cave_route",
+          "kind": "normal",
+          "createdAt": "2026-03-21T15:45:05.405Z",
+          "updatedAt": "2026-03-21T15:45:05.405Z"
+        },
+        {
+          "id": "node_8dac95a56d38",
+          "name": "safe_staircase",
+          "kind": "normal",
+          "createdAt": "2026-03-21T15:45:05.406Z",
+          "updatedAt": "2026-03-21T15:45:05.406Z"
+        },
+        {
+          "id": "node_a03b8cd68efd",
+          "name": "deep_level",
+          "kind": "normal",
+          "createdAt": "2026-03-21T15:45:05.407Z",
+          "updatedAt": "2026-03-21T15:45:05.407Z"
+        },
+        {
+          "id": "node_2300e65e7c41",
+          "name": "diamond_hunt",
+          "kind": "normal",
+          "createdAt": "2026-03-21T15:45:05.409Z",
+          "updatedAt": "2026-03-21T15:45:05.409Z"
+        },
+        {
+          "id": "node_36b7df1a6091",
+          "name": "goal",
+          "kind": "goal",
+          "createdAt": "2026-03-21T15:45:05.410Z",
+          "updatedAt": "2026-03-21T15:45:05.410Z"
+        },
+        {
+          "id": "node_7253a210834d",
+          "name": "fail",
+          "kind": "fail",
+          "createdAt": "2026-03-21T15:45:05.412Z",
+          "updatedAt": "2026-03-21T15:45:05.412Z"
+        }
+      ],
+      "events": [
+        {
+          "id": "event_3a8f59757979",
+          "fromNodeId": "node_a3da7e76ebd0",
+          "toNodeId": "node_185fe1d3949e",
+          "name": "begin",
+          "probability": 1,
+          "stateDelta": -1,
+          "createdAt": "2026-03-21T15:45:05.413Z",
+          "updatedAt": "2026-03-21T15:45:05.413Z"
+        },
+        {
+          "id": "event_a0db0c0a647f",
+          "fromNodeId": "node_185fe1d3949e",
+          "toNodeId": "node_28b719f5f471",
+          "name": "find_good_cave",
+          "probability": 0.45,
+          "stateDelta": -1,
+          "reason": "surface scan finds good cave/ravine",
+          "createdAt": "2026-03-21T15:45:05.414Z",
+          "updatedAt": "2026-03-21T15:45:05.414Z"
+        },
+        {
+          "id": "event_624a0d8c76fc",
+          "fromNodeId": "node_185fe1d3949e",
+          "toNodeId": "node_8dac95a56d38",
+          "name": "no_good_cave_fallback",
+          "probability": 0.55,
+          "stateDelta": -2,
+          "reason": "fallback to safe staircase",
+          "createdAt": "2026-03-21T15:45:05.416Z",
+          "updatedAt": "2026-03-21T15:45:05.416Z"
+        },
+        {
+          "id": "event_a9a9ffec7d09",
+          "fromNodeId": "node_28b719f5f471",
+          "toNodeId": "node_a03b8cd68efd",
+          "name": "descend_cave",
+          "probability": 1,
+          "stateDelta": -1,
+          "createdAt": "2026-03-21T15:45:05.417Z",
+          "updatedAt": "2026-03-21T15:45:05.417Z"
+        },
+        {
+          "id": "event_4d72cfddbdeb",
+          "fromNodeId": "node_8dac95a56d38",
+          "toNodeId": "node_a03b8cd68efd",
+          "name": "descend_stair",
+          "probability": 1,
+          "stateDelta": -3,
+          "createdAt": "2026-03-21T15:45:05.419Z",
+          "updatedAt": "2026-03-21T15:45:05.419Z"
+        },
+        {
+          "id": "event_c2c96f10419d",
+          "fromNodeId": "node_a03b8cd68efd",
+          "toNodeId": "node_2300e65e7c41",
+          "name": "start_hunt",
+          "probability": 1,
+          "stateDelta": -1,
+          "createdAt": "2026-03-21T15:45:05.420Z",
+          "updatedAt": "2026-03-21T15:45:05.420Z"
+        },
+        {
+          "id": "event_906d6655cb9e",
+          "fromNodeId": "node_2300e65e7c41",
+          "toNodeId": "node_36b7df1a6091",
+          "name": "loot_diamond_rich_zone",
+          "probability": 0.42,
+          "stateDelta": 20,
+          "createdAt": "2026-03-21T15:45:05.422Z",
+          "updatedAt": "2026-03-21T15:45:05.422Z"
+        },
+        {
+          "id": "event_556577dd70af",
+          "fromNodeId": "node_2300e65e7c41",
+          "toNodeId": "node_7253a210834d",
+          "name": "skeleton_trap_or_fall",
+          "probability": 0.22,
+          "stateDelta": -20,
+          "createdAt": "2026-03-21T15:45:05.423Z",
+          "updatedAt": "2026-03-21T15:45:05.423Z"
+        },
+        {
+          "id": "event_94c252f66cb4",
+          "fromNodeId": "node_2300e65e7c41",
+          "toNodeId": "node_2300e65e7c41",
+          "name": "keep_pushing_structure",
+          "probability": 0.36,
+          "stateDelta": -1,
+          "createdAt": "2026-03-21T15:45:05.425Z",
+          "updatedAt": "2026-03-21T15:45:05.425Z"
+        }
+      ],
+      "createdAt": "2026-03-21T15:45:05.402Z",
+      "updatedAt": "2026-03-21T15:45:05.425Z"
+    }
+  ],
+  "createdAt": "2026-03-21T15:45:05.352Z",
+  "updatedAt": "2026-03-21T15:45:05.425Z"
+}
