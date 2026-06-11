@@ -1,0 +1,51 @@
+name: strategy_iteration_worker
+description: Generates, evaluates, and decides on route siblings in a recursive strategy tree for the Telos Ultimate Strategy Engine.
+
+model: auto
+systemPrompt: prompts/system.md
+
+modelSwitching:
+  mode: whitelist
+  whitelist:
+    - deepseek/deepseek-v4-flash
+    - anthropic/claude-3-7-sonnet-latest
+    - openai/gpt-4o
+    - openai/gpt-4o-mini
+  selector:
+    model: openai/gpt-4o-mini
+    provider: openrouter
+
+tools:
+  - search
+  - message
+  - agents
+  - strategy
+  - utils
+
+memory:
+  enabled: true
+  exclusive: true
+  memoryToolDocs: true
+  autoHints:
+    enabled: true
+    toolResponses:
+      enabled: false
+    userPhraseWeighting: "llm"
+  categories:
+    - name: strategy_iteration_worker
+  includeUncategorized: false
+  fallbackCategory: strategy
+  searchMaxChains: 8
+
+adaptiveStepContext:
+  enabled: true
+  pruning:
+    enabled: true
+    heatThreshold: 0.6
+  debug:
+    enabled: true
+    port: 3067
+    openBrowser: true
+
+injectAgentsList: true
+requireFinish: false

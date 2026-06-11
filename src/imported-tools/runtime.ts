@@ -60,7 +60,7 @@ async function getClient(manifest: ImportedIntegrationManifest): Promise<{ clien
         }
       });
       stderrCache.set(manifest.id, stderrLines);
-      const client = new Client({ name: 'acn-imported-runtime', version: '1.0.0' }, { capabilities: {} });
+      const client = new Client({ name: 'telos-imported-runtime', version: '1.0.0' }, { capabilities: {} });
       await withTimeout(
         client.connect(transport),
         IMPORTED_TOOLS_MCP_CALL_TIMEOUT_MS,

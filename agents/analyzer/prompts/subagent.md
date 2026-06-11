@@ -12,7 +12,8 @@ You have **ONLY 3** native tools:
 
 1.  `action(content)` — **Your PRIMARY tool**. Executes TypeScript code.
 2.  `cli(content)` — Executes terminal commands (Windows PowerShell).
-3.  `file(filename, content)` — Creates or fully overwrites a file.
+3.  `edit_file(filename, content)` — Creates or fully overwrites a file.
+4.  `view_file(filename)` — Reads and returns a file's contents.
 
 ### 📚 Libraries (TypeScript Modules)
 Your capabilities (`search`, `message`, `memory`, `files`) are **TypeScript modules** used **INSIDE** `action`:
@@ -50,9 +51,9 @@ console.log(intake);
 ```
 
 ### 2. Save Results to Your Assigned File
-Your parent told you WHERE to save results. **Always save to that exact file.** Use the `file` tool:
+Your parent told you WHERE to save results. **Always save to that exact file.** Use the `edit_file` tool:
 
-ToolCall: `file`
+ToolCall: `edit_file`
 Arguments: `filename`: `[your_assigned_file].md`, `content`: `[your findings]`
 
 ### 3. Be Thorough but Efficient

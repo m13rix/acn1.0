@@ -6,6 +6,8 @@
  */
 
 import { Ollama } from 'ollama';
+import { request as httpRequest } from 'node:http';
+import { request as httpsRequest } from 'node:https';
 import { BaseProvider, registerProvider } from './base.js';
 import { OAuthOnlyModelSelectedViaApiProviderError } from './openai-codex/errors.js';
 import type {
@@ -20,14 +22,49 @@ import type {
 // @ts-ignore - mime-types doesn't have perfect TypeScript types
 import { lookup } from 'mime-types';
 
+function parsePositiveInteger(value: unknown): number | undefined {
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+        return Math.floor(value);
+    }
+    if (typeof value === 'string' && value.trim()) {
+        const parsed = Number.parseInt(value.trim(), 10);
+        if (Number.isFinite(parsed) && parsed > 0) {
+            return parsed;
+        }
+    }
+    return undefined;
+}
+
+function resolveOllamaOption(config: ProviderConfig, ...keys: string[]): unknown {
+    const providerOptions = config.providerOptions || {};
+    for (const key of keys) {
+        if (providerOptions[key] !== undefined) {
+            return providerOptions[key];
+        }
+    }
+    return undefined;
+}
+
+function normalizeKeepAlive(value: unknown): string | number | undefined {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+        return value;
+    }
+    if (typeof value === 'string' && value.trim()) {
+        return value.trim();
+    }
+    return undefined;
+}
+
 export class OllamaProvider extends BaseProvider {
     name = 'ollama';
     private client: Ollama;
+    private host: string;
 
     constructor(host?: string) {
         super();
         // Default to local Ollama host if not provided
         const ollamaHost = host || process.env['OLLAMA_HOST'] || 'http://localhost:11434';
+        this.host = ollamaHost;
         this.client = new Ollama({ host: ollamaHost });
     }
 
@@ -60,7 +97,7 @@ export class OllamaProvider extends BaseProvider {
 
         const request = this.buildOllamaRequest(messages, cfg);
 
-        const response = (await this.client.chat({
+        const response = (await this.postChat({
             ...request,
             stream: false,
         })) as any;
@@ -93,7 +130,7 @@ export class OllamaProvider extends BaseProvider {
         const cfg = this.withDefaults(config);
         const request = this.buildOllamaRequest(messages, cfg, toolRequest);
 
-        const response = (await this.client.chat({
+        const response = (await this.postChat({
             ...request,
             stream: false,
         })) as any;
@@ -310,7 +347,7 @@ export class OllamaProvider extends BaseProvider {
             }
         }
 
-        // Map ACN reasoning effort to Ollama 'think' field
+        // Map TELOS reasoning effort to Ollama 'think' field
         // Most models accept boolean, GPT-OSS accepts low/medium/high
         let think: any = true;
         if (config.reasoning === 'off') {
@@ -342,8 +379,18 @@ export class OllamaProvider extends BaseProvider {
                 stop: config.stopSequences && config.stopSequences.length > 0 ? config.stopSequences : undefined,
                 presence_penalty: config.presence_penalty,
                 frequency_penalty: config.frequency_penalty,
+                num_ctx: parsePositiveInteger(
+                    resolveOllamaOption(config, 'num_ctx', 'numCtx') ?? process.env['TELOS_OLLAMA_NUM_CTX']
+                ),
             },
         };
+
+        const keepAlive = normalizeKeepAlive(
+            resolveOllamaOption(config, 'keep_alive', 'keepAlive') ?? process.env['TELOS_OLLAMA_KEEP_ALIVE']
+        );
+        if (keepAlive !== undefined) {
+            request.keep_alive = keepAlive;
+        }
 
         // Remove undefined options
         if (request.options) {
@@ -355,6 +402,59 @@ export class OllamaProvider extends BaseProvider {
         }
 
         return request;
+    }
+
+    private async postChat(request: any): Promise<any> {
+        const url = new URL('/api/chat', this.host);
+        const transport = url.protocol === 'https:' ? httpsRequest : httpRequest;
+        const body = JSON.stringify(request);
+
+        return new Promise((resolve, reject) => {
+            const req = transport(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json',
+                    'Content-Length': Buffer.byteLength(body),
+                },
+            }, (res) => {
+                let raw = '';
+                res.setEncoding('utf8');
+                res.on('data', (chunk) => {
+                    raw += chunk;
+                });
+                res.on('end', () => {
+                    if ((res.statusCode || 0) >= 400) {
+                        let message = `Error ${res.statusCode}: ${res.statusMessage || 'Ollama request failed'}`;
+                        try {
+                            const parsed = JSON.parse(raw);
+                            if (parsed?.error) {
+                                message = String(parsed.error);
+                            }
+                        } catch {
+                            if (raw.trim()) {
+                                message = raw.trim();
+                            }
+                        }
+                        const error = new Error(message) as Error & { status_code?: number; error?: string };
+                        error.name = 'ResponseError';
+                        error.status_code = res.statusCode;
+                        error.error = message;
+                        reject(error);
+                        return;
+                    }
+
+                    try {
+                        resolve(raw.trim() ? JSON.parse(raw) : {});
+                    } catch (error) {
+                        reject(error);
+                    }
+                });
+            });
+
+            req.on('error', reject);
+            req.end(body);
+        });
     }
 
     private parseToolCalls(rawToolCalls: any): ProviderToolCall[] {

@@ -14,7 +14,8 @@
 
 1.  `action(content)` — **Твой ГЛАВНЫЙ инструмент**. Выполняет TypeScript код.
 2.  `cli(content)` — Выполняет команды терминала (Windows PowerShell).
-3.  `file(filename, content)` — Создает или перезаписывает файл целиком.
+3.  `edit_file(filename, content)` — Создает или перезаписывает файл целиком.
+4.  `view_file(filename)` — Читает и возвращает содержимое файла.
 
 ### 📚 Библиотеки (TypeScript Modules)
 Все твои способности (`editor`, `message`) — это **TypeScript-модули**, которые ты ОБЯЗАН использовать **ВНУТРИ** инструмента `action`.

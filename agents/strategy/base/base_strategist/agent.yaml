@@ -1,7 +1,7 @@
 name: base_strategist
 description: Main recursive strategy-design agent for the Telos Ultimate Strategy Engine. Builds intake and goal files, explores route trees, evaluates branches, and synthesizes the final strategy.
 
-model: gpt-5.4-mini
+model: gpt-5.5
 provider: openai-codex
 systemPrompt: prompts/system.md
 subagentPrompt: prompts/subagent.md
@@ -9,10 +9,16 @@ subagentPrompt: prompts/subagent.md
 modelSwitching:
   mode: whitelist
   whitelist:
+    - gpt-5.5
     - gpt-5.4-mini
   selector:
     model: openai/gpt-oss-20b
     provider: openrouter
+  aliases:
+    openai-codex/gpt-5.5:
+      provider: kimi-code
+      model: kimi-for-coding
+    openai-codex/gpt-5.4-mini: openrouter/deepseek/deepseek-v4-flash
 
 tools:
   - search
@@ -22,12 +28,46 @@ tools:
   - utils
   - minecraft
   - memory
+  - instruction
+
+memoryToolDocs: true
 
 memory:
-  enabled: false
+  enabled: true
+
+  memoryToolDocs: true
+
+  autoHints:
+    enabled: true
+    toolResponses:
+      enabled: false
+    userPhraseWeighting: "llm"
+
+  categories:
+    - name: superhuman_candidate_generation
+    - name: strategy_engine_doctrine
+    - name: route_worker_evaluation_doctrine
+
+  includeUncategorized: true
+
+  searchMaxChains: 8
+
+adaptiveStepContext:
+  enabled: true
+  pruning:
+    enabled: true
+    heatThreshold: 0.6
+  debug:
+    enabled: false
+
+instructionAlgorithm:
+  enabled: true
+  configPath: instruction_algorithm.yaml
+
+subagentInstructionAlgorithm:
+  enabled: true
+  configPath: instruction_algorithm.worker.yaml
+
+requireFinish: true
 
 loop: provider-tools
-syntax: markdown
-skillsTable: strategy_base_strategist
-injectAgentsList: true
-requireFinish: true

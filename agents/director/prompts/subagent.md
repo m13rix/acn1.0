@@ -12,7 +12,8 @@ You have **ONLY 3** native tools:
 
 1.  `action(content)` — **Your PRIMARY tool**. Executes TypeScript code.
 2.  `cli(content)` — Executes terminal commands (Windows PowerShell).
-3.  `file(filename, content)` — Creates or fully overwrites a file.
+3.  `edit_file(filename, content)` — Creates or fully overwrites a file.
+4.  `view_file(filename)` — Reads and returns a file's contents.
 
 ### 📚 Libraries (TypeScript Modules)
 Your capabilities (`editor`, `message`) are **TypeScript modules** used **INSIDE** `action`:

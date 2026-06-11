@@ -1,0 +1,32 @@
+name: codex
+description: |
+  Primary API:
+  - `await codex.newThread(name: string, workingDirectory?: string, options?: ThreadOptions & { model?: string; modelReasoningEffort?: "low" | "medium" | "high" | "xhigh" })`
+    Creates a managed Codex thread, stores its metadata in `./data/codex/threads.json`, and returns a thread object.
+    Default thread options are always applied for TELOS agents:
+    `model: "gpt-5.4"`, `modelReasoningEffort: "medium"`.
+    Agents may override `model` and `modelReasoningEffort` per thread creation.
+  - `await codex.listThreads()`
+    Returns all managed threads with their human-readable names, ids, working directories, and linked SDK thread ids.
+  - `await codex.getThread(id: string)`
+    Restores a managed thread by its TELOS id (or linked SDK id) and returns the thread wrapper.
+
+  Thread methods:
+  - `await thread.run(input, turnOptions?)`
+    Runs a normal Codex turn and returns the SDK result with `.finalResponse`, `.items`, and `.usage`.
+  - `await thread.stream(input, turnOptions?)`
+    Starts a detached streamed turn in the background and returns the managed thread id immediately.
+
+  Stream polling:
+  - `await codex.streamStatus(threadId)`
+    Returns `{ completed, items, finalResponse, usage, error? }` for the current or last stream on that thread.
+  - `await codex.waitStream(threadId, minNewItems = 1)`
+    Waits until at least `minNewItems` new completed items arrive, or until the stream finishes.
+  - `await codex.joinStream(threadId)`
+    Waits until the active stream fully completes.
+
+  Compatibility aliases:
+  - `codex.waitForStreamItem(...)`
+  - `codex.waitForStreamCompletion(...)`
+
+module: index.ts

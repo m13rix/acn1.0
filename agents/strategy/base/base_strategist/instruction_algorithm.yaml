@@ -1,0 +1,65 @@
+name: telos_strategy_engine_v2
+description: Active instruction tape for the Telos Ultimate Strategy Engine.
+initialStep: start_project
+steps:
+  - id: start_project
+    title: Start Strategy Project
+    breadcrumb: Created or refreshed strategy project and workspace shell.
+    instruction: instruction_steps/01_start_project.md
+    model: gpt-5.5
+    next: intake
+
+  - id: intake
+    title: Build Intake
+    breadcrumb: Built strong INTAKE.md with constraints, context, permissions, and unknowns.
+    instruction: instruction_steps/02_intake.md
+    model: gpt-5.5
+    next: goal
+
+  - id: goal
+    title: Define Goal And Metrics
+    breadcrumb: Built GOAL.md with success, failure, exclusions, metrics, and tie-breakers.
+    instruction: instruction_steps/03_goal.md
+    model: gpt-5.5
+    next: depth_plan
+
+  - id: depth_plan
+    title: Plan Recursive Question Ladder
+    breadcrumb: Built DEPTH_PLAN.md with current and downstream question categories.
+    instruction: instruction_steps/04_depth_plan.md
+    model: gpt-5.5
+    next: context_synthesis
+
+  - id: context_synthesis
+    title: Synthesize Personal And Domain Context
+    breadcrumb: Gathered memory, personal context, domain research, and high-upside candidate seeds.
+    instruction: instruction_steps/05_context_synthesis.md
+    model: gpt-5.5
+    next: orchestrate_iteration
+
+  - id: orchestrate_iteration
+    title: Orchestrate Current Depth Iterations
+    breadcrumb: Called iteration workers for pending points at the current depth.
+    instruction: instruction_steps/06_orchestrate_iteration.md
+    model: gpt-5.4-mini
+    next: depth_gate
+
+  - id: depth_gate
+    title: Check Depth Readiness And Ask User
+    breadcrumb: Checked cycle readiness and resolved whether to advance, continue current depth, or synthesize.
+    instruction: instruction_steps/07_depth_gate.md
+    model: gpt-5.4-mini
+    next: orchestrate_iteration
+
+  - id: final_synthesis
+    title: Synthesize Final Strategy
+    breadcrumb: Wrote FINAL_STRATEGY.md from the winning route chain and evidence.
+    instruction: instruction_steps/08_final_synthesis.md
+    model: gpt-5.5
+    next: verification
+
+  - id: verification
+    title: Verify And Finish
+    breadcrumb: Verified artifacts, grounding, route state, and stopping condition.
+    instruction: instruction_steps/09_verification.md
+    model: gpt-5.4-mini

@@ -110,7 +110,7 @@ export const sensors = new Proxy({
   },
   create: async (prompt: string) => {
     const geminiPrompt = `
-You act as an expert developer creating a new ACN Heartbeat V2 sensor module.
+You act as an expert developer creating a new TELOS Heartbeat V2 sensor module.
 User Request: ${prompt}
 
 Create a sensor in:

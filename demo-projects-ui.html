@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ACN1.0 — Проекты</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg: #000000;
+  --surface: #0a0a0a;
+  --border: rgba(255,255,255,0.12);
+  --border-light: rgba(255,255,255,0.3);
+  --text: #ffffff;
+  --text-dim: rgba(255,255,255,0.5);
+
+  --accent-cyan: #00E5FF;
+  --accent-magenta: #FF00FF;
+  --accent-green: #00FF66;
+}
+
+html, body {
+  width: 100vw;
+  height: 100vh;
+  font-family: 'Inter', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Background Effects */
+.grid-bg {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background-size: 60px 60px;
+  background-image: linear-gradient(to right, rgba(255,255,255,0.03) 1px, transparent 1px),
+                    linear-gradient(to bottom, rgba(255,255,255,0.03) 1px, transparent 1px);
+  mask-image: radial-gradient(ellipse at center, black 40%, transparent 80%);
+  -webkit-mask-image: radial-gradient(ellipse at center, black 40%, transparent 80%);
+  pointer-events: none;
+}
+
+#particleCanvas {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+
+/* Header */
+.header {
+  padding: 30px 50px;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  border-bottom: 1px solid var(--border);
+  z-index: 10;
+  background: linear-gradient(to bottom, rgba(0,0,0,1) 0%, rgba(0,0,0,0) 100%);
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+}
+.header .logo {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 5px;
+  color: var(--text);
+  text-transform: uppercase;
+}
+.header .sep {
+  width: 1px;
+  height: 24px;
+  background: var(--border);
+}
+.header .subtitle {
+  font-size: 16px;
+  color: var(--text-dim);
+  font-weight: 400;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+}
+.status-badge {
+  margin-left: auto;
+  border: 1px solid var(--accent-magenta);
+  background: rgba(255,0,255,0.05);
+  box-shadow: 0 0 15px rgba(255,0,255,0.1);
+  padding: 8px 16px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-family: 'JetBrains Mono', monospace;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--accent-magenta);
+}
+
+/* Main Area - Projects Track */
+.projects-container {
+  flex: 1;
+  position: relative;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  margin-top: 80px; /* Offset for header */
+}
+
+.track {
+  display: flex;
+  align-items: center;
+  gap: 40px;
+  padding: 0 40px;
+  width: max-content;
+  /* Hardware acceleration */
+  transform: translateZ(0);
+}
+
+/* Project Card */
+.project-card {
+  width: 360px;
+  height: 262px; /* 16:9 */
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  position: relative;
+  overflow: hidden;
+  flex-shrink: 0;
+  box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+  transition: border-color 0.4s, box-shadow 0.4s, transform 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+  cursor: pointer;
+}
+
+.project-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, rgba(255,255,255,0.05) 0%, transparent 100%);
+  z-index: 2;
+  pointer-events: none;
+}
+
+.project-card:hover {
+  border-color: var(--border-light);
+  box-shadow: 0 20px 60px rgba(0,229,255,0.15), 0 0 0 1px rgba(0,229,255,0.2) inset;
+  transform: translateY(-10px) scale(1.02);
+}
+
+.project-card:hover .project-image {
+  transform: scale(1.05);
+}
+
+.project-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+  background: #111;
+}
+
+.project-info {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 50px 30px 30px;
+  background: linear-gradient(to top, rgba(0,0,0,0.95) 0%, rgba(0,0,0,0.7) 40%, transparent 100%);
+  z-index: 3;
+  display: flex;
+  align-items: flex-end;
+  gap: 20px;
+  transform: translateY(10px);
+  opacity: 0.9;
+  transition: all 0.4s;
+}
+
+.project-card:hover .project-info {
+  transform: translateY(0);
+  opacity: 1;
+}
+
+.project-title {
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  color: var(--text);
+  flex: 1;
+}
+
+.project-badge {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,0.1);
+  backdrop-filter: blur(10px);
+  text-transform: uppercase;
+  color: var(--accent-cyan);
+}
+
+/* Bottom Bar */
+.bottom-bar {
+  padding: 20px 50px;
+  display: flex;
+  align-items: center;
+  border-top: 1px solid var(--border);
+  z-index: 10;
+  background: var(--bg);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.bottom-bar .stat {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-right: 40px;
+}
+
+.bottom-bar .stat-val {
+  color: var(--text);
+  font-weight: 600;
+  font-size: 14px;
+}
+
+/* Visualizer Bars */
+.audio-visualizer {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 20px;
+  margin-left: auto;
+}
+.audio-bar {
+  width: 4px;
+  background: var(--accent-cyan);
+  border-radius: 2px;
+  animation: equalize 1s infinite alternate ease-in-out;
+}
+.audio-bar:nth-child(1) { height: 30%; animation-delay: 0.1s; }
+.audio-bar:nth-child(2) { height: 70%; animation-delay: 0.3s; }
+.audio-bar:nth-child(3) { height: 100%; animation-delay: 0.2s; }
+.audio-bar:nth-child(4) { height: 50%; animation-delay: 0.5s; }
+.audio-bar:nth-child(5) { height: 80%; animation-delay: 0.4s; }
+
+@keyframes equalize {
+  0% { transform: scaleY(0.3); }
+  100% { transform: scaleY(1); }
+}
+
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="logo">ACN 1.0</div>
+  <div class="sep"></div>
+  <div class="subtitle">Портфолио реализованных проектов</div>
+  <div class="status-badge">
+    <div style="width:6px;height:6px;border-radius:50%;background:var(--accent-magenta);box-shadow:0 0 10px var(--accent-magenta);"></div>
+    Режим презентации
+  </div>
+</div>
+
+<div class="grid-bg"></div>
+<canvas id="particleCanvas"></canvas>
+
+<div class="projects-container" id="container">
+  <div class="track" id="track">
+    <!-- Projects injected by JS -->
+  </div>
+</div>
+
+<div class="bottom-bar">
+  <div class="stat">Всего проектов:<span class="stat-val">9</span></div>
+  <div class="stat">Автономность:<span class="stat-val">100%</span></div>
+  <div class="stat">Статус системы:<span class="stat-val" style="color:var(--accent-green)">СТАБИЛЬНА</span></div>
+
+  <div class="audio-visualizer">
+    <div class="audio-bar"></div>
+    <div class="audio-bar"></div>
+    <div class="audio-bar"></div>
+    <div class="audio-bar"></div>
+    <div class="audio-bar"></div>
+  </div>
+</div>
+
+<script>
+const projects = [
+  { img: '2.png', title: 'Project Arete' },
+  { img: '1.png', title: 'Безграничный игровой движок' },
+  { img: '3.png', title: 'Помощь в домашнем задании' },
+  { img: '9.png', title: 'Telos Spark' },
+  { img: '5.png', title: 'Генерация презентаций' },
+  { img: '4.png', title: 'Project Autopen' },
+  { img: '6.png', title: 'Project Lifescript' },
+  { img: '7.png', title: 'Разговорный ИИ' },
+  { img: '8.png', title: 'Коммерческий агентный ИИ' }
+];
+
+const track = document.getElementById('track');
+const cards = [];
+const cardGap = 40;
+const cardWidth = 720;
+const speed = 3; // pixels per frame
+
+// Duplicate projects array to ensure screen is completely filled for infinite looping
+const displayProjects = [...projects, ...projects];
+
+displayProjects.forEach((proj, idx) => {
+  const el = document.createElement('div');
+  el.className = 'project-card';
+  el.innerHTML = `
+    <img class="project-image" src="data/temp_assets/${proj.img}" alt="${proj.title}" onerror="this.src='data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI3MjAiIGhlaWdodD0iNDA1IiBmaWxsPSIjMTExIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIi8+PHRleHQgeD0iNTAlIiB5PSI1MCUiIGZpbGw9IiM0NDQiIGZvbnQtZmFtaWx5PSJzYW5zLXNlcmlmIiBmb250LXNpemU9IjI0IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBkeT0iLjNlbSI+SW1hZ2Ugbm90IGZvdW5kPC90ZXh0Pjwvc3ZnPg=='">
+    <div class="project-info">
+      <div class="project-title">${proj.title}</div>
+    </div>
+  `;
+  track.appendChild(el);
+
+  // Set initial absolute positioning logic
+  const x = idx * (cardWidth + cardGap);
+  cards.push({ el, x });
+});
+
+// Since absolute positioning inside a flex/track isn't natural, we'll manually apply translate to the track itself,
+// OR we can make the track just a wide flexbox and translate the whole track.
+// Translating the whole track is much smoother and simpler.
+
+let trackX = 0;
+// We need to know when the first half of the track has fully scrolled out of view.
+const singleSetWidth = projects.length * (cardWidth + cardGap);
+let isHovered = false;
+
+// Pause animation on hover for better UX (optional but nice)
+track.addEventListener('mouseenter', () => isHovered = true);
+track.addEventListener('mouseleave', () => isHovered = false);
+
+function animateTrack() {
+  if (!isHovered) {
+    trackX -= speed;
+
+    // Once we've scrolled exactly one full set of projects, reset position seamlessly.
+    if (Math.abs(trackX) >= singleSetWidth) {
+      trackX += singleSetWidth;
+    }
+
+    track.style.transform = `translateX(${trackX}px)`;
+  }
+
+  requestAnimationFrame(animateTrack);
+}
+
+// Background Particles
+const pCanvas = document.getElementById('particleCanvas');
+const pCtx = pCanvas.getContext('2d');
+let particles = [];
+
+function resizeParticles() {
+  pCanvas.width = window.innerWidth;
+  pCanvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resizeParticles);
+resizeParticles();
+
+for (let i = 0; i < 50; i++) {
+  particles.push({
+    x: Math.random() * pCanvas.width,
+    y: Math.random() * pCanvas.height,
+    size: Math.random() * 2 + 1,
+    speedX: Math.random() * 0.5 - 0.25,
+    speedY: Math.random() * 0.5 - 0.25,
+    opacity: Math.random() * 0.5 + 0.1
+  });
+}
+
+function drawParticles() {
+  pCtx.clearRect(0, 0, pCanvas.width, pCanvas.height);
+
+  particles.forEach(p => {
+    p.x += p.speedX;
+    p.y += p.speedY;
+
+    if (p.x < 0) p.x = pCanvas.width;
+    if (p.x > pCanvas.width) p.x = 0;
+    if (p.y < 0) p.y = pCanvas.height;
+    if (p.y > pCanvas.height) p.y = 0;
+
+    pCtx.beginPath();
+    pCtx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+    pCtx.fillStyle = `rgba(255, 255, 255, ${p.opacity})`;
+    pCtx.fill();
+  });
+
+  requestAnimationFrame(drawParticles);
+}
+
+// Start animations
+animateTrack();
+drawParticles();
+
+</script>
+</body>
+</html>

@@ -150,12 +150,12 @@ export async function generateImportedSkills(
   }
 
   const prompt = [
-    'You generate embedded ACN tool skills for example-based retrieval.',
+    'You generate embedded TELOS tool skills for example-based retrieval.',
     'Return JSON with key "entries".',
     'Each entry must target a distinct user intent or task cluster.',
-    'Each entry content must explain when to use the imported ACN tool wrapper, which method(s) to call, key parameter rules, and practical usage notes.',
+    'Each entry content must explain when to use the imported TELOS tool wrapper, which method(s) to call, key parameter rules, and practical usage notes.',
     'Examples must be diverse natural-language user requests that should retrieve that entry.',
-    'Use the normalized ACN method names, not raw MCP method names, inside the content.',
+    'Use the normalized TELOS method names, not raw MCP method names, inside the content.',
     'Do not repeat the same examples across entries.',
     '',
     JSON.stringify({

@@ -543,7 +543,7 @@ export async function screenshot(filePath: string, monitorIndex: number = 0): Pr
   const { absolutePath, savedToSandbox } = resolveToolPath(filePath, { ensureImageExtension: true });
   await mkdir(path.dirname(absolutePath), { recursive: true });
 
-  const tempDir = await mkdtemp(path.join(tmpdir(), 'acn-utils-shot-'));
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'telos-utils-shot-'));
   const tempFile = path.join(tempDir, 'raw-monitor.png');
 
   try {
@@ -577,6 +577,55 @@ export async function llm(
 ): Promise<unknown> {
   return runStructuredLlm(prompt, schema, imagePath);
 }
+
+async function viewContextStep(stepNumber: number): Promise<string> {
+  const sessionId = process.env.TELOS_SESSION_ID;
+  if (!sessionId) {
+    throw new Error('utils.context.view(step): TELOS_SESSION_ID is not available in this action.');
+  }
+  const projectRoot = process.env.TELOS_PROJECT_ROOT || process.env.PROJECT_ROOT || process.cwd();
+  const filePath = path.join(projectRoot, 'data', 'adaptive-step-context', `${sessionId}.json`);
+  const raw = await readFile(filePath, 'utf-8');
+  const session = JSON.parse(raw) as {
+    id?: string;
+    steps?: Array<{
+      index: number;
+      createdAt?: string;
+      reasoning?: string;
+      output?: string;
+      observation?: string;
+    }>;
+  };
+  const step = session.steps?.find(item => item.index + 1 === stepNumber || item.index === stepNumber);
+  if (!step) {
+    throw new Error(`Adaptive context step ${stepNumber} was not found in session ${sessionId}.`);
+  }
+  return [
+    `Adaptive step ${step.index}`,
+    `createdAt: ${step.createdAt || '(unknown)'}`,
+    '',
+    'Reasoning:',
+    step.reasoning || '(empty)',
+    '',
+    'Output:',
+    step.output || '(empty)',
+    '',
+    'Observation:',
+    step.observation || '(empty)',
+  ].join('\n');
+}
+
+export const context = {
+  view: viewContextStep,
+};
+
+export const tools: {
+  list: () => string[];
+  doc: (toolName: string) => string;
+} = {
+  list: () => [],
+  doc: (toolName: string) => `Tool "${toolName}" not found`,
+};
 
 export const __internals = {
   ...structuredLlmInternals,

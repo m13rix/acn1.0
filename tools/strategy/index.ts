@@ -3,6 +3,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import util from 'node:util';
+import { AgentLoader } from '../../src/loaders/AgentLoader.js';
+import { getAgentInvocationService } from '../../src/core/AgentInvocationService.js';
+import { runInSandboxCallQueue } from '../../src/core/AgentCallQueue.js';
+import { LocalSandbox } from '../../src/sandbox/LocalSandbox.js';
+import { actionContext } from '../../src/core/ActionContext.js';
+import type { LoadedAgent } from '../../src/types/index.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const STORE_DIR = path.resolve(__dirname, '..', '..', 'data', 'strategy');
@@ -217,6 +223,8 @@ interface UpdateEventInput {
 interface CreateRouteInput {
   name: string;
   parentRouteId?: string;
+  depth?: number;
+  rootWorkspace?: boolean;
   theme?: string;
   category?: string;
   summary?: string;
@@ -230,6 +238,7 @@ interface CreateRouteInput {
 
 interface CreateRouteBatchInput {
   parentRouteId?: string;
+  depth?: number;
   theme?: string;
   category?: string;
   routes: CreateRouteInput[];
@@ -271,6 +280,32 @@ interface UpdateCycleInput {
   maxDepth?: number;
   currentDepth?: number;
   status?: StrategyCycleStatus;
+}
+
+interface BeginIterationInput {
+  startDepth?: number;
+  starterDepth?: number;
+  agentDirectory?: string;
+  sandboxDirectory?: string;
+  maxRoutesPerDepth?: number;
+}
+
+interface IterationRunRecord {
+  depth: number;
+  routeId: string;
+  routeName: string;
+  model: string;
+  childRouteCount: number;
+  skippedRouteIds: string[];
+}
+
+interface BeginIterationResult {
+  strategyId: string;
+  startDepth: number;
+  maxDepth: number;
+  completed: boolean;
+  stoppedReason: string;
+  runs: IterationRunRecord[];
 }
 
 function assertNonEmptyString(value: unknown, fieldName: string): string {
@@ -554,7 +589,8 @@ async function readStrategy(strategyId: string): Promise<StrategyProject> {
     return normalizeStrategy(parseStrategyJson(raw, normalizedId));
   } catch (error: any) {
     if (error?.code === 'ENOENT') {
-      throw new Error(`Strategy "${normalizedId}" was not found.`);
+      throw new Error(`Strategy "${normalizedId}" was not found. USE   - strategy.routes.keep(strategyId, routeId, { reason, evidence?, confidence?, rank? })
+  - strategy.routes.kill(strategyId, routeId, { reason, evidence?, confidence?, rank? })`);
     }
     throw error;
   }
@@ -726,6 +762,19 @@ function defaultRouteFolderPath(parentRoute: StrategyRoute | undefined, depth: n
     return `strategy_workspace/routes/${slug}`;
   }
   return `${parentRoute.folderPath}/${slug}`;
+}
+
+function rootWorkspaceRoutePaths(input: CreateRouteInput, slug: string): {
+  folderPath: string;
+  intakePath: string;
+  evalPath: string;
+} {
+  const folderPath = assertOptionalString(input?.folderPath, 'folderPath') || 'strategy_workspace';
+  return {
+    folderPath,
+    intakePath: assertOptionalString(input?.intakePath, 'intakePath') || `${folderPath}/INTAKE.md`,
+    evalPath: assertOptionalString(input?.evalPath, 'evalPath') || `${folderPath}/${slug}_eval.md`,
+  };
 }
 
 function rootNodeCount(pathRecord: StrategyPath): number {
@@ -1274,9 +1323,18 @@ export const routes = {
     const name = assertNonEmptyString(input?.name, 'name');
     const parentRouteId = assertOptionalString(input?.parentRouteId, 'parentRouteId');
     const parentRoute = parentRouteId ? getRouteOrThrow(strategy, parentRouteId) : undefined;
-    const depth = parentRoute ? parentRoute.depth + 1 : strategy.cycle.currentDepth;
+    const explicitDepth = assertOptionalFiniteNumber(input?.depth, 'depth');
+    const depth = parentRoute
+      ? parentRoute.depth + 1
+      : explicitDepth === undefined
+        ? strategy.cycle.currentDepth
+        : mustBePositiveInteger(explicitDepth, 'depth');
     const slug = assertOptionalString(input?.slug, 'slug') || slugifyName(name);
-    const folderPath = assertOptionalString(input?.folderPath, 'folderPath')
+    const rootPaths = !parentRoute && input?.rootWorkspace
+      ? rootWorkspaceRoutePaths(input, slug)
+      : null;
+    const folderPath = rootPaths?.folderPath
+      || assertOptionalString(input?.folderPath, 'folderPath')
       || defaultRouteFolderPath(parentRoute, depth, slug);
     const route: StrategyRoute = {
       id: makeId('route'),
@@ -1289,8 +1347,8 @@ export const routes = {
       summary: assertOptionalString(input?.summary, 'summary'),
       note: assertOptionalString(input?.note, 'note'),
       folderPath,
-      intakePath: assertOptionalString(input?.intakePath, 'intakePath') || `${folderPath}/${slug}_intake.md`,
-      evalPath: assertOptionalString(input?.evalPath, 'evalPath') || `${folderPath}/${slug}_eval.md`,
+      intakePath: rootPaths?.intakePath || assertOptionalString(input?.intakePath, 'intakePath') || `${folderPath}/${slug}_intake.md`,
+      evalPath: rootPaths?.evalPath || assertOptionalString(input?.evalPath, 'evalPath') || `${folderPath}/${slug}_eval.md`,
       decision: 'undecided',
       decisionReason: undefined,
       evidence: undefined,
@@ -1325,6 +1383,7 @@ export const routes = {
       created.push(await routes.create(strategyId, {
         ...routeInput,
         parentRouteId: routeInput.parentRouteId ?? input?.parentRouteId,
+        depth: routeInput.depth ?? input?.depth,
         theme: routeInput.theme ?? input?.theme,
         category: routeInput.category ?? input?.category,
       }));
@@ -1654,6 +1713,243 @@ export const cycle = {
   },
 };
 
+function normalizeOptionalPositiveInt(value: unknown, fallback: number, fieldName: string): number {
+  if (typeof value === 'undefined' || value === null || value === '') {
+    return fallback;
+  }
+  const parsed = typeof value === 'string' ? Number.parseInt(value, 10) : value;
+  return mustBePositiveInteger(parsed, fieldName);
+}
+
+function modelForIterationDepth(depth: number, maxDepth: number): string {
+  return depth > maxDepth * 0.5 ? 'gpt-5.4-mini' : 'gpt-5.5';
+}
+
+async function loadAgentFromDirectory(agentDirectory: string): Promise<LoadedAgent> {
+  const resolvedDirectory = path.resolve(assertNonEmptyString(agentDirectory, 'agentDirectory'));
+  const agents = await new AgentLoader(path.dirname(resolvedDirectory)).loadAll();
+  const agent = agents.find(item => path.resolve(item.directory) === resolvedDirectory);
+  if (!agent) {
+    throw new Error(`No agent config found at agentDirectory "${resolvedDirectory}".`);
+  }
+  return agent;
+}
+
+async function resolveIterationAgent(agentDirectory?: string): Promise<LoadedAgent> {
+  const configuredDirectory = assertOptionalString(agentDirectory, 'agentDirectory')
+    || assertOptionalString(process.env.TELOS_AGENT_DIR, 'TELOS_AGENT_DIR');
+  if (configuredDirectory) {
+    return loadAgentFromDirectory(configuredDirectory);
+  }
+
+  const agentName = assertOptionalString(process.env.TELOS_AGENT_NAME, 'TELOS_AGENT_NAME') || 'base_strategist';
+  const agent = await new AgentLoader().loadByName(agentName);
+  if (!agent) {
+    throw new Error(`Unable to resolve iteration agent "${agentName}". Pass agentDirectory explicitly.`);
+  }
+  return agent;
+}
+
+function resolveSandboxDirectory(input?: string): string {
+  return path.resolve(
+    assertOptionalString(input, 'sandboxDirectory')
+    || assertOptionalString(process.env.SANDBOX_DIR, 'SANDBOX_DIR')
+    || process.cwd()
+  );
+}
+
+function routeChildCount(strategy: StrategyProject, routeId: string): number {
+  return strategy.routes.filter(route => route.parentRouteId === routeId).length;
+}
+
+function pendingRoutesAtDepth(strategy: StrategyProject, depth: number): StrategyRoute[] {
+  return strategy.routes
+    .filter(route => route.depth === depth && route.decision !== 'kill' && !route.subroutesGenerated)
+    .sort(sortRoutes);
+}
+
+function buildWorkerRequest(input: {
+  strategy: StrategyProject;
+  route: StrategyRoute;
+  depth: number;
+  maxDepth: number;
+  skippedRouteIds: string[];
+}): string {
+  const { strategy, route, depth, maxDepth, skippedRouteIds } = input;
+  const isRootWorkspace = route.folderPath === 'strategy_workspace' && route.intakePath === 'strategy_workspace/INTAKE.md';
+  const nextDepth = depth + 1;
+
+  return [
+    `Automated strategy iteration assignment.`,
+    '',
+    `Strategy id: ${strategy.id}`,
+    `Strategy name: ${strategy.name}`,
+    `Current route id: ${route.id}`,
+    `Current route name: ${route.name}`,
+    `Current route depth: ${depth}`,
+    `Children you create must be depth: ${nextDepth}`,
+    `Max depth: ${maxDepth}`,
+    `Parent folder: ${route.folderPath}`,
+    `Parent intake path: ${route.intakePath}`,
+    `Parent eval path: ${route.evalPath}`,
+    isRootWorkspace
+      ? 'This is the root workspace route. Generate the first real route families under this root route; do not create another root wrapper.'
+      : 'Generate the next-depth sibling set under this route.',
+    skippedRouteIds.length > 0
+      ? `For cost control, only this route is being expanded at depth ${depth}. Other pending route ids at this depth were not launched: ${skippedRouteIds.join(', ')}.`
+      : '',
+    '',
+    'Your job:',
+    `- Read strategy_workspace/INTAKE.md, GOAL.md, DEPTH_PLAN.md, and the current route intake/eval files when they exist.`,
+    `- Identify the exact question this depth is answering from DEPTH_PLAN.md and the parent route context.`,
+    `- Generate coherent child routes with parentRouteId="${route.id}".`,
+    `- Do not set child depth manually unless recovering from malformed data; route creation should infer child depth from this parent.`,
+    `- Gather evidence, write route intake/eval artifacts, and apply keep/kill decisions for the generated siblings.`,
+    `- Usually keep only the strongest child at this depth unless evidence strongly demands a temporary second survivor.`,
+    `- Finish only after route data, artifacts, and subroutesGenerated state are consistent.`,
+  ].filter(Boolean).join('\n');
+}
+
+async function callIterationWorker(input: {
+  agent: LoadedAgent;
+  sandboxDirectory: string;
+  strategy: StrategyProject;
+  route: StrategyRoute;
+  depth: number;
+  maxDepth: number;
+  skippedRouteIds: string[];
+}): Promise<string> {
+  const sandbox = new LocalSandbox({ existingPath: input.sandboxDirectory });
+  await sandbox.initialize([], undefined);
+  const model = modelForIterationDepth(input.depth, input.maxDepth);
+  const request = buildWorkerRequest({
+    strategy: input.strategy,
+    route: input.route,
+    depth: input.depth,
+    maxDepth: input.maxDepth,
+    skippedRouteIds: input.skippedRouteIds,
+  });
+  const routeEnv = {
+    TELOS_TEXT_LOG_PATH: path.join(
+      input.sandboxDirectory,
+      `.telos-strategy-iteration-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jsonl`
+    ),
+    TELOS_INTERFACE_ROUTE: process.env.TELOS_INTERFACE_ROUTE || '',
+    TELOS_INTERFACE_API_URL: process.env.TELOS_INTERFACE_API_URL || process.env.TELOS_API_URL || '',
+    TELOS_API_URL: process.env.TELOS_API_URL || process.env.TELOS_INTERFACE_API_URL || '',
+    TELOS_CHAT_ID: 'HEARTBEAT_ROUTE',
+  };
+
+  return runInSandboxCallQueue(input.sandboxDirectory, async () => {
+    const invoke = () => getAgentInvocationService().callAgent({
+      agent: input.agent,
+      message: request,
+      sandbox,
+      parentDepth: Number.parseInt(process.env.AGENT_DEPTH || '0', 10) || 0,
+      stream: true,
+      modelOverride: model,
+      systemPromptOverride: input.agent.subagentPromptContent || input.agent.systemPromptContent,
+      instructionAlgorithmOverride: input.agent.config.subagentInstructionAlgorithm,
+      isSubagent: true,
+      routeEnv,
+    });
+    const parentStore = actionContext.getStore();
+    return parentStore
+      ? actionContext.run({ ...parentStore, env: { ...(parentStore.env || {}), ...routeEnv } }, invoke)
+      : actionContext.run({ env: routeEnv }, invoke);
+  }).then(result => result.value);
+}
+
+export const iteration = {
+  async begin(strategyId: string, input: BeginIterationInput = {}): Promise<BeginIterationResult> {
+    const normalizedStrategyId = assertNonEmptyString(strategyId, 'strategyId');
+    const agent = await resolveIterationAgent(input?.agentDirectory);
+    const sandboxDirectory = resolveSandboxDirectory(input?.sandboxDirectory);
+    const runs: IterationRunRecord[] = [];
+
+    let strategy = await readStrategy(normalizedStrategyId);
+    const startDepth = normalizeOptionalPositiveInt(
+      input?.startDepth ?? input?.starterDepth,
+      strategy.cycle.currentDepth,
+      'startDepth'
+    );
+    const maxDepth = strategy.cycle.maxDepth;
+    const maxRoutesPerDepth = normalizeOptionalPositiveInt(input?.maxRoutesPerDepth, 1, 'maxRoutesPerDepth');
+
+    if (startDepth > maxDepth) {
+      throw new Error(`startDepth (${startDepth}) cannot exceed strategy maxDepth (${maxDepth}).`);
+    }
+
+    let stoppedReason = '';
+    for (let depth = startDepth; depth < maxDepth; depth += 1) {
+      await cycle.configure(normalizedStrategyId, { currentDepth: depth, status: 'active' });
+      strategy = await readStrategy(normalizedStrategyId);
+      const pending = pendingRoutesAtDepth(strategy, depth);
+
+      if (pending.length === 0) {
+        stoppedReason = `No non-killed pending route with subroutesGenerated=false at depth ${depth}.`;
+        break;
+      }
+
+      const selected = pending.slice(0, maxRoutesPerDepth);
+      const skipped = pending.slice(maxRoutesPerDepth).map(route => route.id);
+
+      for (const route of selected) {
+        const before = await readStrategy(normalizedStrategyId);
+        await callIterationWorker({
+          agent,
+          sandboxDirectory,
+          strategy: before,
+          route,
+          depth,
+          maxDepth,
+          skippedRouteIds: skipped,
+        });
+
+        const after = await readStrategy(normalizedStrategyId);
+        const updatedRoute = getRouteOrThrow(after, route.id);
+        const childCount = routeChildCount(after, route.id);
+        runs.push({
+          depth,
+          routeId: route.id,
+          routeName: route.name,
+          model: modelForIterationDepth(depth, maxDepth),
+          childRouteCount: childCount,
+          skippedRouteIds: skipped,
+        });
+
+        if (!updatedRoute.subroutesGenerated && childCount === 0) {
+          stoppedReason = `Worker finished but route ${route.id} still has no child routes and subroutesGenerated=false.`;
+          await cycle.configure(normalizedStrategyId, { currentDepth: depth, status: 'active' });
+          return {
+            strategyId: normalizedStrategyId,
+            startDepth,
+            maxDepth,
+            completed: false,
+            stoppedReason,
+            runs,
+          };
+        }
+      }
+    }
+
+    if (!stoppedReason) {
+      stoppedReason = `Reached maxDepth ${maxDepth}; routes at max depth are not expanded.`;
+      await cycle.configure(normalizedStrategyId, { currentDepth: maxDepth, status: 'complete' });
+    }
+
+    const completed = stoppedReason.startsWith('Reached maxDepth');
+    return {
+      strategyId: normalizedStrategyId,
+      startDepth,
+      maxDepth,
+      completed,
+      stoppedReason,
+      runs,
+    };
+  },
+};
+
 decorateAsyncApi(strategies, 'strategy.strategies');
 decorateAsyncApi(paths, 'strategy.paths');
 decorateAsyncApi(nodes, 'strategy.nodes');
@@ -1662,6 +1958,7 @@ decorateAsyncApi(analysis, 'strategy.analysis');
 decorateAsyncApi(divergence, 'strategy.divergence');
 decorateAsyncApi(routes, 'strategy.routes');
 decorateAsyncApi(cycle, 'strategy.cycle');
+decorateAsyncApi(iteration, 'strategy.iteration');
 
 export const createStrategy = strategies.create;
 export const listStrategies = strategies.list;
@@ -1695,6 +1992,9 @@ export const listPendingRouteExpansion = routes.listPendingExpansion;
 export const getCycle = cycle.get;
 export const configureCycle = cycle.configure;
 export const advanceCycle = cycle.advance;
+export const beginIteration = iteration.begin;
+export const beginIterating = iteration.begin;
 export async function calculatePathUtility(strategyId: string, pathId: string, maxSteps: number): Promise<number> {
   return analysis.expectedStateDelta(strategyId, pathId, maxSteps);
 }
+

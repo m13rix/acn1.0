@@ -1,0 +1,2 @@
+gkeepapi==0.16.0
+gpsoauth==2.0.0

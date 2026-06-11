@@ -11,8 +11,9 @@ description: |
   - strategy.strategies.remove(strategyId)
 
   Route exploration:
-  - strategy.routes.create(strategyId, { name, parentRouteId?, theme?, category?, summary?, slug?, note?, rank? })
-  - strategy.routes.createBatch(strategyId, { parentRouteId?, theme?, category?, routes: [...] })
+  - strategy.routes.create(strategyId, { name, parentRouteId?, depth?, rootWorkspace?, theme?, category?, summary?, slug?, note?, rank? })
+    Use `depth` only for a root/start route with no parent. Use `rootWorkspace: true` for the conceptual root route whose folder is `strategy_workspace` and whose intake is `strategy_workspace/INTAKE.md`.
+  - strategy.routes.createBatch(strategyId, { parentRouteId?, depth?, theme?, category?, routes: [...] })
   - strategy.routes.list(strategyId, { parentRouteId?, depth?, decision? }?)
   - strategy.routes.get(strategyId, routeId)
   - strategy.routes.update(strategyId, routeId, patch)
@@ -30,6 +31,10 @@ description: |
   - strategy.cycle.getExpansionParents(strategyId, targetDepth?)
   - strategy.cycle.canAdvance(strategyId)
   - strategy.cycle.advance(strategyId)
+
+  Automatic recursive route iteration:
+  - strategy.iteration.begin(strategyId, { startDepth?, starterDepth?, agentDirectory?, sandboxDirectory?, maxRoutesPerDepth? })
+    Launches the base strategist iteration worker automatically for pending non-killed routes at each depth, normally one route per depth. In agent actions, agentDirectory defaults to TELOS_AGENT_DIR and sandboxDirectory defaults to SANDBOX_DIR.
 
   - strategy.paths.create(strategyId, { name, description?, rootName? })
   - strategy.paths.list(strategyId)
@@ -82,6 +87,8 @@ description: |
   - strategy.getCycle(...)
   - strategy.configureCycle(...)
   - strategy.advanceCycle(...)
+  - strategy.beginIteration(...)
+  - strategy.beginIterating(...)
 
   Modeling guidance for agents:
   - Use `routes` for action branching: broad family -> subfamily -> concrete tactic.

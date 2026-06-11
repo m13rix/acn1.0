@@ -5,7 +5,7 @@
  */
 
 // Use puppeteer-extra with stealth plugin
-import puppeteer from 'puppeteer-extra';
+import puppeteerExtra from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import { Browser, Page } from 'puppeteer';
 import { mkdir, writeFile, rm } from 'fs/promises';
@@ -17,6 +17,10 @@ import type { ISandbox } from './interfaces.js';
 import { getMinimalHtml } from '../utils/minimalHtml.js';
 
 // Add the stealth plugin
+const puppeteer = puppeteerExtra as unknown as {
+    use(plugin: unknown): void;
+    launch(options: Record<string, unknown>): Promise<unknown>;
+};
 puppeteer.use(StealthPlugin());
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -39,7 +43,7 @@ export class BrowserSandbox implements ISandbox {
         this.directory = join(baseDir || join(PROJECT_ROOT, 'sandboxes'), `session-${this.id}`);
     }
 
-    async initialize(_tools: LoadedTool[], _skillsTable?: string, _memoryConfig?: AgentMemoryConfig): Promise<void> {
+    async initialize(_tools: LoadedTool[], _memoryConfig?: AgentMemoryConfig): Promise<void> {
         // Create sandbox directory
         await mkdir(this.directory, { recursive: true });
 
@@ -61,10 +65,11 @@ export class BrowserSandbox implements ISandbox {
         }) as unknown as Browser;
 
         const pages = await this.browser.pages();
-        this.page = pages.length > 0 ? pages[0] : await this.browser.newPage();
+        const page = pages[0] ?? await this.browser.newPage();
+        this.page = page;
 
         // Setup console capture
-        this.page.on('console', msg => {
+        page.on('console', msg => {
             const type = msg.type();
             const text = msg.text();
 
@@ -80,8 +85,8 @@ export class BrowserSandbox implements ISandbox {
         });
 
         // Capture page errors
-        this.page.on('pageerror', err => {
-            this.consoleLogs.push(`[error] ${err.toString()}`);
+        page.on('pageerror', err => {
+            this.consoleLogs.push(`[error] ${String(err)}`);
             if (this.consoleLogs.length > 20) {
                 this.consoleLogs.shift();
             }
@@ -90,28 +95,14 @@ export class BrowserSandbox implements ISandbox {
         this.initialized = true;
 
         // Initial navigation to Google
-        await this.page.goto('https://google.com');
+        await page.goto('https://google.com');
     }
 
     getDescription(): string {
-        return `## Sandbox (Browser)
+        return `## Browser Sandbox
 
-The agent runs in a browser environment (Puppeteer).
-- Tools are NOT available.
-- The environment is persistent (same page/browser session).
-
-### Action
-The content of actions is JavaScript code executed in the browser context.
-- Use \`console.log(...)\` to produce observations.
-- Code runs directly on the current page via \`page.evaluate()\`.
-- Before providing the code, the system will update the context with a screenshot of the current page.
-
-### CLI
-The content of cli tags are browser navigation commands.
-- \`goto <url>\`: Navigate to a URL
-- \`back\`: Go back in history
-- \`forward\`: Go forward in history
-- \`refresh\`: Reload the page`;
+\`action\` runs JavaScript in the current Puppeteer page; use \`console.log(...)\` for observations. Tools are unavailable here and browser state persists.
+\`cli\` accepts navigation commands: \`goto <url>\`, \`back\`, \`forward\`, \`refresh\`.`;
     }
 
     async execute(code: string): Promise<ExecutionResult> {
@@ -281,7 +272,7 @@ The content of cli tags are browser navigation commands.
             // Encode to base64 (matching the format expected by providers)
             const base64Html = Buffer.from(minimalHtml, 'utf-8').toString('base64');
 
-            // Write to .acn-files.json
+            // Write to .telos-files.json
             // Format: [{ content: string (base64), filename: string }]
             const files = [{
                 content: base64Html,
@@ -289,7 +280,7 @@ The content of cli tags are browser navigation commands.
             }];
 
             await writeFile(
-                join(this.directory, '.acn-files.json'),
+                join(this.directory, '.telos-files.json'),
                 JSON.stringify(files),
                 'utf-8'
             );

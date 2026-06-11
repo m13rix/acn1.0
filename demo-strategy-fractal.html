@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ACN1.0 — Стратегия (Фрактальный алгоритм)</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg: #000000;
+  --text: #ffffff;
+  --text-dim: rgba(255,255,255,0.5);
+  
+  --accent-magenta: #FF00FF;
+  --accent-cyan: #00E5FF;
+  --accent-green: #00FF66;
+  
+  --color-red: #ff4757;
+  --color-green: #2ed573;
+}
+
+html,body{height:100%;font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);overflow:hidden}
+body{display:flex;flex-direction:column; position:relative;}
+
+/* Background Effects */
+.grid-bg {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background-size: 60px 60px;
+  background-image: linear-gradient(to right, rgba(255,255,255,0.03) 1px, transparent 1px),
+                    linear-gradient(to bottom, rgba(255,255,255,0.03) 1px, transparent 1px);
+  mask-image: radial-gradient(circle at center, black 20%, transparent 80%);
+  -webkit-mask-image: radial-gradient(circle at center, black 20%, transparent 80%);
+  pointer-events: none;
+}
+
+/* Header */
+.header{
+  padding:20px 40px;display:flex;align-items:center;gap:16px;
+  z-index:10;background:transparent; position:absolute; top:0; left:0; right:0;
+  pointer-events:none;
+}
+.header .logo{font-size:14px;font-weight:700;letter-spacing:4px;color:var(--text);text-transform:uppercase}
+.header .sep{width:1px;height:20px;background:rgba(255,255,255,0.2)}
+.header .subtitle{font-size:13px;color:var(--text-dim);font-weight:400;letter-spacing:1px}
+
+/* Canvas */
+#fractalCanvas {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+}
+
+/* Labels */
+.ui-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  pointer-events: none;
+}
+
+.label-box {
+  position: absolute;
+  opacity: 0;
+  transform: translateY(20px);
+  transition: all 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+  background: rgba(0,0,0,0.8);
+  padding: 12px 20px;
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.1);
+  backdrop-filter: blur(10px);
+}
+
+.label-box.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.label-text {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  transition: color 1s ease;
+}
+
+/* Invisible controls for presentation */
+.controls {
+  position: absolute;
+  bottom: 30px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  display: flex;
+  gap: 16px;
+  opacity: 0.1; 
+  transition: opacity 0.3s;
+}
+.controls:hover { opacity: 1; }
+button {
+  background: rgba(255,255,255,0.1);
+  border: 1px solid rgba(255,255,255,0.2);
+  color: #fff;
+  padding: 8px 16px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: 'JetBrains Mono', monospace;
+}
+button:hover { background: rgba(255,255,255,0.2); }
+
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="logo">ACN 1.0</div>
+  <div class="sep"></div>
+  <div class="subtitle">Стратегия: Вычисление оптимального пути (Фрактальный алгоритм)</div>
+</div>
+
+<div class="grid-bg"></div>
+<canvas id="fractalCanvas"></canvas>
+
+<div class="ui-layer">
+  <div id="label-short" class="label-box">
+    <div id="label-short-text" class="label-text" style="color: #ffffff;">Вариант: «Учить полчаса»</div>
+  </div>
+  
+  <div id="label-long" class="label-box">
+    <div id="label-long-text" class="label-text" style="color: #ffffff;">Вариант: «Освоить технику запоминания»</div>
+  </div>
+</div>
+
+<div class="controls">
+  <button onclick="nextStep()">Следующий шаг [Space]</button>
+</div>
+
+<script>
+const canvas = document.getElementById('fractalCanvas');
+const ctx = canvas.getContext('2d', { alpha: false });
+let w, h;
+let cx, cy, R;
+let P1, P2, P3, M1, M2, M3;
+let TopTri, BLTri, BRTri;
+
+let topDeepPath = [];
+
+function generatePath() {
+  topDeepPath = [];
+  for (let i = 0; i < 20; i++) {
+    topDeepPath.push(Math.floor(Math.random() * 3));
+  }
+}
+
+function resize() {
+  w = window.innerWidth;
+  h = window.innerHeight;
+  canvas.width = w;
+  canvas.height = h;
+  
+  cx = w / 2;
+  cy = h / 2 + 40;
+  R = Math.min(w, h) * 0.42;
+  
+  P1 = { x: cx, y: cy - R };
+  P2 = { x: cx - R * 0.866, y: cy + R * 0.5 };
+  P3 = { x: cx + R * 0.866, y: cy + R * 0.5 };
+  
+  M1 = { x: (P1.x + P2.x)/2, y: (P1.y + P2.y)/2 };
+  M2 = { x: (P2.x + P3.x)/2, y: (P2.y + P3.y)/2 };
+  M3 = { x: (P3.x + P1.x)/2, y: (P3.y + P1.y)/2 };
+  
+  TopTri = { pA: P1, pB: M1, pC: M3 };
+  BLTri = { pA: M1, pB: P2, pC: M2 };
+  BRTri = { pA: M3, pB: M2, pC: P3 };
+  
+  positionLabels();
+}
+window.addEventListener('resize', resize);
+
+// Animation State
+const state = {
+  mainProgress: 0,
+  split1Progress: 0,
+  
+  blHighlight: 0,
+  topHighlight: 0,
+  
+  topPathDepth: 0, // 0 to 8
+  
+  blR: 255, blG: 255, blB: 255,
+  topR: 255, topG: 255, topB: 255,
+  
+  label1Alpha: 0,
+  label2Alpha: 0,
+  
+  fullDepth: 1, // 1 to 7
+  glowIntensity: 0
+};
+
+function positionLabels() {
+  const blCenter = {x: (BLTri.pA.x + BLTri.pB.x + BLTri.pC.x)/3, y: (BLTri.pA.y + BLTri.pB.y + BLTri.pC.y)/3};
+  const topCenter = {x: (TopTri.pA.x + TopTri.pB.x + TopTri.pC.x)/3, y: (TopTri.pA.y + TopTri.pB.y + TopTri.pC.y)/3};
+  
+  const lblShort = document.getElementById('label-short');
+  lblShort.style.left = (blCenter.x - 320) + 'px';
+  lblShort.style.top = (blCenter.y + 30) + 'px';
+  
+  const lblLong = document.getElementById('label-long');
+  lblLong.style.left = (topCenter.x + 150) + 'px';
+  lblLong.style.top = (topCenter.y - 40) + 'px';
+}
+
+function animateObj(obj, props, duration) {
+  return new Promise(resolve => {
+    const startProps = {};
+    for (let k in props) startProps[k] = obj[k];
+    const startTime = performance.now();
+    
+    function update(time) {
+      const elapsed = time - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+      const ease = 1 - Math.pow(1 - progress, 3); // easeOutCubic
+      
+      for (let k in props) {
+        obj[k] = startProps[k] + (props[k] - startProps[k]) * ease;
+      }
+      
+      if (progress < 1) requestAnimationFrame(update);
+      else resolve();
+    }
+    requestAnimationFrame(update);
+  });
+}
+
+// Drawing Primitives
+function drawLineProgress(ctx, A, B, progress) {
+  if (progress <= 0) return;
+  const endX = A.x + (B.x - A.x) * progress;
+  const endY = A.y + (B.y - A.y) * progress;
+  ctx.beginPath();
+  ctx.moveTo(A.x, A.y);
+  ctx.lineTo(endX, endY);
+  ctx.stroke();
+}
+
+function drawMainOutline(ctx, p1, p2, p3, progress, color) {
+  if (progress <= 0) return;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2;
+  drawLineProgress(ctx, p1, p2, progress);
+  drawLineProgress(ctx, p2, p3, progress);
+  drawLineProgress(ctx, p3, p1, progress);
+}
+
+function drawInvertedTriProgress(ctx, mA, mB, mC, progress) {
+  if (progress <= 0) return;
+  drawLineProgress(ctx, mA, mB, progress);
+  drawLineProgress(ctx, mB, mC, progress);
+  drawLineProgress(ctx, mC, mA, progress);
+}
+
+function fillTriProgress(ctx, pA, pB, pC, opacity, color) {
+  if (opacity <= 0) return;
+  ctx.save();
+  ctx.fillStyle = color;
+  ctx.globalAlpha = opacity;
+  ctx.beginPath();
+  ctx.moveTo(pA.x, pA.y);
+  ctx.lineTo(pB.x, pB.y);
+  ctx.lineTo(pC.x, pC.y);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawDeepPath(ctx, pA, pB, pC, pathArray, currentLevel, targetAnimDepth, color) {
+  if (currentLevel > targetAnimDepth) return;
+  
+  const mA = {x: (pA.x+pB.x)/2, y: (pA.y+pB.y)/2};
+  const mB = {x: (pB.x+pC.x)/2, y: (pB.y+pC.y)/2};
+  const mC = {x: (pC.x+pA.x)/2, y: (pC.y+pA.y)/2};
+  
+  let progress = 1;
+  if (currentLevel + 1 > targetAnimDepth) {
+    progress = targetAnimDepth % 1;
+    if (progress === 0 && currentLevel < targetAnimDepth) progress = 1;
+  }
+  
+  ctx.lineWidth = Math.max(0.3, 1.5 - currentLevel * 0.2);
+  ctx.strokeStyle = color;
+  drawInvertedTriProgress(ctx, mA, mB, mC, progress);
+  
+  if (progress < 0.99) return;
+  
+  const choice = pathArray[currentLevel - 1];
+  if (choice === 0) {
+    drawDeepPath(ctx, pA, mA, mC, pathArray, currentLevel + 1, targetAnimDepth, color);
+  } else if (choice === 1) {
+    drawDeepPath(ctx, mA, pB, mB, pathArray, currentLevel + 1, targetAnimDepth, color);
+  } else {
+    drawDeepPath(ctx, mC, mB, pC, pathArray, currentLevel + 1, targetAnimDepth, color);
+  }
+}
+
+function fillSierpinski(ctx, pA, pB, pC, currentLevel, targetAnimDepth, color) {
+  if (currentLevel > targetAnimDepth) return;
+  
+  const mA = {x: (pA.x+pB.x)/2, y: (pA.y+pB.y)/2};
+  const mB = {x: (pB.x+pC.x)/2, y: (pB.y+pC.y)/2};
+  const mC = {x: (pC.x+pA.x)/2, y: (pC.y+pA.y)/2};
+  
+  let progress = 1;
+  if (currentLevel + 1 > targetAnimDepth) {
+    progress = targetAnimDepth % 1;
+    if (progress === 0 && currentLevel < targetAnimDepth) progress = 1;
+  }
+  
+  ctx.lineWidth = Math.max(0.2, 1.5 - currentLevel * 0.2);
+  ctx.strokeStyle = color;
+  drawInvertedTriProgress(ctx, mA, mB, mC, progress);
+  
+  if (progress >= 0.99) {
+    fillSierpinski(ctx, pA, mA, mC, currentLevel + 1, targetAnimDepth, color);
+    fillSierpinski(ctx, mA, pB, mB, currentLevel + 1, targetAnimDepth, color);
+    fillSierpinski(ctx, mC, mB, pC, currentLevel + 1, targetAnimDepth, color);
+  }
+}
+
+function drawArrow(fromX, fromY, toX, toY, opacity, color) {
+  if (opacity <= 0.01) return;
+  ctx.save();
+  ctx.globalAlpha = opacity;
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.lineWidth = 2;
+  ctx.shadowBlur = 10;
+  ctx.shadowColor = color;
+  
+  ctx.beginPath();
+  ctx.moveTo(fromX, fromY);
+  ctx.lineTo(toX, toY);
+  ctx.stroke();
+  
+  const angle = Math.atan2(toY - fromY, toX - fromX);
+  ctx.beginPath();
+  ctx.moveTo(toX, toY);
+  ctx.lineTo(toX - 15 * Math.cos(angle - Math.PI/6), toY - 15 * Math.sin(angle - Math.PI/6));
+  ctx.lineTo(toX - 15 * Math.cos(angle + Math.PI/6), toY - 15 * Math.sin(angle + Math.PI/6));
+  ctx.closePath();
+  ctx.fill();
+  
+  ctx.restore();
+}
+
+function render() {
+  ctx.fillStyle = '#000000';
+  ctx.fillRect(0, 0, w, h);
+  
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  
+  if (state.glowIntensity > 0) {
+    ctx.shadowBlur = state.glowIntensity * 30;
+    ctx.shadowColor = 'rgba(255, 255, 255, 0.8)';
+  } else {
+    ctx.shadowBlur = 0;
+  }
+  
+  const cBL = `rgba(${Math.round(state.blR)},${Math.round(state.blG)},${Math.round(state.blB)},1)`;
+  const cTop = `rgba(${Math.round(state.topR)},${Math.round(state.topG)},${Math.round(state.topB)},1)`;
+  
+  // 1. Main Triangle
+  drawMainOutline(ctx, P1, P2, P3, state.mainProgress, 'rgba(255,255,255,1)');
+  
+  // 2. First Split (inverted triangle M1, M2, M3)
+  if (state.split1Progress > 0) {
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = 'rgba(255,255,255,1)';
+    drawInvertedTriProgress(ctx, M1, M2, M3, state.split1Progress);
+  }
+  
+  // 3. Highlight Bottom Left
+  if (state.blHighlight > 0) {
+    fillTriProgress(ctx, BLTri.pA, BLTri.pB, BLTri.pC, state.blHighlight * 0.15, cBL);
+  }
+  
+  // 4. Highlight Top & Deep Path
+  if (state.topHighlight > 0) {
+    fillTriProgress(ctx, TopTri.pA, TopTri.pB, TopTri.pC, state.topHighlight * 0.15, cTop);
+    
+    if (state.topPathDepth > 0) {
+      drawDeepPath(ctx, TopTri.pA, TopTri.pB, TopTri.pC, topDeepPath, 1, state.topPathDepth, cTop);
+    }
+  }
+  
+  // 5. Full Fractal (Morphing over BLTri, BRTri, TopTri)
+  if (state.fullDepth > 1) {
+    fillSierpinski(ctx, BLTri.pA, BLTri.pB, BLTri.pC, 2, state.fullDepth, 'rgba(255,255,255,1)');
+    fillSierpinski(ctx, BRTri.pA, BRTri.pB, BRTri.pC, 2, state.fullDepth, 'rgba(255,255,255,1)');
+    fillSierpinski(ctx, TopTri.pA, TopTri.pB, TopTri.pC, 2, state.fullDepth, 'rgba(255,255,255,1)');
+  }
+  
+  // Arrows
+  const blCenter = {x: (BLTri.pA.x + BLTri.pB.x + BLTri.pC.x)/3, y: (BLTri.pA.y + BLTri.pB.y + BLTri.pC.y)/3};
+  const topCenter = {x: (TopTri.pA.x + TopTri.pB.x + TopTri.pC.x)/3, y: (TopTri.pA.y + TopTri.pB.y + TopTri.pC.y)/3};
+  
+  drawArrow(blCenter.x - 120, blCenter.y + 40, blCenter.x - 30, blCenter.y, state.label1Alpha, cBL);
+  drawArrow(topCenter.x + 130, topCenter.y - 20, topCenter.x + 40, topCenter.y, state.label2Alpha, cTop);
+  
+  requestAnimationFrame(render);
+}
+
+// ─── Sequence Orchestrator ─────────────────────────────────────────
+let currentStep = 0;
+
+async function nextStep() {
+  if (currentStep === 0) {
+    // 1. Line drawing main triangle & split
+    animateObj(state, { mainProgress: 1 }, 1200).then(() => {
+      animateObj(state, { split1Progress: 1 }, 800);
+    });
+    currentStep++;
+    
+  } else if (currentStep === 1) {
+    // 2. Highlight "Учить полчаса"
+    animateObj(state, { blHighlight: 1, label1Alpha: 1 }, 800);
+    document.getElementById('label-short').classList.add('visible');
+    currentStep++;
+    
+  } else if (currentStep === 2) {
+    // 3. Highlight "Освоить технику" & Deep Path
+    animateObj(state, { topHighlight: 1 }, 800).then(() => {
+      animateObj(state, { topPathDepth: 8 }, 4500).then(() => {
+        animateObj(state, { label2Alpha: 1 }, 800);
+        document.getElementById('label-long').classList.add('visible');
+      });
+    });
+    currentStep++;
+    
+  } else if (currentStep === 3) {
+    // 4. Colorize Red/Green
+    document.getElementById('label-short-text').style.color = '#ff4757';
+    document.getElementById('label-long-text').style.color = '#2ed573';
+    
+    animateObj(state, {
+      blR: 255, blG: 71, blB: 87,
+      topR: 46, topG: 213, topB: 115
+    }, 1000);
+    currentStep++;
+    
+  } else if (currentStep === 4) {
+    // 5. Unify and build FULL Sierpinski fractal everywhere
+    document.getElementById('label-short').classList.remove('visible');
+    document.getElementById('label-long').classList.remove('visible');
+    
+    animateObj(state, { label1Alpha: 0, label2Alpha: 0 }, 600);
+    
+    animateObj(state, {
+      blR: 255, blG: 255, blB: 255,
+      topR: 255, topG: 255, topB: 255,
+      blHighlight: 0, topHighlight: 0,
+      glowIntensity: 1
+    }, 1500).then(() => {
+      // We animate fullDepth from 1 (split1) up to 7
+      animateObj(state, { fullDepth: 7 }, 6000);
+    });
+    currentStep++;
+  }
+}
+
+// Bind spacebar to nextStep
+window.addEventListener('keydown', (e) => {
+  if (e.code === 'Space') {
+    e.preventDefault();
+    nextStep();
+  }
+});
+
+generatePath();
+resize();
+render();
+
+// Auto-start step 0 after 1s
+setTimeout(() => {
+  if(currentStep === 0) nextStep();
+}, 1000);
+
+</script>
+</body>
+</html>

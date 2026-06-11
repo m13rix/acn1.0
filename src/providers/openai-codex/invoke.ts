@@ -46,6 +46,13 @@ export function buildCodexRequest(
     stream: config.stream ?? false,
     include: reasoning ? ['reasoning.encrypted_content'] : [],
   };
+  const cacheOptions = getPromptCacheOptions(config.providerOptions);
+  if (cacheOptions.promptCacheKey) {
+    request.prompt_cache_key = cacheOptions.promptCacheKey;
+  }
+  if (cacheOptions.promptCacheRetention) {
+    request.prompt_cache_retention = cacheOptions.promptCacheRetention;
+  }
 
   Object.keys(request).forEach((key) => {
     if (request[key] === undefined) {
@@ -54,6 +61,38 @@ export function buildCodexRequest(
   });
 
   return request;
+}
+
+function getPromptCacheOptions(providerOptions: Record<string, unknown> | undefined): {
+  promptCacheKey?: string;
+  promptCacheRetention?: string;
+} {
+  const openai = providerOptions?.['openai'];
+  const openaiCodex = providerOptions?.['openaiCodex'];
+  const candidates = [openaiCodex, openai];
+
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
+      continue;
+    }
+    const options = candidate as Record<string, unknown>;
+    const promptCacheKey = typeof options['promptCacheKey'] === 'string'
+      ? options['promptCacheKey']
+      : typeof options['prompt_cache_key'] === 'string'
+        ? options['prompt_cache_key']
+        : undefined;
+    const promptCacheRetention = typeof options['promptCacheRetention'] === 'string'
+      ? options['promptCacheRetention']
+      : typeof options['prompt_cache_retention'] === 'string'
+        ? options['prompt_cache_retention']
+        : undefined;
+
+    if (promptCacheKey || promptCacheRetention) {
+      return { promptCacheKey, promptCacheRetention };
+    }
+  }
+
+  return {};
 }
 
 export function parseCodexResponse(response: any): ProviderToolResponse {
@@ -106,6 +145,10 @@ export function parseCodexResponse(response: any): ProviderToolResponse {
           promptTokens: Number(response.usage.input_tokens ?? 0),
           completionTokens: Number(response.usage.output_tokens ?? 0),
           totalTokens: Number(response.usage.total_tokens ?? 0),
+          cachedPromptTokens: Number(response.usage.input_tokens_details?.cached_tokens ?? 0),
+          cacheWriteTokens: Number(response.usage.input_tokens_details?.cache_write_tokens ?? 0),
+          reasoningTokens: Number(response.usage.output_tokens_details?.reasoning_tokens ?? 0),
+          raw: response.usage,
         }
       : undefined,
   };

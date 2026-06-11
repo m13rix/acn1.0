@@ -13,4 +13,8 @@ description: |
     Example:
     `const result = await utils.llm("Extract fields", { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"], additionalProperties: false }, "./screen.png");`
 
+  - `utils.context.view(step: number): Promise<string>`
+    Shows the full adaptive context step when previous tool/reasoning content was summarized.
+    Example: `console.log(await utils.context.view(7));`
+
 module: index.ts

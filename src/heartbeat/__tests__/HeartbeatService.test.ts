@@ -59,6 +59,43 @@ async function writeClockSensor(sensorsDir: string): Promise<void> {
 name: clock
 description: Time-based heartbeat sensor.
 events:
+  - name: every
+    description: Fires on arbitrary supported intervals.
+    argsSchema:
+      type: array
+      items:
+        - type: string
+      minItems: 1
+      maxItems: 1
+    payloadSchema:
+      type: object
+      additionalProperties: false
+      properties:
+        iso:
+          type: string
+        localeTime:
+          type: string
+        localeDate:
+          type: string
+        weekday:
+          type: string
+        hour:
+          type: integer
+        minute:
+          type: integer
+        second:
+          type: integer
+        timestamp:
+          type: integer
+      required:
+        - iso
+        - localeTime
+        - localeDate
+        - weekday
+        - hour
+        - minute
+        - second
+        - timestamp
   - name: schedule
     description: Fires on configured local weekdays and HH:MM times.
     argsSchema:
@@ -276,7 +313,7 @@ test('fires clock schedule bindings on matching local weekday and time', async (
   });
 
   try {
-    await service.initialize({ enableWatcher: false });
+    await service.initialize({ enableWatcher: true });
 
     const schedule = {
       rules: [
@@ -348,6 +385,134 @@ test('fires clock schedule bindings on matching local weekday and time', async (
     const afterMiss = JSON.parse(await readFile(path.join(layout.dataDir, 'bindings.json'), 'utf-8')) as Array<Record<string, any>>;
     const missBinding = afterMiss.find(binding => binding.id === 'clock-schedule');
     assert.equal((missBinding?.metadata as any)?.fired, false);
+  } finally {
+    await service.stop();
+    await rm(layout.root, { recursive: true, force: true });
+  }
+});
+
+test('fires clock every bindings for arbitrary compound intervals without duplicate executions per second', async () => {
+  const layout = await createTempHeartbeatLayout();
+  await writeClockSensor(layout.sensorsDir);
+
+  const service = new HeartbeatService({
+    dataDir: layout.dataDir,
+    sensorsDir: layout.sensorsDir,
+  });
+
+  try {
+    await service.initialize({ enableWatcher: false });
+
+    await service.bind(
+      service.createEventRef('clock', 'every', ['4h']),
+      async (event: any, ctx: any) => {
+        await ctx.rebind({
+          metadata: {
+            lastOccurredAt: event.occurredAt,
+          },
+        });
+      },
+      { id: 'clock-every-4h', metadata: {} }
+    );
+
+    await service.bind(
+      service.createEventRef('clock', 'every', ['1h30m']),
+      async (event: any, ctx: any) => {
+        await ctx.rebind({
+          metadata: {
+            lastOccurredAt: event.occurredAt,
+            interval: event.payload?.every?.interval,
+            milliseconds: event.payload?.every?.milliseconds,
+          },
+        });
+      },
+      { id: 'clock-every-90m', metadata: {} }
+    );
+
+    const fourHourDate = new Date(2026, 0, 7, 4, 0, 0, 0);
+    await service.dispatchEvent({
+      sensor: 'clock',
+      event: 'every',
+      args: ['1s'],
+      payload: {
+        iso: fourHourDate.toISOString(),
+        localeTime: fourHourDate.toLocaleTimeString(),
+        localeDate: fourHourDate.toLocaleDateString(),
+        weekday: fourHourDate.toLocaleDateString('en-US', { weekday: 'long' }),
+        hour: fourHourDate.getHours(),
+        minute: fourHourDate.getMinutes(),
+        second: fourHourDate.getSeconds(),
+        timestamp: fourHourDate.getTime(),
+      },
+      occurredAt: fourHourDate.toISOString(),
+    });
+    await sleep(400);
+
+    const after4h = JSON.parse(await readFile(path.join(layout.dataDir, 'bindings.json'), 'utf-8')) as Array<Record<string, any>>;
+    const binding4h = after4h.find(binding => binding.id === 'clock-every-4h');
+    const binding90mAfter4h = after4h.find(binding => binding.id === 'clock-every-90m');
+    assert.equal(binding4h?.metadata?.lastOccurredAt, fourHourDate.toISOString());
+    assert.equal(binding90mAfter4h?.metadata?.lastOccurredAt, undefined);
+
+    const ninetyMinuteDate = new Date(2026, 0, 7, 4, 30, 0, 0);
+    const ninetyMinutePayload = {
+      iso: ninetyMinuteDate.toISOString(),
+      localeTime: ninetyMinuteDate.toLocaleTimeString(),
+      localeDate: ninetyMinuteDate.toLocaleDateString(),
+      weekday: ninetyMinuteDate.toLocaleDateString('en-US', { weekday: 'long' }),
+      hour: ninetyMinuteDate.getHours(),
+      minute: ninetyMinuteDate.getMinutes(),
+      second: ninetyMinuteDate.getSeconds(),
+      timestamp: ninetyMinuteDate.getTime(),
+    };
+
+    await service.dispatchEvent({
+      sensor: 'clock',
+      event: 'every',
+      args: ['1s'],
+      payload: ninetyMinutePayload,
+      occurredAt: ninetyMinuteDate.toISOString(),
+    });
+
+    await service.dispatchEvent({
+      sensor: 'clock',
+      event: 'every',
+      args: ['5m'],
+      payload: ninetyMinutePayload,
+      occurredAt: ninetyMinuteDate.toISOString(),
+    });
+    await sleep(400);
+
+    const after90m = JSON.parse(await readFile(path.join(layout.dataDir, 'bindings.json'), 'utf-8')) as Array<Record<string, any>>;
+    const binding90m = after90m.find(binding => binding.id === 'clock-every-90m');
+    const binding4hAfter90m = after90m.find(binding => binding.id === 'clock-every-4h');
+    assert.equal(binding90m?.metadata?.lastOccurredAt, ninetyMinuteDate.toISOString());
+    assert.equal(binding90m?.metadata?.interval, '1h30m');
+    assert.equal(binding90m?.metadata?.milliseconds, 5_400_000);
+    assert.equal(binding4hAfter90m?.metadata?.lastOccurredAt, fourHourDate.toISOString());
+
+    const secondNinetyMinuteDate = new Date(2026, 0, 7, 6, 0, 0, 0);
+    await service.dispatchEvent({
+      sensor: 'clock',
+      event: 'every',
+      args: ['1s'],
+      payload: {
+        iso: secondNinetyMinuteDate.toISOString(),
+        localeTime: secondNinetyMinuteDate.toLocaleTimeString(),
+        localeDate: secondNinetyMinuteDate.toLocaleDateString(),
+        weekday: secondNinetyMinuteDate.toLocaleDateString('en-US', { weekday: 'long' }),
+        hour: secondNinetyMinuteDate.getHours(),
+        minute: secondNinetyMinuteDate.getMinutes(),
+        second: secondNinetyMinuteDate.getSeconds(),
+        timestamp: secondNinetyMinuteDate.getTime(),
+      },
+      occurredAt: secondNinetyMinuteDate.toISOString(),
+    });
+    await sleep(400);
+
+    const afterSecond90m = JSON.parse(await readFile(path.join(layout.dataDir, 'bindings.json'), 'utf-8')) as Array<Record<string, any>>;
+    const updated90m = afterSecond90m.find(binding => binding.id === 'clock-every-90m');
+    assert.equal(updated90m?.metadata?.lastOccurredAt, secondNinetyMinuteDate.toISOString());
   } finally {
     await service.stop();
     await rm(layout.root, { recursive: true, force: true });

@@ -8,7 +8,12 @@ export interface ISandbox {
     /**
      * Initialize the sandbox with the given tools
      */
-    initialize(tools: LoadedTool[], skillsTable?: string, memoryConfig?: AgentMemoryConfig): Promise<void>;
+    initialize(tools: LoadedTool[], memoryConfig?: AgentMemoryConfig): Promise<void>;
+
+    /**
+     * Optional best-effort warm-up for sandboxes with reusable runtimes.
+     */
+    warmUp?(): Promise<void>;
 
     /**
      * Execute code in the sandbox

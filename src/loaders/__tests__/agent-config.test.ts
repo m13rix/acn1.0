@@ -6,7 +6,7 @@ import { join } from 'path';
 import { AgentLoader } from '../AgentLoader.js';
 
 async function withTempDir(run: (root: string) => Promise<void>): Promise<void> {
-  const root = await mkdtemp(join(tmpdir(), 'acn-agent-config-'));
+  const root = await mkdtemp(join(tmpdir(), 'telos-agent-config-'));
   try {
     await run(root);
   } finally {
@@ -60,5 +60,31 @@ test('AgentLoader skips invalid launchDefault values', async () => {
     const agents = await loader.loadAll();
 
     assert.equal(agents.length, 0);
+  });
+});
+
+test('AgentLoader accepts preserveSession and requireFinishHeartbeat flags', async () => {
+  await withTempDir(async (root) => {
+    const agentDir = join(root, 'agents', 'persisted');
+    await mkdir(join(agentDir, 'prompts'), { recursive: true });
+    await writeFile(join(agentDir, 'agent.yaml'), [
+      'name: persisted',
+      'model: test-model',
+      'systemPrompt: prompts/system.md',
+      'tools: []',
+      'loop: provider-tools',
+      'syntax: markdown',
+      'preserveSession: true',
+      'requireFinish: true',
+      'requireFinishHeartbeat: false',
+    ].join('\n'));
+    await writeFile(join(agentDir, 'prompts', 'system.md'), 'system');
+
+    const loader = new AgentLoader(join(root, 'agents'));
+    const loaded = await loader.loadByName('persisted');
+
+    assert.ok(loaded);
+    assert.equal(loaded?.config.preserveSession, true);
+    assert.equal(loaded?.config.requireFinishHeartbeat, false);
   });
 });

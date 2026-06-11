@@ -18,3 +18,8 @@ test('normalizeAgentRequest returns a clear error for unsupported payloads', () 
   const result = normalizeAgentRequest({ foo: 'bar' }, 'call');
   assert.match(result, /expects a string or an object/i);
 });
+
+test('normalizeAgentRequest supports resume method name in errors', () => {
+  const result = normalizeAgentRequest({ foo: 'bar' }, 'resume');
+  assert.match(result, /agents\.resume\(request\)/i);
+});

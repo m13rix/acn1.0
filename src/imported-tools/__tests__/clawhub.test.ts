@@ -4,13 +4,13 @@ import { mkdtemp, mkdir, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
-const TEST_ROOT = join(tmpdir(), 'acn-imported-tools-tests');
-process.env.ACN_IMPORTED_TOOLS_ROOT = TEST_ROOT;
+const TEST_ROOT = join(tmpdir(), 'telos-imported-tools-tests');
+process.env.TELOS_IMPORTED_TOOLS_ROOT = TEST_ROOT;
 process.env.IMPORTED_TOOLS_DOCS_MODE = 'test';
 process.env.IMPORTED_TOOLS_SKIP_GEMINI = '1';
 
 async function withTempSkill(run: (dir: string) => Promise<void>, skillContent: string): Promise<void> {
-  const root = await mkdtemp(join(tmpdir(), 'acn-clawhub-'));
+  const root = await mkdtemp(join(tmpdir(), 'telos-clawhub-'));
   try {
     await mkdir(join(root, 'bin'), { recursive: true });
     await writeFile(join(root, 'package.json'), JSON.stringify({

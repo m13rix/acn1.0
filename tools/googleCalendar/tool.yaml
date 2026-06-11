@@ -1,0 +1,90 @@
+name: googleCalendar
+description: |
+  Full Google Calendar integration with automatic auth, calendar/event CRUD, ACL, settings,
+  colors, freebusy, watch channels, and a raw API escape hatch.
+
+  Authentication:
+  - Automatic on first real call, like `memory.notes` Google Keep auth.
+  - In Telegram/API context it automatically sends an auth link and asks for the final redirect URL.
+  - In local context it tries to open a browser and receive the callback automatically, with manual paste fallback.
+  - OAuth client config can come from env or be saved via `googleCalendar.auth.configure(...)`.
+
+  Useful auth methods:
+  - `googleCalendar.auth.status()`
+  - `googleCalendar.auth.login(force?)`
+  - `googleCalendar.auth.listProfiles()`
+  - `googleCalendar.auth.use(profileIdOrEmail)`
+  - `googleCalendar.auth.logout(profileIdOrEmail?)`
+  - `googleCalendar.auth.configure({ clientId, clientSecret?, redirectUri?, scopes? })`
+  - `googleCalendar.auth.clientConfig()`
+
+  Calendars:
+  - `googleCalendar.calendars.list(options?)`
+  - `googleCalendar.calendars.get(calendarId?)`
+  - `googleCalendar.calendars.primary()`
+  - `googleCalendar.calendars.create(body)`
+  - `googleCalendar.calendars.update(calendarId, body)`
+  - `googleCalendar.calendars.patch(calendarId, body)`
+  - `googleCalendar.calendars.delete(calendarId)`
+  - `googleCalendar.calendars.clear(calendarId)`
+
+  Calendar list / subscriptions:
+  - `googleCalendar.calendarList.list(options?)`
+  - `googleCalendar.calendarList.get(calendarId?)`
+  - `googleCalendar.calendarList.insert(body)`
+  - `googleCalendar.calendarList.update(calendarId, body)`
+  - `googleCalendar.calendarList.patch(calendarId, body)`
+  - `googleCalendar.calendarList.delete(calendarId)`
+
+  Events:
+  - `googleCalendar.events.list(calendarId?, options?)`
+  - `googleCalendar.events.upcoming(calendarId?, options?)`
+  - `googleCalendar.events.find(query, calendarId?, options?)`
+  - `googleCalendar.events.get(calendarId?, eventId, options?)`
+  - `googleCalendar.events.create(calendarId?, event, options?)`
+  - `googleCalendar.events.quickAdd(calendarId?, text, options?)`
+  - `googleCalendar.events.import(calendarId?, event, options?)`
+  - `googleCalendar.events.update(calendarId?, eventId, event, options?)`
+  - `googleCalendar.events.patch(calendarId?, eventId, patch, options?)`
+  - `googleCalendar.events.delete(calendarId?, eventId, options?)`
+  - `googleCalendar.events.move(calendarId?, eventId, destinationCalendarId, options?)`
+  - `googleCalendar.events.instances(calendarId?, eventId, options?)`
+
+  Event convenience:
+  - All `*.list(...)` methods return an array first, so `.length`, `.map(...)`, `.slice(...)` work naturally.
+  - The same list arrays also keep pagination metadata on the array object itself:
+    `items`, `nextPageToken`, `nextSyncToken`, `summary`, `timeZone`, `accessRole`, `etag`
+  - Event handles returned by `get/create/list/...` expose methods:
+    `get()`, `update(body, options?)`, `patch(body, options?)`, `delete(options?)`,
+    `move(destinationCalendarId, options?)`, `cancel(options?)`, `instances(options?)`
+  - For `events.create/update/patch`, event input supports:
+    - `start` / `end` as ISO strings, `Date`, or `{ dateTime, timeZone }`
+    - `allDay?: boolean`
+    - `attendees?: string[] | attendee objects`
+    - `meet?: true | { requestId?, conferenceSolutionKeyType? }`
+
+  ACL / settings / misc:
+  - `googleCalendar.acl.list(calendarId?, options?)`
+  - `googleCalendar.acl.get(calendarId?, ruleId)`
+  - `googleCalendar.acl.create(calendarId?, rule, options?)`
+  - `googleCalendar.acl.update(calendarId?, ruleId, rule, options?)`
+  - `googleCalendar.acl.patch(calendarId?, ruleId, rule, options?)`
+  - `googleCalendar.acl.delete(calendarId?, ruleId)`
+  - `googleCalendar.settings.list(options?)`
+  - `googleCalendar.settings.get(settingId)`
+  - `googleCalendar.colors.get()`
+  - `googleCalendar.freeBusy.query(body)`
+  - `googleCalendar.channels.stop(body)`
+
+  Watches:
+  - `googleCalendar.calendars.watch(channel, options?)`
+  - `googleCalendar.calendarList.watch(channel, options?)`
+  - `googleCalendar.events.watch(calendarId?, channel, options?)`
+  - `googleCalendar.acl.watch(calendarId?, channel, options?)`
+  - `googleCalendar.settings.watch(channel, options?)`
+
+  Escape hatch:
+  - `googleCalendar.api.request(method, path, options?)`
+    Example:
+    `googleCalendar.api.request("GET", "/users/me/settings")`
+module: index.ts

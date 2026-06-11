@@ -1,0 +1,31 @@
+name: improvement
+description: |
+  Public state-management API for the self-improver subsystem.
+
+  - `await improvement.getState(recentAuditLimit?)`
+    Returns dossier summary, retrieval awareness, alignment score/drift, backlog items, recent audits, pending approvals, linked Codex thread refs, and state file paths.
+
+  - `await improvement.saveInsight(input)`
+    Persists a principle, preference, constraint, system fact, or lesson.
+    Optional flags:
+    - `syncMemory: true`
+
+  - `await improvement.proposeInitiative(input)`
+    Creates a backlog initiative with origin `user | self`, rationale, impact, approval state, blockers, tests, and Codex thread refs.
+
+  - `await improvement.updateInitiative(id, patch)`
+    Updates initiative status, approval state, blockers, tests, thread refs, and final outcome.
+
+  - `await improvement.recordAudit(input)`
+    Records a manual or daily audit cycle with findings and linked initiative ids.
+
+  - `await improvement.recordAlignmentAssessment(input)`
+    Records a lightweight alignment scorecard entry across the canonical dimensions:
+    - `telos-mission`
+    - `quality-execution`
+    - `retrieval-awareness`
+    - `hidden-misalignment`
+    - `approval-trajectory`
+    Drift from the previous entry is computed automatically and mirrored into the scorecard.
+
+module: index.ts

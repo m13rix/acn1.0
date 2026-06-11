@@ -23,10 +23,9 @@ tools:
   - memory
 
 memory:
-  enabled: false
+  enabled: true
 
 loop: provider-tools
 syntax: markdown
-skillsTable: strategy_base_probabilist
 injectAgentsList: true
 requireFinish: true

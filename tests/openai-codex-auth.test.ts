@@ -18,7 +18,7 @@ function createJwt(payload: Record<string, unknown>): string {
 }
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'acn-codex-'));
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'telos-codex-'));
   try {
     return await fn(dir);
   } finally {

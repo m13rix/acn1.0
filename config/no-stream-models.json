@@ -15,12 +15,37 @@
       "reason": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"data\",\n      \"choices\",\n      0,\n      \"delta\",\n      \"tool_calls\",\n      0,\n      \"function\",\n      \"name\"\n    ],\n    \"message\": \"Invalid input: expected string, received null\"\n  }\n]",
       "addedAt": "2026-02-27T13:56:03.862Z",
       "failCount": 1
+    },
+    "qwen/qwen3.6-plus:free": {
+      "reason": "Provider returned error",
+      "addedAt": "2026-04-07T12:42:10.624Z",
+      "failCount": 1
+    },
+    "moonshotai/kimi-k2.6": {
+      "reason": "moonshotai/kimi-k2.6 is not a valid model ID",
+      "addedAt": "2026-04-20T16:33:46.325Z",
+      "failCount": 1
+    },
+    "google/gemma-4-31b-it:free": {
+      "reason": "Provider returned error",
+      "addedAt": "2026-04-21T15:06:16.714Z",
+      "failCount": 1
+    },
+    "kwaipilot/kat-coder-pro-v2": {
+      "reason": "API error occurred: Status 402\nBody: {\"error\":{\"message\":\"This request requires more credits, or fewer max_tokens. You requested up to 65536 tokens, but can only afford 33333. To increase, visit https://openrouter.ai/settings/credits and upgrade to a paid account\",\"code\":402,\"metadata\":{\"provider_name\":null}},\"user_id\":\"user_3CiYGE3AnWLEHWnZGpAYeoKho7b\"}",
+      "addedAt": "2026-04-22T14:59:19.006Z",
+      "failCount": 1
     }
   },
   "ollama": {
     "moonshotai/kimi-k2.5": {
       "reason": "model 'moonshotai/kimi-k2.5' not found",
       "addedAt": "2026-03-01T11:03:16.516Z",
+      "failCount": 1
+    },
+    "qwen3.6": {
+      "reason": "terminated",
+      "addedAt": "2026-04-22T14:35:10.886Z",
       "failCount": 1
     }
   }

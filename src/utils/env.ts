@@ -15,7 +15,7 @@ import { config } from 'dotenv';
  * 
  * @example
  * ```ts
- * import { loadEnv } from 'acn/utils/env';
+ * import { loadEnv } from 'telos/utils/env';
  * loadEnv(); // Loads .env from project root
  * ```
  */

@@ -1,15 +1,14 @@
 import type { LoadedAgent, LoadedTool, Provider, SyntaxType, LoopType } from '../types/index.js';
 import { ToolLoader } from '../loaders/ToolLoader.js';
-import { getProvider } from '../providers/index.js';
 import { getSyntax } from '../syntax/index.js';
 import { getLoop } from '../loops/index.js';
 import type { SessionComponents } from './Session.js';
+import { createTextRuntimePlaceholderProvider } from '../providers/ai-sdk-text.js';
 
 export function getAugmentedToolNames(agent: LoadedAgent, extraToolNames: string[] = []): string[] {
   const toolNames = [...(agent.config.tools || [])];
   if (!toolNames.includes('files')) toolNames.push('files');
-  if (agent.config.skillsTable && !toolNames.includes('skills')) toolNames.push('skills');
-  if (agent.config.memory && agent.config.memory.enabled !== false && !toolNames.includes('memory')) {
+  if (agent.config.memory?.enabled !== false && !toolNames.includes('memory')) {
     toolNames.push('memory');
   }
 
@@ -36,9 +35,9 @@ export function resolveTextAgentRuntime(agent: LoadedAgent): {
   loop: LoopType;
 } {
   return {
-    provider: getProvider(agent.config.provider || 'openrouter'),
-    syntax: getSyntax(agent.config.syntax),
-    loop: getLoop(agent.config.loop),
+    provider: createTextRuntimePlaceholderProvider(agent.config.provider || 'openrouter'),
+    syntax: getSyntax('markdown'),
+    loop: getLoop('provider-tools'),
   };
 }
 

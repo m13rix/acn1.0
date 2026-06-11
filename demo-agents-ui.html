@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ACN1.0 — Оркестрация Агентов</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg: #000000;
+  --surface: #0a0a0a;
+  --surface-hover: #141414;
+  --border: rgba(255,255,255,0.12);
+  --border-light: rgba(255,255,255,0.3);
+  
+  --text: #ffffff;
+  --text-dim: rgba(255,255,255,0.5);
+  
+  /* Vibrant Accents */
+  --accent-cyan: #00E5FF;
+  --accent-magenta: #FF00FF;
+  --accent-yellow: #FFE600;
+  --accent-green: #00FF66;
+}
+
+html,body{height:100%;font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);overflow:hidden}
+body{display:flex;flex-direction:column}
+
+/* Header */
+.header{padding:20px 40px;display:flex;align-items:center;gap:16px;border-bottom:1px solid var(--border);z-index:10;background:var(--bg)}
+.header .logo{font-size:14px;font-weight:700;letter-spacing:4px;color:var(--text);text-transform:uppercase}
+.header .sep{width:1px;height:20px;background:var(--border)}
+.header .subtitle{font-size:13px;color:var(--text-dim);font-weight:400;letter-spacing:1px}
+.status-dot{width:8px;height:8px;border-radius:50%;background:var(--accent-green);margin-left:auto;animation:pulse-dot 2s infinite}
+.status-label{font-size:12px;color:var(--accent-green);font-weight:500;letter-spacing:1px;text-transform:uppercase}
+
+@keyframes pulse-dot{0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(0,255,102,.4)}50%{opacity:.7;box-shadow:0 0 0 6px rgba(0,255,102,0)}}
+
+/* Main layout */
+.main{flex:1;display:flex;position:relative;overflow:hidden}
+
+/* Grid Background */
+.grid-bg{
+  position:absolute;inset:0;z-index:0;
+  background-size:40px 40px;
+  background-image:linear-gradient(to right, rgba(255,255,255,0.03) 1px, transparent 1px),
+                   linear-gradient(to bottom, rgba(255,255,255,0.03) 1px, transparent 1px);
+  mask-image: radial-gradient(circle at center, black 40%, transparent 80%);
+  -webkit-mask-image: radial-gradient(circle at center, black 40%, transparent 80%);
+}
+
+/* Canvas for connections */
+#connectionCanvas{position:absolute;inset:0;z-index:1;pointer-events:none}
+
+/* Agent cards area */
+.agents-area{flex:1;position:relative;z-index:2;padding:40px}
+
+/* Agent Node */
+.agent-node{
+  position:absolute;width:270px;background:var(--surface);border:1px solid var(--border);
+  border-radius:12px;padding:20px;cursor:default;opacity:0;transform:scale(.8);
+  transition:all .5s cubic-bezier(.16, 1, 0.3, 1);
+  box-shadow:0 4px 30px rgba(0,0,0,.5);
+}
+.agent-node.visible{opacity:1;transform:scale(1)}
+.agent-node:hover{border-color:var(--border-light);box-shadow:0 0 30px rgba(255,255,255,0.08)}
+.agent-node .node-header{display:flex;align-items:center;gap:12px;margin-bottom:12px}
+.agent-node .node-icon{width:38px;height:38px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0;background:#111;border:1px solid var(--border)}
+.agent-node .node-name{font-size:14px;font-weight:600;letter-spacing:.5px}
+.agent-node .node-model{font-size:10px;color:var(--text-dim);font-family:'JetBrains Mono',monospace;margin-top:2px}
+.agent-node .node-desc{font-size:12px;color:var(--text-dim);line-height:1.5;margin-bottom:12px}
+.agent-node .node-tools{display:flex;flex-wrap:wrap;gap:4px}
+.agent-node .tool-tag{font-size:9px;padding:3px 8px;border-radius:4px;background:rgba(255,255,255,0.03);color:var(--text-dim);font-family:'JetBrains Mono',monospace;border:1px solid var(--border)}
+
+/* Active Accent Highlights */
+.agent-core{border-color:rgba(255,255,255,0.3)}
+.agent-core .node-icon{border-color:rgba(255,255,255,0.5);color:#fff}
+.agent-sub{border-style:dashed}
+
+/* Log Panel */
+.terminal-panel{
+  width:420px;border-left:1px solid var(--border);background:#050505;
+  display:flex;flex-direction:column;z-index:5;
+}
+.term-header{
+  padding:16px 24px;border-bottom:1px solid var(--border);
+  font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text-dim);
+  display:flex;align-items:center;gap:12px;text-transform:uppercase;letter-spacing:1px;
+}
+.term-entries{flex:1;overflow-y:auto;padding:20px 24px;font-family:'JetBrains Mono',monospace;font-size:12px;line-height:1.6}
+.term-entry{
+  margin-bottom:12px;opacity:0;transform:translateX(20px);
+  animation:slideInLog .4s forwards;
+}
+.term-entry .log-time{color:var(--text-dim);margin-right:12px}
+.term-entry .log-action{font-weight:600}
+.term-entry .log-detail{color:var(--text-dim);margin-top:4px;font-size:11px}
+
+.term-entry.type-call .log-action{color:var(--accent-cyan)}
+.term-entry.type-create .log-action{color:var(--accent-magenta)}
+.term-entry.type-response .log-action{color:var(--accent-yellow)}
+.term-entry.type-thinking .log-action{color:var(--text)}
+
+@keyframes slideInLog{to{opacity:1;transform:translateX(0)}}
+
+/* Thinking indicator */
+.thinking{display:inline-flex;gap:3px;margin-left:6px;vertical-align:middle}
+.thinking span{width:4px;height:4px;border-radius:50%;background:#fff;animation:blink 1.4s infinite both}
+.thinking span:nth-child(2){animation-delay:.2s}
+.thinking span:nth-child(3){animation-delay:.4s}
+@keyframes blink{0%,80%,100%{opacity:.2;transform:scale(.8)}40%{opacity:1;transform:scale(1.1)}}
+
+/* Sub-agent spawn ring */
+.spawn-ring{
+  position:absolute;border:1px solid var(--accent-magenta);border-radius:50%;
+  opacity:0;pointer-events:none;z-index:10;
+}
+.spawn-ring.active{animation:spawnExpand .8s cubic-bezier(0.16, 1, 0.3, 1) forwards}
+@keyframes spawnExpand{0%{opacity:.8;transform:scale(0)}60%{opacity:.5;transform:scale(1)}100%{opacity:0;transform:scale(1.3)}}
+
+/* Bottom bar */
+.bottom-bar{
+  padding:16px 40px;border-top:1px solid var(--border);display:flex;align-items:center;gap:32px;
+  font-size:12px;color:var(--text-dim);font-family:'JetBrains Mono',monospace;z-index:10;background:var(--bg);
+}
+.metric span{color:var(--text);font-weight:600;margin-left:8px}
+
+/* Scrollbar */
+::-webkit-scrollbar{width:4px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:4px}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="logo">ACN 1.0</div>
+  <div class="sep"></div>
+  <div class="subtitle">Агентная Когнитивная Сеть — Оркестрация Агентов</div>
+  <div class="status-dot"></div>
+  <div class="status-label">Активна</div>
+</div>
+
+<div class="main">
+  <div class="grid-bg"></div>
+  <canvas id="connectionCanvas"></canvas>
+  <div class="agents-area" id="agentsArea"></div>
+  <div class="terminal-panel">
+    <div class="term-header">
+      <span>Лог Выполнения</span>
+      <span style="margin-left:auto">TTY2</span>
+    </div>
+    <div class="term-entries" id="termEntries"></div>
+  </div>
+</div>
+
+<div class="bottom-bar">
+  <div class="metric">Агенты: <span id="metricAgents">0</span></div>
+  <div class="metric">Вызовы: <span id="metricCalls">0</span></div>
+  <div class="metric">Глубина: <span id="metricDepth">0</span></div>
+  <div class="metric">Задержка: <span id="metricLatency">—</span></div>
+  <div class="metric" style="margin-left:auto">Сессия: <span>acn_demo_01</span></div>
+</div>
+
+<script>
+// ─── Config ─────────────────────────────────────────────────────────
+const AGENTS = [
+  { id:'core', name:'TELOS', icon:'⚡', model:'deepseek-v4-flash', desc:'Основной агент-оркестратор системы', tools:['search','message','memory','agents'], cls:'agent-core', x:80, y:180 },
+  { id:'researcher', name:'Researcher', icon:'🔍', model:'auto → gpt-5.4-mini', desc:'Глубокий поиск и анализ информации', tools:['search','files','memory'], cls:'agent-researcher', x:480, y:80 },
+  { id:'analyzer', name:'Analyzer', icon:'📊', model:'auto → deepseek-v4', desc:'Анализ данных и поиск инсайтов', tools:['files','memory','search'], cls:'agent-analyzer', x:480, y:320 },
+  { id:'strategy', name:'Strategy', icon:'🎯', model:'auto → o4-mini', desc:'Стратегическое планирование и оптимизация', tools:['memory','search','plan'], cls:'agent-strategy', x:80, y:440 },
+];
+
+let agentCount = 0, callCount = 0, maxDepth = 0;
+const canvas = document.getElementById('connectionCanvas');
+const ctx = canvas.getContext('2d');
+const area = document.getElementById('agentsArea');
+const termEl = document.getElementById('termEntries');
+const activeConnections = [];
+let time = 0;
+
+function resize() {
+  canvas.width = canvas.parentElement.clientWidth;
+  canvas.height = canvas.parentElement.clientHeight;
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ─── Create agent node DOM ─────────────────────────────────────────
+function createAgentNode(agent) {
+  const el = document.createElement('div');
+  el.className = `agent-node ${agent.cls}`;
+  el.id = `node-${agent.id}`;
+  el.style.left = agent.x + 'px';
+  el.style.top = agent.y + 'px';
+  el.innerHTML = `
+    <div class="node-header">
+      <div class="node-icon">${agent.icon}</div>
+      <div>
+        <div class="node-name">${agent.name}</div>
+        <div class="node-model">${agent.model}</div>
+      </div>
+    </div>
+    <div class="node-desc">${agent.desc}</div>
+    <div class="node-tools">${agent.tools.map(t => `<span class="tool-tag">${t}</span>`).join('')}</div>
+  `;
+  area.appendChild(el);
+  return el;
+}
+
+// ─── Log entries ────────────────────────────────────────────────────
+function pad(n) { return n < 10 ? '0'+n : n; }
+function addLog(type, action, detail) {
+  const entry = document.createElement('div');
+  entry.className = `term-entry type-${type}`;
+  const d = new Date();
+  const ts = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${String(d.getMilliseconds()).padStart(3,'0')}`;
+  entry.innerHTML = `
+    <span class="log-time">${ts}</span>
+    <span class="log-action">${action}</span>
+    ${detail ? `<div class="log-detail">${detail}</div>` : ''}
+  `;
+  termEl.appendChild(entry);
+  termEl.scrollTop = termEl.scrollHeight;
+}
+
+// ─── Update metrics ─────────────────────────────────────────────────
+function updateMetrics() {
+  document.getElementById('metricAgents').textContent = agentCount;
+  document.getElementById('metricCalls').textContent = callCount;
+  document.getElementById('metricDepth').textContent = maxDepth;
+}
+
+// ─── Draw connections ───────────────────────────────────────────────
+function getNodeCenter(id) {
+  const el = document.getElementById(`node-${id}`);
+  if (!el) return null;
+  const r = el.getBoundingClientRect();
+  const pr = canvas.getBoundingClientRect();
+  return { x: r.left - pr.left + r.width/2, y: r.top - pr.top + r.height/2 };
+}
+
+function drawConnections() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  time += 0.02;
+  
+  for (const conn of activeConnections) {
+    const from = getNodeCenter(conn.from);
+    const to = getNodeCenter(conn.to);
+    if (!from || !to) continue;
+
+    const progress = Math.min(1, (Date.now() - conn.startTime) / 600);
+    const mx = (from.x + to.x) / 2;
+    const my = (from.y + to.y) / 2 - 40;
+
+    // Glowing line
+    ctx.beginPath();
+    ctx.moveTo(from.x, from.y);
+    ctx.quadraticCurveTo(mx, my, from.x + (to.x - from.x) * progress, from.y + (to.y - from.y) * progress);
+    ctx.strokeStyle = conn.color || 'rgba(255,255,255,.2)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 4]);
+    ctx.lineDashOffset = -time * 50;
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Dynamic particle
+    if (progress >= 1 && conn.active) {
+      const t = (Math.sin(time * 3 + conn.phase) + 1) / 2;
+      const px = (1-t)*(1-t)*from.x + 2*(1-t)*t*mx + t*t*to.x;
+      const py = (1-t)*(1-t)*from.y + 2*(1-t)*t*my + t*t*to.y;
+      
+      ctx.beginPath();
+      ctx.arc(px, py, 3, 0, Math.PI * 2);
+      ctx.fillStyle = '#fff';
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(px, py, 10, 0, Math.PI * 2);
+      ctx.fillStyle = conn.particleColor || 'rgba(255,255,255,0.2)';
+      ctx.fill();
+    }
+  }
+  requestAnimationFrame(drawConnections);
+}
+requestAnimationFrame(drawConnections);
+
+// ─── Spawn ring effect ──────────────────────────────────────────────
+function spawnRingAt(id) {
+  const el = document.getElementById(`node-${id}`);
+  if (!el) return;
+  const ring = document.createElement('div');
+  ring.className = 'spawn-ring';
+  const r = el.getBoundingClientRect();
+  const pr = area.getBoundingClientRect();
+  const size = Math.max(r.width, r.height) + 40;
+  ring.style.width = ring.style.height = size + 'px';
+  ring.style.left = (r.left - pr.left + r.width/2 - size/2) + 'px';
+  ring.style.top = (r.top - pr.top + r.height/2 - size/2) + 'px';
+  area.appendChild(ring);
+  requestAnimationFrame(() => ring.classList.add('active'));
+  setTimeout(() => ring.remove(), 1000);
+}
+
+// ─── Add connection ─────────────────────────────────────────────────
+function addConnection(from, to, color, particleColor) {
+  const conn = { from, to, color, particleColor, startTime: Date.now(), active: true, phase: Math.random() * Math.PI * 2 };
+  activeConnections.push(conn);
+  return conn;
+}
+
+// ─── Animate sequence ───────────────────────────────────────────────
+async function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+async function showAgent(agent, delayMs) {
+  await delay(delayMs);
+  const el = createAgentNode(agent);
+  requestAnimationFrame(() => el.classList.add('visible'));
+  agentCount++;
+  updateMetrics();
+}
+
+async function runDemo() {
+  addLog('thinking', 'Инициализация оркестратора...', 'Загрузка конфигураций агентов');
+  await delay(800);
+
+  for (let i = 0; i < AGENTS.length; i++) {
+    await showAgent(AGENTS[i], 400);
+    addLog('create', `Загружен агент: ${AGENTS[i].name}`, `Модель: ${AGENTS[i].model}`);
+  }
+
+  await delay(1000);
+
+  // TELOS calls Researcher
+  addLog('thinking', 'TELOS анализирует запрос пользователя', 'Оценка сложности задачи...');
+  await delay(1200);
+
+  addLog('call', 'agents.call("researcher", request)', 'TELOS → Researcher | Глубина: 1');
+  callCount++; maxDepth = 1; updateMetrics();
+  const conn1 = addConnection('core', 'researcher', 'rgba(0,229,255,.4)', 'rgba(0,229,255,.2)');
+  document.getElementById('metricLatency').textContent = '1.2с';
+
+  await delay(2000);
+  addLog('thinking', 'Researcher работает', 'Поиск по базе знаний...<span class="thinking"><span></span><span></span><span></span></span>');
+  await delay(1500);
+  addLog('response', 'Researcher → TELOS', 'Найдено 12 источников, анализ готов');
+  conn1.active = false;
+
+  await delay(1000);
+
+  // TELOS calls Analyzer
+  addLog('call', 'agents.call("analyzer", data)', 'TELOS → Analyzer | Глубина: 1');
+  callCount++; updateMetrics();
+  const conn2 = addConnection('core', 'analyzer', 'rgba(0,255,102,.4)', 'rgba(0,255,102,.2)');
+  document.getElementById('metricLatency').textContent = '0.8с';
+
+  await delay(1800);
+  addLog('thinking', 'Analyzer обрабатывает данные', 'Запуск конвейера обработки...<span class="thinking"><span></span><span></span><span></span></span>');
+  await delay(1500);
+  addLog('response', 'Analyzer → TELOS', 'Анализ завершен: выявлено 3 ключевых инсайта');
+  conn2.active = false;
+
+  await delay(1200);
+
+  // TELOS creates a Sub-Agent
+  addLog('thinking', 'TELOS требуется делегирование', 'Создание специализированного подагента');
+  await delay(1000);
+
+  addLog('create', 'agents.subAgent("task-planner", {...})', 'Инициализация сессионного подагента');
+  
+  const subAgent = { id:'sub-planner', name:'TaskPlanner', icon:'📋', model:'auto → deepseek-v4-flash', desc:'Динамический подагент для декомпозиции задач', tools:['plan','memory'], cls:'agent-sub', x:320, y:490 };
+  
+  await delay(500);
+  await showAgent(subAgent, 0);
+  spawnRingAt('sub-planner');
+  addLog('create', 'Создан подагент: TaskPlanner', 'Склонирован от TELOS с кастомным системным промптом');
+  document.getElementById('metricLatency').textContent = '0.3с';
+
+  await delay(1200);
+
+  // TELOS calls the sub-agent
+  addLog('call', 'agents.call("task-planner", plan)', 'TELOS → TaskPlanner | Глубина: 1');
+  callCount++; updateMetrics();
+  const conn3 = addConnection('core', 'sub-planner', 'rgba(255,0,255,.4)', 'rgba(255,0,255,.2)');
+
+  await delay(2000);
+  addLog('thinking', 'TaskPlanner декомпозирует', 'Разбиение на 5 подзадач...<span class="thinking"><span></span><span></span><span></span></span>');
+  await delay(1500);
+
+  // Sub-agent calls Strategy (nested call)
+  addLog('call', 'agents.call("strategy", subtask)', 'TaskPlanner → Strategy | Глубина: 2');
+  callCount++; maxDepth = 2; updateMetrics();
+  const conn4 = addConnection('sub-planner', 'strategy', 'rgba(255,230,0,.4)', 'rgba(255,230,0,.2)');
+  document.getElementById('metricLatency').textContent = '2.1с';
+
+  await delay(2000);
+  addLog('thinking', 'Strategy оптимизирует', 'Оценка 3 вариантов решения...<span class="thinking"><span></span><span></span><span></span></span>');
+  await delay(1800);
+  addLog('response', 'Strategy → TaskPlanner', 'Оптимальная стратегия выбрана: Вариант #2');
+  conn4.active = false;
+
+  await delay(800);
+  addLog('response', 'TaskPlanner → TELOS', 'План составлен: 5 задач, 2 делегированы');
+  conn3.active = false;
+
+  await delay(1000);
+
+  // Create another sub-agent
+  addLog('create', 'agents.subAgent("fact-checker", {...})', 'Создание верификатора');
+  const subAgent2 = { id:'sub-checker', name:'FactChecker', icon:'✓', model:'auto → gpt-5.4-mini', desc:'Подагент верификации и валидации результатов', tools:['search','memory'], cls:'agent-sub', x:700, y:200 };
+  
+  await delay(500);
+  await showAgent(subAgent2, 0);
+  spawnRingAt('sub-checker');
+  addLog('create', 'Создан подагент: FactChecker', 'Специализирован для проверки фактов');
+
+  await delay(1000);
+
+  // Parallel calls
+  addLog('call', 'agents.call("fact-checker", verify)', 'TELOS → FactChecker | Глубина: 1');
+  addLog('call', 'agents.call("strategy", finalize)', 'TELOS → Strategy | Глубина: 1');
+  callCount += 2; updateMetrics();
+  const conn5 = addConnection('core', 'sub-checker', 'rgba(255,0,255,.4)', 'rgba(255,0,255,.2)');
+  const conn6 = addConnection('core', 'strategy', 'rgba(255,230,0,.4)', 'rgba(255,230,0,.2)');
+  document.getElementById('metricLatency').textContent = '1.5с';
+
+  await delay(2500);
+  addLog('response', 'FactChecker → TELOS', 'Все данные успешно верифицированы ✓');
+  addLog('response', 'Strategy → TELOS', 'План выполнения подтвержден');
+  conn5.active = false;
+  conn6.active = false;
+
+  await delay(1000);
+  addLog('thinking', 'TELOS формирует финальный ответ', 'Агрегирование результатов работы агентов...');
+  await delay(1500);
+  addLog('response', '✅ Задача завершена', '6 вызовов | 2 подагента | макс. глубина: 2');
+
+  // Loop demo
+  await delay(8000);
+  termEl.innerHTML = '';
+  area.innerHTML = '';
+  activeConnections.length = 0;
+  agentCount = 0; callCount = 0; maxDepth = 0;
+  updateMetrics();
+  document.getElementById('metricLatency').textContent = '—';
+  runDemo();
+}
+
+runDemo();
+</script>
+</body>
+</html>

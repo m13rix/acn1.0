@@ -15,6 +15,9 @@ export function normalizeCliCommand(command: string, platform: NodeJS.Platform =
   if (platform === 'win32') {
     // Avoid creating a literal "-p" directory on Windows.
     normalized = normalized.replace(/\bmkdir\s+-p\s+/g, 'mkdir ');
+    if (/^dir(?:\s+\/[a-z?]+)+(\s|$)/i.test(normalized)) {
+      normalized = `cmd.exe /d /s /c "${normalized.replace(/"/g, '\\"')}"`;
+    }
   }
 
   return normalized;
@@ -35,7 +38,15 @@ export function shouldFallbackToCmd(stderr: string, startError?: string): boolea
     'unexpected token',
     'missing terminator',
     'failed to start process',
+    'fullyqualifiederrorid : pathnotfound,microsoft.powershell.commands.getchilditemcommand',
   ];
 
-  return fallbackSignals.some(signal => text.includes(signal));
+  if (fallbackSignals.some(signal => text.includes(signal))) {
+    return true;
+  }
+
+  // Commands like `dir /s /b` are cmd.exe syntax. In PowerShell, `/s` can be
+  // interpreted as a drive-rooted path such as `G:\s`, producing ItemNotFound.
+  return /cannot find path ['"][a-z]:\\[a-z]['"]/i.test(text)
+    && /getitem|childitem|pathnotfound/i.test(text);
 }

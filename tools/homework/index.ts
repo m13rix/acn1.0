@@ -9,13 +9,14 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const HOMEWORK_NOTEBOOK_ID = 'b14102a9-29f2-4cf9-ad2a-10238008c138';
 
-const VALID_BOOKS = ['algebra', 'geometry', 'social_studies', 'history', 'russian'];
+const VALID_BOOKS = ['algebra', 'geometry', 'social_studies', 'history', 'russian', 'english'];
 const BOOK_PROMPTS: Record<string, string> = {
   algebra: 'Выведите из учебника по алгебре.',
   geometry: 'Выведите из учебника по геометрии.',
   social_studies: 'Выведите из учебника по обществознанию.',
   history: 'Выведите из учебника по истории.',
   russian: 'Выведите из учебника по русскому языку.',
+  english: 'Выведите из учебника по английскому языку.',
 };
 
 function getApiKey(): string {
@@ -39,7 +40,7 @@ async function getHomeworkLibraryModule(): Promise<{
   getStoredSectionText: (documentId: string, sectionNumber: number) => Promise<string>;
   extractSectionPdf: (documentId: string, sectionNumber: number) => Promise<{ pdfBuffer: Buffer; sectionName: string }>;
 }> {
-  const projectRoot = process.env.PROJECT_ROOT || path.resolve(__dirname, '..', '..');
+  const projectRoot = process.env.TELOS_PROJECT_ROOT || process.env.PROJECT_ROOT || path.resolve(__dirname, '..', '..');
   const modulePath = path.join(projectRoot, 'src', 'homework-library', 'index.ts');
   return import(pathToFileURL(modulePath).href);
 }
@@ -55,6 +56,27 @@ function summarizeOutput(output: string, limit: number = 800): string {
   }
 
   return output.length > limit ? `${output.slice(0, limit)}...` : output;
+}
+
+function isNotebookAskTimeoutError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error || '');
+  return /chat request timed out/i.test(message)
+    || /timed out/i.test(message)
+    || /timeout/i.test(message);
+}
+
+async function resetNotebookContext(notebookId: string): Promise<void> {
+  try {
+    await runCommand('notebooklm', ['clear'], 30_000);
+  } catch (error) {
+    console.warn(`[homework] Failed to clear NotebookLM context before retry: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  try {
+    await runCommand('notebooklm', ['use', notebookId], 30_000);
+  } catch (error) {
+    console.warn(`[homework] Failed to restore NotebookLM notebook context before retry: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 /**
@@ -322,26 +344,38 @@ export async function ask(bookId: string, question: string): Promise<string> {
   const prefix = BOOK_PROMPTS[bookId] || `[${bookId}]`;
   const fullQuery = normalizeNotebookQuestion(`${normalizedQuestion} ${prefix}`);
 
-  try {
-    const payload = parseJsonOutput(
-      'notebooklm ask',
-      (await runCommand('notebooklm', ['ask', fullQuery, '-n', HOMEWORK_NOTEBOOK_ID, '--json'], 300_000)).stdout
-    );
+  const maxAttempts = 3;
 
-    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
-      throw new Error(`Unexpected ask response: ${summarizeOutput(JSON.stringify(payload))}`);
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const payload = parseJsonOutput(
+        'notebooklm ask',
+        (await runCommand('notebooklm', ['ask', fullQuery, '-n', HOMEWORK_NOTEBOOK_ID, '--json'], 300_000)).stdout
+      );
+
+      if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+        throw new Error(`Unexpected ask response: ${summarizeOutput(JSON.stringify(payload))}`);
+      }
+
+      const answer = getStringField((payload as Record<string, unknown>).answer);
+
+      if (!answer) {
+        throw new Error(`NotebookLM returned an empty answer: ${summarizeOutput(JSON.stringify(payload))}`);
+      }
+
+      return answer;
+    } catch (error: any) {
+      if (attempt >= maxAttempts || !isNotebookAskTimeoutError(error)) {
+        throw new Error(`NotebookLM request failed: ${error.message}`);
+      }
+
+      console.warn(`[homework] NotebookLM ask timed out on attempt ${attempt}/${maxAttempts}. Resetting context and retrying...`);
+      await resetNotebookContext(HOMEWORK_NOTEBOOK_ID);
+      await delay(1_500 * attempt);
     }
-
-    const answer = getStringField((payload as Record<string, unknown>).answer);
-
-    if (!answer) {
-      throw new Error(`NotebookLM returned an empty answer: ${summarizeOutput(JSON.stringify(payload))}`);
-    }
-
-    return answer;
-  } catch (error: any) {
-    throw new Error(`NotebookLM request failed: ${error.message}`);
   }
+
+  throw new Error('NotebookLM request failed: exhausted retries without a final error payload.');
 }
 
 export async function generateSVG(taskText: string): Promise<string> {
@@ -520,7 +554,7 @@ export async function generateSectionVideo(documentId: string, sectionNumber: nu
 
     // 8. Send to Telegram
     console.log(`[homework] Sending video to Telegram...`);
-    const projectRoot = process.env.PROJECT_ROOT || path.resolve(__dirname, '..', '..');
+  const projectRoot = process.env.TELOS_PROJECT_ROOT || process.env.PROJECT_ROOT || path.resolve(__dirname, '..', '..');
     const messagePath = path.join(projectRoot, 'tools', 'message', 'index.ts');
     const messageModule = await import(pathToFileURL(messagePath).href) as {
       sendFiles: (files: string[]) => Promise<void>;

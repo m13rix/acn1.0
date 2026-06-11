@@ -57,7 +57,11 @@ export async function enrichDocFacts(
   facts: Array<{ id: number; content: string }>,
   config: MemoryRuntimeConfig
 ): Promise<DocFactEnrichment[]> {
-  const provider = createProvider(config.docEnricherProvider);
+  const providerName = config.docEnricherProvider ?? config.mercuryProvider;
+  const model = config.docEnricherModel ?? config.mercuryModel;
+  const temperature = config.docEnricherTemperature ?? config.mercuryTemperature;
+  const maxTokens = config.docEnricherMaxTokens ?? config.mercuryMaxTokens;
+  const provider = createProvider(providerName);
   const prompt = [
     'You enrich extracted document facts for memory ingestion.',
     'For each fact id, infer:',
@@ -81,13 +85,13 @@ export async function enrichDocFacts(
   const eventCounts: Record<string, number> = {};
 
   if (!provider.streamEvents) {
-    throw new Error(`Provider ${config.docEnricherProvider} does not support streaming.`);
+    throw new Error(`Provider ${providerName} does not support streaming.`);
   }
 
   const stream = await provider.streamEvents(messages, {
-    model: config.docEnricherModel,
-    temperature: config.docEnricherTemperature,
-    maxTokens: config.docEnricherMaxTokens,
+    model,
+    temperature,
+    maxTokens,
     reasoning: 'off',
     stream: true,
   });
@@ -101,9 +105,9 @@ export async function enrichDocFacts(
 
   if (!fullContent.trim()) {
     const completion = await provider.complete(messages, {
-      model: config.docEnricherModel,
-      temperature: config.docEnricherTemperature,
-      maxTokens: config.docEnricherMaxTokens,
+      model,
+      temperature,
+      maxTokens,
       reasoning: 'off',
     });
     fullContent = completion.content ?? '';
@@ -130,8 +134,8 @@ export async function enrichDocFacts(
   } catch (error) {
     const path = await writeDebug({
       stage: 'doc_enrich_error',
-      provider: config.docEnricherProvider,
-      model: config.docEnricherModel,
+      provider: providerName,
+      model,
       prompt,
       rawResponse: fullContent,
       eventCounts,

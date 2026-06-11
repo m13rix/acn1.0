@@ -7,7 +7,7 @@ modality: voice
 interface: local-voice
 systemPrompt: prompts/system.md
 
-# Gemini Live thinking level is controlled by the normal ACN reasoning field:
+# Gemini Live thinking level is controlled by the normal TELOS reasoning field:
 # off -> minimal, low -> low, medium -> medium, high -> high
 reasoning: medium
 
@@ -15,6 +15,7 @@ reasoning: medium
 
 tools:
   - search
+  - googleCalendar
   - agents
   - utils
 

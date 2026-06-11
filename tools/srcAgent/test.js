@@ -1,7 +1,7 @@
 import { sendRequest } from "./index.ts"
 
 async function run(){
-    const response = await sendRequest("Привет! Я готовлю всеобъемлющую документацию по ACN/TELOS системе. " +
+    const response = await sendRequest("Привет! Я готовлю всеобъемлющую документацию по TELOS/TELOS системе. " +
         "Пожалуйста, предоставь максимально подробную информацию о:\n\n" +
         "1. Общей архитектуре системы\n" +
         "2. Как работает The Loop и код-как-действие парадигма\n" +

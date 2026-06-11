@@ -38,7 +38,7 @@ function escapeHtml(text) {
 
 function renderInstalled() {
   elements.panelTitle.textContent = 'Installed Imports';
-  elements.panelSubtitle.textContent = 'Generated ACN namespaces, runtime versions, and quick actions.';
+  elements.panelSubtitle.textContent = 'Generated TELOS namespaces, runtime versions, and quick actions.';
 
   if (state.installed.length === 0) {
     elements.panelContent.innerHTML = `
@@ -143,7 +143,7 @@ function renderSourceForm(kind) {
       </label>
       <label>
         <span>Extra Docs</span>
-        <textarea name="docs" placeholder="Paste README fragments, usage notes, or ACN-specific guidance"></textarea>
+        <textarea name="docs" placeholder="Paste README fragments, usage notes, or TELOS-specific guidance"></textarea>
       </label>
       <button type="submit" class="primary-button">Inspect ${kind === 'mcp' ? 'MCP' : 'ClawHub'} Source</button>
     </form>

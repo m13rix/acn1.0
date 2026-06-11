@@ -24,7 +24,6 @@
      - Создать слайды с текстом, картинками, таблицами.
      - Сохранить файл `<topic>.pptx`.
      - Сохранить файл `<topic>.docx` (notes).
-skillsTable: pptx_skills
 injectAgentsList: false
 
 ## ЗАВЕРШЕНИЕ РАБОТЫ

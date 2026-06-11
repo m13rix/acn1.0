@@ -3,23 +3,71 @@ import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { structuredLlm } from '../../../../src/utils/structuredLlm.js';
 import type { HeartbeatSensorEvent, SensorAskInput } from '../../../../src/heartbeat/types.js';
+import { KeepAuthStore, type KeepAuthProfile } from '../../../../src/memory_notes/auth-store.js';
+import { bridgeProfileFromAuth, runBridge } from '../../../../src/memory_notes/bridge.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(__dirname, '..', '..', '..', '..');
 const DATA_DIR = path.join(ROOT_DIR, 'data', 'heartbeat');
-const TOKEN_FILE = path.join(DATA_DIR, 'onenote_token.json');
+const NOTES_DATA_DIR = path.join(ROOT_DIR, 'data', 'memory-notes');
+const POLL_INTERVAL_MS = 60000;
+const RECENT_LIMIT = 10;
+const STABLE_DELAY_MS = 10000;
 
-const TENANT = 'consumers';
-const SCOPES = ['Notes.Read', 'offline_access'];
-let CLIENT_ID = process.env.ONENOTE_CLIENT_ID || '';
+interface KeepNoteSummary {
+  id: string;
+  title: string;
+  logicalTitle: string;
+  rawTitle: string;
+  kind: 'note' | 'list';
+  owner: 'system' | 'owner' | 'user';
+  archived: boolean;
+  trashed: boolean;
+  pinned: boolean;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  preview: string;
+}
+
+interface KeepListItem {
+  id: string;
+  text: string;
+  checked: boolean;
+  sort?: number | null;
+}
+
+interface KeepNoteDetail extends KeepNoteSummary {
+  text: string;
+  items?: KeepListItem[];
+}
+
+interface NoteFingerprint {
+  modifiedAt: string | null;
+  contentHash: string;
+}
+
+interface PendingTrigger {
+  noteId: string;
+  title: string;
+  kind: KeepNoteDetail['kind'];
+  owner: KeepNoteDetail['owner'];
+  text: string;
+  items: KeepListItem[];
+  createdAt: string | null;
+  modifiedAt: string | null;
+  fingerprint: NoteFingerprint;
+  timeoutId: NodeJS.Timeout;
+}
 
 let intervalId: NodeJS.Timeout | null = null;
 let emitFn: ((event: Omit<HeartbeatSensorEvent, 'sensor'>) => void) | null = null;
-let currentToken: any = null;
-let lastKnownModifiedTime: string | null = null;
 let latestNoteSnapshot: Record<string, unknown> | null = null;
+let baselineProfileId: string | null = null;
+let pollInFlight = false;
 
-const processedContentHashes: Map<string, string> = new Map();
+const knownNoteStates: Map<string, NoteFingerprint> = new Map();
+const pendingTriggers: Map<string, PendingTrigger> = new Map();
+const authStore = new KeepAuthStore(NOTES_DATA_DIR);
 
 function hashContent(text: string): string {
   let hash = 0;
@@ -31,10 +79,10 @@ function hashContent(text: string): string {
   return hash.toString(36);
 }
 
-function describePage(page: { title?: string; id?: string }): string {
-  const title = typeof page.title === 'string' && page.title.trim() ? page.title.trim() : '(untitled)';
-  const suffix = typeof page.id === 'string' && page.id ? ` [${page.id}]` : '';
-  return `${title}${suffix}`;
+function describeNote(note: Pick<KeepNoteSummary, 'title' | 'id' | 'kind' | 'owner'>): string {
+  const title = typeof note.title === 'string' && note.title.trim() ? note.title.trim() : '(untitled)';
+  const suffix = typeof note.id === 'string' && note.id ? ` [${note.id}]` : '';
+  return `${title}${suffix} <${note.kind}/${note.owner}>`;
 }
 
 function formatLogValue(value: unknown): string {
@@ -101,16 +149,217 @@ function fallbackHomeworkClassification(prompt: string): { shouldHandle: boolean
   };
 }
 
+function noteText(detail: KeepNoteDetail): string {
+  if (detail.kind === 'list') {
+    return (detail.items || [])
+      .map(item => `${item.checked ? '[x]' : '[ ]'} ${item.text}`)
+      .join('\n')
+      .trim();
+  }
+  return String(detail.text || '').trim();
+}
+
+function shouldIgnoreSystemNote(note: Pick<KeepNoteSummary, 'owner'>): boolean {
+  return note.owner === 'system';
+}
+
+function noteModifiedAt(note: Pick<KeepNoteSummary, 'updatedAt' | 'createdAt'>): string | null {
+  return note.updatedAt || note.createdAt || null;
+}
+
+function buildNoteFingerprint(detail: KeepNoteDetail, text: string): NoteFingerprint {
+  return {
+    modifiedAt: noteModifiedAt(detail),
+    contentHash: hashContent(text),
+  };
+}
+
+function hasFingerprintChanged(previous: NoteFingerprint | undefined, next: NoteFingerprint): boolean {
+  return !previous
+    || previous.modifiedAt !== next.modifiedAt
+    || previous.contentHash !== next.contentHash;
+}
+
+function hasMeaningfulContentChange(previous: NoteFingerprint | undefined, next: NoteFingerprint): boolean {
+  return !previous || previous.contentHash !== next.contentHash;
+}
+
 export function classifyNotePage(page: { title?: string; id?: string }, text: string): { emit: boolean; reason: string } {
   if (!text.trim()) {
-    return { emit: false, reason: 'empty text after HTML stripping' };
+    return { emit: false, reason: 'empty text after note normalization' };
   }
 
   if (text.length < 5 && ((page.title || '').includes('Untitled') || !(page.title || '').trim())) {
-    return { emit: false, reason: 'short untitled placeholder page' };
+    return { emit: false, reason: 'short untitled placeholder note' };
   }
 
-  return { emit: true, reason: 'page contains enough note content' };
+  return { emit: true, reason: 'note contains enough content' };
+}
+
+async function getActiveProfile(): Promise<KeepAuthProfile | null> {
+  return (await authStore.getActiveProfile()) || null;
+}
+
+async function runKeepBridge<T>(profile: KeepAuthProfile, action: string, input?: Record<string, unknown>): Promise<T> {
+  const statePath = authStore.getStatePath(profile.id);
+  return runBridge<T>({
+    action,
+    profile: bridgeProfileFromAuth(profile, statePath),
+    input,
+  });
+}
+
+async function getLatestNotes(profile: KeepAuthProfile, limit: number): Promise<KeepNoteSummary[]> {
+  return runKeepBridge<KeepNoteSummary[]>(profile, 'list_notes', {
+    limit,
+    trashed: false,
+  });
+}
+
+async function getNoteDetail(profile: KeepAuthProfile, noteId: string): Promise<KeepNoteDetail> {
+  return runKeepBridge<KeepNoteDetail>(profile, 'get_note', { note: noteId });
+}
+
+function clearPendingTrigger(noteId: string): void {
+  const pending = pendingTriggers.get(noteId);
+  if (!pending) {
+    return;
+  }
+  clearTimeout(pending.timeoutId);
+  pendingTriggers.delete(noteId);
+}
+
+function clearAllPendingTriggers(): void {
+  for (const noteId of pendingTriggers.keys()) {
+    clearPendingTrigger(noteId);
+  }
+}
+
+function buildLatestSnapshot(detail: KeepNoteDetail, text: string): Record<string, unknown> {
+  return {
+    id: detail.id,
+    title: detail.title,
+    logicalTitle: detail.logicalTitle,
+    rawTitle: detail.rawTitle,
+    owner: detail.owner,
+    kind: detail.kind,
+    text,
+    items: detail.items || [],
+    createdAt: detail.createdAt || null,
+    modifiedAt: detail.updatedAt || null,
+  };
+}
+
+async function refreshBaseline(profile: KeepAuthProfile): Promise<void> {
+  clearAllPendingTriggers();
+  knownNoteStates.clear();
+  baselineProfileId = profile.id;
+
+  const latestNotes = await getLatestNotes(profile, RECENT_LIMIT);
+  if (latestNotes.length > 0) {
+    for (const note of latestNotes) {
+      try {
+        const detail = await getNoteDetail(profile, note.id);
+        const text = noteText(detail);
+        knownNoteStates.set(note.id, buildNoteFingerprint(detail, text));
+      } catch {
+        // Ignore baseline hydration failures.
+      }
+    }
+    console.log(`[Notes Sensor] Baseline initialized from ${latestNotes.length} recent Google Keep note(s). Existing notes are now tracked and will emit only after a later user edit settles.`);
+  } else {
+    console.log('[Notes Sensor] No recent Google Keep notes found. Sensor is ready for the next user-authored change.');
+  }
+}
+
+function schedulePendingTrigger(detail: KeepNoteDetail, text: string, fingerprint: NoteFingerprint): void {
+  const existing = pendingTriggers.get(detail.id);
+  if (existing) {
+    clearTimeout(existing.timeoutId);
+  }
+
+  const timeoutId = setTimeout(() => {
+    void settlePendingTrigger(detail.id);
+  }, STABLE_DELAY_MS);
+
+  pendingTriggers.set(detail.id, {
+    noteId: detail.id,
+    title: detail.title,
+    kind: detail.kind,
+    owner: detail.owner,
+    text,
+    items: detail.items || [],
+    createdAt: detail.createdAt || null,
+    modifiedAt: detail.updatedAt || null,
+    fingerprint,
+    timeoutId,
+  });
+
+  const logAction = existing ? 'Reset stability wait for' : 'Queued stability wait for';
+  console.log(`[Notes Sensor] ${logAction} ${describeNote(detail)} (${Math.floor(STABLE_DELAY_MS / 1000)}s retriggerable delay).`);
+}
+
+async function settlePendingTrigger(noteId: string): Promise<void> {
+  const pending = pendingTriggers.get(noteId);
+  if (!pending) {
+    return;
+  }
+
+  try {
+    const profile = await getActiveProfile();
+    if (!profile || profile.id !== baselineProfileId) {
+      clearPendingTrigger(noteId);
+      return;
+    }
+
+    const detail = await getNoteDetail(profile, noteId);
+    const text = noteText(detail);
+    const fingerprint = buildNoteFingerprint(detail, text);
+
+    if (shouldIgnoreSystemNote(detail)) {
+      knownNoteStates.set(detail.id, fingerprint);
+      clearPendingTrigger(noteId);
+      console.log(`[Notes Sensor] Skipping ${describeNote(detail)} after stability wait: system-owned note.`);
+      return;
+    }
+
+    const classification = classifyNotePage({ title: detail.title, id: detail.id }, text);
+    if (!classification.emit) {
+      knownNoteStates.set(detail.id, fingerprint);
+      clearPendingTrigger(noteId);
+      console.log(`[Notes Sensor] Skipping ${describeNote(detail)} after stability wait: ${classification.reason}.`);
+      return;
+    }
+
+    if (hasMeaningfulContentChange(pending.fingerprint, fingerprint)) {
+      console.log(`[Notes Sensor] ${describeNote(detail)} changed again during stability wait; extending delay.`);
+      schedulePendingTrigger(detail, text, fingerprint);
+      return;
+    }
+
+    const previous = knownNoteStates.get(detail.id);
+    if (!hasMeaningfulContentChange(previous, fingerprint)) {
+      knownNoteStates.set(detail.id, fingerprint);
+      clearPendingTrigger(noteId);
+      return;
+    }
+
+    latestNoteSnapshot = buildLatestSnapshot(detail, text);
+    knownNoteStates.set(detail.id, fingerprint);
+    clearPendingTrigger(noteId);
+
+    console.log(`[Notes Sensor] Emitting newNote for ${describeNote(detail)} after stable content confirmation.`);
+
+    emitFn?.({
+      event: 'newNote',
+      args: [],
+      payload: latestNoteSnapshot,
+      occurredAt: detail.updatedAt || detail.createdAt || new Date().toISOString(),
+    });
+  } catch (error: any) {
+    clearPendingTrigger(noteId);
+    console.error('[Notes Sensor] Error settling pending note:', error?.message || error);
+  }
 }
 
 export async function start(emit: (event: Omit<HeartbeatSensorEvent, 'sensor'>) => void) {
@@ -120,35 +369,17 @@ export async function start(emit: (event: Omit<HeartbeatSensorEvent, 'sensor'>) 
     fs.mkdirSync(DATA_DIR, { recursive: true });
   }
 
-  CLIENT_ID = (process.env.ONENOTE_CLIENT_ID || '').replace('api://', '');
-  if (!CLIENT_ID) {
-    console.error('[Notes Sensor] ONENOTE_CLIENT_ID is not set.');
-    return;
-  }
-
   try {
-    console.log('[Notes Sensor] Starting OneNote polling sensor.');
-    await ensureAuthenticated();
-    const latestPages = await getLatestPages(5);
-    if (latestPages.length > 0) {
-      lastKnownModifiedTime = latestPages[0].lastModifiedDateTime;
-      for (const page of latestPages) {
-        try {
-          const html = await getPageContent(page.contentUrl);
-          const text = stripHtml(html);
-          processedContentHashes.set(page.id, hashContent(text));
-        } catch {
-          // Ignore baseline hydration failures.
-        }
-      }
-      console.log(`[Notes Sensor] Baseline initialized from ${latestPages.length} recent page(s). Existing pages at or before ${lastKnownModifiedTime} will not emit.`);
+    console.log('[Notes Sensor] Starting Google Keep polling sensor.');
+    const profile = await getActiveProfile();
+    if (!profile) {
+      console.warn('[Notes Sensor] Google Keep is not authenticated yet. Sensor will keep polling and wait for a saved profile.');
     } else {
-      lastKnownModifiedTime = new Date().toISOString();
-      console.log(`[Notes Sensor] No recent pages found. Baseline starts at ${lastKnownModifiedTime}.`);
+      await refreshBaseline(profile);
     }
 
-    intervalId = setInterval(checkNewNotes, 60000);
-    console.log('[Notes Sensor] Poll interval armed for every 60 seconds.');
+    intervalId = setInterval(checkNewNotes, POLL_INTERVAL_MS);
+    console.log(`[Notes Sensor] Poll interval armed for every ${Math.floor(POLL_INTERVAL_MS / 1000)} seconds.`);
   } catch (error) {
     console.error('[Notes Sensor] Failed to start:', error);
   }
@@ -161,12 +392,15 @@ export async function stop() {
   intervalId = null;
   emitFn = null;
   latestNoteSnapshot = null;
-  processedContentHashes.clear();
+  baselineProfileId = null;
+  pollInFlight = false;
+  clearAllPendingTriggers();
+  knownNoteStates.clear();
 }
 
 export async function getContext(): Promise<string> {
   if (!latestNoteSnapshot) {
-    return 'No recent note snapshot is available.';
+    return 'No recent Google Keep note snapshot is available.';
   }
   return JSON.stringify(latestNoteSnapshot, null, 2);
 }
@@ -179,7 +413,7 @@ export async function ask(input: SensorAskInput): Promise<unknown> {
 
   try {
     const result = await structuredLlm([
-      'You are answering questions about the most recent OneNote note observed by the heartbeat notes sensor.',
+      'You are answering questions about the most recent Google Keep note observed by the heartbeat notes sensor.',
       '',
       'Latest note snapshot:',
       context,
@@ -204,215 +438,89 @@ export async function ask(input: SensorAskInput): Promise<unknown> {
 }
 
 async function checkNewNotes() {
-  if (!emitFn || !lastKnownModifiedTime) {
+  if (!emitFn || pollInFlight) {
     return;
   }
 
+  pollInFlight = true;
+
   try {
-    await ensureAuthenticated();
-    const latestPages = await getLatestPages(10);
-    const newPages = latestPages.filter(page => page.lastModifiedDateTime > lastKnownModifiedTime!);
-
-    console.log(`[Notes Sensor] Poll complete: ${latestPages.length} page(s) scanned, ${newPages.length} new/updated page(s) after ${lastKnownModifiedTime}.`);
-
-    if (newPages.length === 0) {
+    const profile = await getActiveProfile();
+    if (!profile) {
       return;
     }
 
-    lastKnownModifiedTime = newPages[0].lastModifiedDateTime;
+    if (baselineProfileId !== profile.id) {
+      await refreshBaseline(profile);
+      return;
+    }
 
-    for (const page of newPages.reverse()) {
-      const contentHtml = await getPageContent(page.contentUrl);
-      const text = stripHtml(contentHtml);
+    const latestNotes = await getLatestNotes(profile, RECENT_LIMIT);
+    let queuedCount = 0;
 
-      const classification = classifyNotePage(page, text);
+    for (const note of latestNotes) {
+      const known = knownNoteStates.get(note.id);
+      const summaryModifiedAt = noteModifiedAt(note);
+      if (known && known.modifiedAt === summaryModifiedAt && !pendingTriggers.has(note.id)) {
+        continue;
+      }
+
+      const detail = await getNoteDetail(profile, note.id);
+      const text = noteText(detail);
+      const fingerprint = buildNoteFingerprint(detail, text);
+      const previous = knownNoteStates.get(detail.id);
+
+      if (!hasMeaningfulContentChange(previous, fingerprint)) {
+        knownNoteStates.set(detail.id, fingerprint);
+        clearPendingTrigger(detail.id);
+        continue;
+      }
+
+      if (shouldIgnoreSystemNote(detail)) {
+        knownNoteStates.set(detail.id, fingerprint);
+        clearPendingTrigger(detail.id);
+        console.log(`[Notes Sensor] Skipping ${describeNote(detail)}: system-owned note.`);
+        continue;
+      }
+
+      const classification = classifyNotePage({ title: detail.title, id: detail.id }, text);
       if (!classification.emit) {
-        console.log(`[Notes Sensor] Skipping ${describePage(page)}: ${classification.reason}.`);
+        knownNoteStates.set(detail.id, fingerprint);
+        clearPendingTrigger(detail.id);
+        console.log(`[Notes Sensor] Skipping ${describeNote(detail)}: ${classification.reason}.`);
         continue;
       }
 
-      const contentHash = hashContent(text);
-      if (processedContentHashes.get(page.id) === contentHash) {
-        console.log(`[Notes Sensor] Skipping ${describePage(page)}: content hash already processed.`);
-        continue;
-      }
-      processedContentHashes.set(page.id, contentHash);
+      schedulePendingTrigger(detail, text, fingerprint);
+      queuedCount += 1;
+    }
 
-      latestNoteSnapshot = {
-        id: page.id,
-        title: page.title,
-        text,
-        createdAt: page.createdDateTime || null,
-        modifiedAt: page.lastModifiedDateTime || null,
-        contentUrl: page.contentUrl,
-      };
-
-      console.log(`[Notes Sensor] Emitting newNote for ${describePage(page)}.`);
-
-      emitFn({
-        event: 'newNote',
-        args: [],
-        payload: latestNoteSnapshot,
-        occurredAt: page.lastModifiedDateTime || new Date().toISOString(),
-      });
-
-      await new Promise(resolve => setTimeout(resolve, 2000));
+    if (queuedCount > 0 || pendingTriggers.size > 0) {
+      console.log(`[Notes Sensor] Poll complete: ${latestNotes.length} note(s) scanned, ${queuedCount} note(s) queued/refreshed for stable-trigger confirmation, ${pendingTriggers.size} note(s) currently waiting.`);
     }
   } catch (error: any) {
     console.error('[Notes Sensor] Error checking notes:', error.message || error);
-  }
-}
-
-async function getLatestPages(limit: number): Promise<any[]> {
-  const url = `https://graph.microsoft.com/v1.0/me/onenote/pages?orderBy=lastModifiedDateTime%20desc&$top=${limit}`;
-  const response = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${currentToken.access_token}`,
-    },
-  });
-
-  if (!response.ok) {
-    throw new Error(`Graph API Error: ${response.status} ${response.statusText}`);
-  }
-
-  const data = await response.json();
-  return data.value || [];
-}
-
-async function getPageContent(contentUrl: string): Promise<string> {
-  const response = await fetch(contentUrl, {
-    headers: {
-      Authorization: `Bearer ${currentToken.access_token}`,
-    },
-  });
-
-  if (!response.ok) {
-    throw new Error(`Graph API Error fetching content: ${response.status} ${response.statusText}`);
-  }
-
-  return response.text();
-}
-
-function stripHtml(html: string): string {
-  return html.replace(/<[^>]*>?/gm, ' ').replace(/\s+/g, ' ').trim();
-}
-
-async function ensureAuthenticated() {
-  if (currentToken && !isTokenExpired(currentToken)) {
-    return;
-  }
-
-  if (fs.existsSync(TOKEN_FILE)) {
-    const stored = JSON.parse(fs.readFileSync(TOKEN_FILE, 'utf-8'));
-    if (!isTokenExpired(stored)) {
-      currentToken = stored;
-      return;
-    }
-    if (stored.refresh_token) {
-      try {
-        await refreshToken(stored.refresh_token);
-        return;
-      } catch {
-        // Fall back to device login.
-      }
-    }
-  }
-
-  await loginWithDeviceCode();
-}
-
-function isTokenExpired(token: any): boolean {
-  if (!token.expires_on) {
-    return true;
-  }
-
-  let expiresAt = 0;
-  if (typeof token.expires_in === 'number' && token.obtained_at) {
-    expiresAt = token.obtained_at + (token.expires_in * 1000);
-  } else if (typeof token.expires_on === 'number') {
-    expiresAt = token.expires_on * 1000;
-  } else {
-    return true;
-  }
-
-  return Date.now() > (expiresAt - 300000);
-}
-
-async function refreshToken(refreshTokenValue: string) {
-  const params = new URLSearchParams({
-    client_id: CLIENT_ID,
-    grant_type: 'refresh_token',
-    refresh_token: refreshTokenValue,
-    scope: SCOPES.join(' '),
-  });
-
-  const response = await fetch(`https://login.microsoftonline.com/${TENANT}/oauth2/v2.0/token`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: params.toString(),
-  });
-
-  if (!response.ok) {
-    throw new Error(`Refresh failed: ${await response.text()}`);
-  }
-
-  const data = await response.json();
-  data.obtained_at = Date.now();
-  currentToken = data;
-  fs.writeFileSync(TOKEN_FILE, JSON.stringify(data, null, 2));
-}
-
-async function loginWithDeviceCode() {
-  const deviceCodeParams = new URLSearchParams({
-    client_id: CLIENT_ID,
-    scope: SCOPES.join(' '),
-  });
-
-  const deviceCodeResponse = await fetch(`https://login.microsoftonline.com/${TENANT}/oauth2/v2.0/devicecode`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: deviceCodeParams.toString(),
-  });
-
-  if (!deviceCodeResponse.ok) {
-    throw new Error(`Device code request failed: ${await deviceCodeResponse.text()}`);
-  }
-
-  const deviceData = await deviceCodeResponse.json();
-  console.log(`[Notes Sensor] ${deviceData.message}`);
-
-  const tokenParams = new URLSearchParams({
-    grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
-    client_id: CLIENT_ID,
-    device_code: deviceData.device_code,
-  });
-
-  while (true) {
-    await new Promise(resolve => setTimeout(resolve, deviceData.interval * 1000));
-
-    const tokenResponse = await fetch(`https://login.microsoftonline.com/${TENANT}/oauth2/v2.0/token`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: tokenParams.toString(),
-    });
-
-    const tokenData = await tokenResponse.json();
-
-    if (tokenResponse.ok) {
-      tokenData.obtained_at = Date.now();
-      currentToken = tokenData;
-      fs.writeFileSync(TOKEN_FILE, JSON.stringify(tokenData, null, 2));
-      console.log('[Notes Sensor] Authentication successful.');
-      return;
-    }
-
-    if (tokenData.error !== 'authorization_pending') {
-      throw new Error(`Login failed: ${JSON.stringify(tokenData)}`);
-    }
+  } finally {
+    pollInFlight = false;
   }
 }
 
 export const __internals = {
+  buildNoteFingerprint,
   fallbackHomeworkClassification,
+  hasFingerprintChanged,
+  hasMeaningfulContentChange,
+  noteModifiedAt,
   schemaHasBooleanAndReasonFields,
+  noteText,
+  shouldIgnoreSystemNote,
+};
+
+export {
+  buildNoteFingerprint,
+  hasFingerprintChanged,
+  hasMeaningfulContentChange,
+  noteModifiedAt,
+  noteText,
+  shouldIgnoreSystemNote,
 };

@@ -121,7 +121,11 @@ export async function parseDocumentToGraph(
   config: MemoryRuntimeConfig
 ): Promise<DocParseResult> {
   const display = getGlobalDisplay();
-  const provider = createProvider(config.docParserProvider);
+  const providerName = config.docParserProvider ?? config.mercuryProvider;
+  const model = config.docParserModel ?? config.mercuryModel;
+  const temperature = config.docParserTemperature ?? config.mercuryTemperature;
+  const maxTokens = config.docParserMaxTokens ?? config.mercuryMaxTokens;
+  const provider = createProvider(providerName);
   const prompt = DOC_PARSE_PROMPT_TEMPLATE.replace('[содержимое документа]', documentContent);
   const messages = [
     { role: 'system' as const, content: 'Return only TOON. No markdown.' },
@@ -132,7 +136,7 @@ export async function parseDocumentToGraph(
   const eventCounts: Record<string, number> = {};
 
   if (!provider.streamEvents) {
-    throw new Error(`Provider ${config.docParserProvider} does not support streaming.`);
+    throw new Error(`Provider ${providerName} does not support streaming.`);
   }
 
   if (display) {
@@ -140,9 +144,9 @@ export async function parseDocumentToGraph(
   }
 
   const stream = await provider.streamEvents(messages, {
-    model: config.docParserModel,
-    temperature: config.docParserTemperature,
-    maxTokens: config.docParserMaxTokens,
+    model,
+    temperature,
+    maxTokens,
     reasoning: 'off',
     stream: true,
   });
@@ -157,9 +161,9 @@ export async function parseDocumentToGraph(
 
   if (!normalizeOutputText(fullContent)) {
     const completion = await provider.complete(messages, {
-      model: config.docParserModel,
-      temperature: config.docParserTemperature,
-      maxTokens: config.docParserMaxTokens,
+      model,
+      temperature,
+      maxTokens,
       reasoning: "medium",
     });
     fullContent = completion.content ?? '';
@@ -220,8 +224,8 @@ export async function parseDocumentToGraph(
   } catch (error) {
     const path = await writeDebug({
       stage: 'doc_parse_error',
-      provider: config.docParserProvider,
-      model: config.docParserModel,
+      provider: providerName,
+      model,
       prompt,
       rawResponse: fullContent,
       eventCounts,

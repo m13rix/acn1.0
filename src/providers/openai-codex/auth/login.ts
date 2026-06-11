@@ -202,7 +202,7 @@ export async function completeLoginSession(input: {
     scopes: tokens.scope ? tokens.scope.split(/\s+/).filter(Boolean) : session.scopes,
     meta: {
       source: input.payload.redirectUrl ? 'manual-paste' : 'browser-pkce',
-      clientVariant: 'acn-openai-codex',
+      clientVariant: 'telos-openai-codex',
     },
   };
 
@@ -259,7 +259,7 @@ async function sendApiRequest<T = unknown>(apiUrl: string, path: string, payload
 export async function notifyTelegramAboutLogin(challenge: ProviderAuthChallenge): Promise<void> {
   const env = actionContext.getStore()?.env;
   const chatId = actionContext.getStore()?.chatId;
-  const apiUrl = env?.ACN_API_URL;
+  const apiUrl = env?.TELOS_API_URL;
   if (!apiUrl || !chatId) {
     throw new Error('Telegram auth notification is unavailable outside Telegram execution context.');
   }
@@ -279,12 +279,12 @@ export async function notifyTelegramAboutLogin(challenge: ProviderAuthChallenge)
 export async function askTelegramForRedirectUrl(challenge: ProviderAuthChallenge): Promise<string> {
   const env = actionContext.getStore()?.env;
   const chatId = actionContext.getStore()?.chatId;
-  const apiUrl = env?.ACN_API_URL;
+  const apiUrl = env?.TELOS_API_URL;
   if (!apiUrl || !chatId) {
     throw new Error('Telegram auth prompt is unavailable outside Telegram execution context.');
   }
 
-  const result = await sendApiRequest<{ questionId: string }>(apiUrl, '/api/ask', {
+  const result = await sendApiRequest<{ questionId?: string; status?: string; response?: string; error?: string }>(apiUrl, '/api/ask', {
     chatId,
     question: [
       'After signing in, paste the full redirect URL here.',
@@ -293,7 +293,14 @@ export async function askTelegramForRedirectUrl(challenge: ProviderAuthChallenge
     ].join('\n\n'),
   });
 
+  if (result.status === 'answered' && result.response) {
+    return result.response;
+  }
+
   const questionId = result.questionId;
+  if (!questionId) {
+    throw new Error(result.error || 'Auth prompt did not receive either a direct answer or questionId.');
+  }
   for (;;) {
     await new Promise(resolve => setTimeout(resolve, 2000));
     const pollResponse = await fetch(`${apiUrl}/api/ask/poll?questionId=${encodeURIComponent(questionId)}`);
@@ -310,5 +317,5 @@ export async function askTelegramForRedirectUrl(challenge: ProviderAuthChallenge
 
 export function isTelegramAuthContext(): boolean {
   const store = actionContext.getStore();
-  return Boolean(store?.chatId && store?.env?.ACN_API_URL);
+  return Boolean(store?.chatId && store?.env?.TELOS_API_URL);
 }

@@ -305,7 +305,7 @@ export class LocalVoiceInterfaceRuntime implements AgentInterfaceRuntime {
     await this.startSession(loadedAgent, {
       request: '',
       routeEnv: {},
-      sandbox: createSandbox(loadedAgent.config.sandbox),
+      sandbox: createSandbox(loadedAgent.config.sandbox, loadedAgent.config.runPath ? { existingPath: loadedAgent.config.runPath } : undefined),
       ownsSandbox: true,
     });
   }
@@ -353,7 +353,7 @@ export class LocalVoiceInterfaceRuntime implements AgentInterfaceRuntime {
     await this.startSession(loadedAgent, {
       request: '',
       routeEnv: {},
-      sandbox: createSandbox(loadedAgent.config.sandbox),
+      sandbox: createSandbox(loadedAgent.config.sandbox, loadedAgent.config.runPath ? { existingPath: loadedAgent.config.runPath } : undefined),
       ownsSandbox: true,
     });
   }
@@ -369,10 +369,10 @@ export class LocalVoiceInterfaceRuntime implements AgentInterfaceRuntime {
       agent,
       sandbox: options.sandbox,
       routeEnv: {
-        ACN_INTERFACE_API_URL: process.env.ACN_INTERFACE_API_URL || process.env.ACN_API_URL || '',
-        ACN_INTERFACE_ROUTE: DEFAULT_ROUTE_ID,
-        ACN_API_URL: process.env.ACN_INTERFACE_API_URL || process.env.ACN_API_URL || '',
-        ACN_CHAT_ID: DEFAULT_ROUTE_ID,
+        TELOS_INTERFACE_API_URL: process.env.TELOS_INTERFACE_API_URL || process.env.TELOS_API_URL || '',
+        TELOS_INTERFACE_ROUTE: DEFAULT_ROUTE_ID,
+        TELOS_API_URL: process.env.TELOS_INTERFACE_API_URL || process.env.TELOS_API_URL || '',
+        TELOS_CHAT_ID: DEFAULT_ROUTE_ID,
         ...(options.routeEnv || {}),
       },
       callbacks: {

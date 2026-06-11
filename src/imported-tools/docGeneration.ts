@@ -106,9 +106,9 @@ export async function generateImportedDocs(
   }
 
   const prompt = [
-    'You generate ACN imported tool docs.',
+    'You generate TELOS imported tool docs.',
     'Return JSON with keys: toolDescription, usageMarkdown, methodDocs.',
-    'toolDescription must be concise and match existing ACN tool.yaml style.',
+    'toolDescription must be concise and match existing TELOS tool.yaml style.',
     'usageMarkdown should be short, practical, and LLM-friendly.',
     'methodDocs must be a plain object keyed by normalized method name.',
     '',

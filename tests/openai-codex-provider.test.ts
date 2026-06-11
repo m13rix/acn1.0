@@ -9,7 +9,7 @@ import { OpenAICodexAuthStore } from '../src/providers/openai-codex/auth/auth-st
 import { OAuthOnlyModelSelectedViaApiProviderError } from '../src/providers/openai-codex/errors.js';
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'acn-codex-provider-'));
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'telos-codex-provider-'));
   try {
     return await fn(dir);
   } finally {
@@ -23,6 +23,49 @@ test('OpenRouterProvider rejects oauth-only codex models', async () => {
     () => provider.complete([{ role: 'user', content: 'hello' }], { model: 'openai-codex/gpt-5-codex' }),
     OAuthOnlyModelSelectedViaApiProviderError
   );
+});
+
+test('OpenRouterProvider includes reasoning_content on replayed assistant tool calls when reasoning is enabled', () => {
+  const provider = new OpenRouterProvider('test-key');
+  const request = provider.buildRequestWithTools(
+    [
+      { role: 'user', content: 'list files' },
+      {
+        role: 'assistant',
+        content: '',
+        reasoning: 'Need to inspect the directory.',
+        toolCalls: [
+          { id: 'tool_1', name: 'cli', arguments: { content: 'dir /s /b' } },
+        ],
+      },
+      { role: 'tool', content: 'file.txt', toolCallId: 'tool_1', toolName: 'cli' },
+    ],
+    { model: 'moonshotai/kimi-k2.6', reasoning: 'medium' },
+    { tools: [], toolChoice: 'auto' }
+  );
+
+  assert.equal(request.messages[1]?.reasoning_content, 'Need to inspect the directory.');
+});
+
+test('OpenRouterProvider omits reasoning_content on assistant tool calls when reasoning is disabled', () => {
+  const provider = new OpenRouterProvider('test-key');
+  const request = provider.buildRequestWithTools(
+    [
+      { role: 'user', content: 'list files' },
+      {
+        role: 'assistant',
+        content: '',
+        reasoning: 'Hidden reasoning',
+        toolCalls: [
+          { id: 'tool_1', name: 'cli', arguments: { content: 'dir /s /b' } },
+        ],
+      },
+    ],
+    { model: 'moonshotai/kimi-k2.6', reasoning: 'off' },
+    { tools: [], toolChoice: 'auto' }
+  );
+
+  assert.equal(Object.hasOwn(request.messages[1] ?? {}, 'reasoning_content'), false);
 });
 
 test('OpenAICodexProvider completes using stored OAuth profile', async () => {

@@ -1,0 +1,5 @@
+{
+  "_description": "Project-wide default fast/small model for structured helper calls like utils.llm and sensor.ask. Agent-level utils.llm config is used only if this file does not set a field.",
+  "provider": "openrouter",
+  "model": "google/gemma-4-31b-it"
+}

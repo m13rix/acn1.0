@@ -29,6 +29,7 @@ interface ProviderToolsLoopContext {
   session: Session;
   options: ExecutorOptions;
   processFileMessages: () => Promise<void>;
+  processMemoryMessages: () => Promise<void>;
   toolEngine: ToolExecutionEngine;
 }
 
@@ -68,65 +69,139 @@ export class ProviderToolsLoop extends BaseLoop {
   }
 
   override async run(context: ProviderToolsLoopContext): Promise<string | null> {
-    const { session, options, processFileMessages, toolEngine } = context;
+    const { session, options, processFileMessages, processMemoryMessages, toolEngine } = context;
     const maxIterations = options.maxIterations ?? DEFAULT_MAX_ITERATIONS;
     const callbacks = options.callbacks ?? {};
-
-    const toolRequest: ProviderToolRequest = buildProviderToolRequest();
-
-    for (let iteration = 0; iteration < maxIterations; iteration++) {
-      await processFileMessages();
-      await session.refreshSkillsContext([], options.callbacks);
-
-      const messages = session.getAllMessages();
-      const providerConfig: ProviderConfig = {
-        ...session.getProviderConfig(),
-        stream: options.stream,
-      };
-
-      const provider = session.provider;
-      if (!provider.completeWithTools) {
-        throw new Error(`Provider "${provider.name}" does not support native tools`);
+    const checkpoint = async (reason: string): Promise<void> => {
+      if (!options.onCheckpoint) {
+        return;
       }
+      await options.onCheckpoint(session.exportSnapshot(), { reason });
+    };
 
-      if (callbacks.onBeforeProviderCall) {
-        const actualRequest = provider.buildRequestWithTools
-          ? provider.buildRequestWithTools(messages, providerConfig, toolRequest)
-          : provider.buildRequest?.(messages, providerConfig);
-        callbacks.onBeforeProviderCall(messages, providerConfig, actualRequest);
-      }
+    const toolRequest: ProviderToolRequest = buildProviderToolRequest(options.requireFinish ?? true);
+    const restoredState = session.getExecutionState();
+    let iteration = restoredState?.mode === 'provider-tools'
+      ? Math.max(0, restoredState.iterations)
+      : 0;
+    let pendingToolCalls = restoredState?.mode === 'provider-tools' && Array.isArray(restoredState.pendingProviderToolCalls)
+      ? restoredState.pendingProviderToolCalls.map(toolCall => ({
+        ...toolCall,
+        arguments: { ...toolCall.arguments },
+      }))
+      : [];
+    let nextToolIndex = restoredState?.mode === 'provider-tools'
+      ? Math.max(0, restoredState.nextProviderToolIndex ?? 0)
+      : 0;
 
-      const modelResponse = await this.getModelResponseWithTools(messages, providerConfig, toolRequest, context);
-      const responseText = modelResponse.text || '';
-      const toolCalls = modelResponse.toolCalls || [];
+    while (iteration < maxIterations) {
+      iteration += 1;
 
-      if (toolCalls.length === 0) {
-        if (responseText.trim()) {
-          session.addAssistantMessage(responseText);
+      if (pendingToolCalls.length === 0) {
+        await processFileMessages();
+        await processMemoryMessages();
+
+        const messages = session.getAllMessages();
+        const providerConfig: ProviderConfig = {
+          ...session.getProviderConfig(),
+          stream: options.stream,
+        };
+
+        const provider = session.provider;
+        if (!provider.completeWithTools) {
+          throw new Error(`Provider "${provider.name}" does not support native tools`);
         }
-        const warningMessage = buildCompletionWarning();
 
-        if (options.requireFinish) {
-          session.addUserMessage(warningMessage);
-          continue;
-        } else {
-          // Require finish is disabled, so we can exit the loop naturally
-          const message = responseText || '(no content generated)';
+        session.setExecutionState({
+          mode: 'provider-tools',
+          iterations: iteration,
+          pendingProviderToolCalls: [],
+          nextProviderToolIndex: 0,
+        });
+        await checkpoint('provider-tools-before-provider-call');
 
-          // Content already added above if it exists
-
-          callbacks.onResponse?.(message);
-          return message;
+        if (callbacks.onBeforeProviderCall) {
+          const actualRequest = provider.buildRequestWithTools
+            ? provider.buildRequestWithTools(messages, providerConfig, toolRequest)
+            : provider.buildRequest?.(messages, providerConfig);
+          callbacks.onBeforeProviderCall(messages, providerConfig, actualRequest);
         }
+
+        const modelResponse = await this.getModelResponseWithTools(messages, providerConfig, toolRequest, context);
+        const responseText = modelResponse.text || '';
+        const toolCalls = modelResponse.toolCalls || [];
+
+        if (toolCalls.length === 0) {
+          if (responseText.trim()) {
+            session.addAssistantMessage(responseText);
+          }
+          const warningMessage = buildCompletionWarning();
+
+          if (options.requireFinish) {
+            session.addUserMessage(warningMessage);
+            session.setExecutionState({
+              mode: 'provider-tools',
+              iterations: iteration,
+              pendingProviderToolCalls: [],
+              nextProviderToolIndex: 0,
+            });
+            await checkpoint('provider-tools-warning');
+            continue;
+          } else {
+            const message = responseText || '(no content generated)';
+            session.clearExecutionState();
+            await checkpoint('provider-tools-natural-complete');
+            callbacks.onResponse?.(message);
+            return message;
+          }
+        }
+
+        session.addMessage({
+          role: 'assistant',
+          content: responseText,
+          reasoning: modelResponse.reasoning || '',
+          reasoningDetails: modelResponse.reasoningDetails,
+          toolCalls,
+        });
+        pendingToolCalls = toolCalls.map(toolCall => ({
+          ...toolCall,
+          arguments: { ...toolCall.arguments },
+        }));
+
+        // Deduplicate identical tool calls from the same model response.
+        // When the LLM emits two identical tool calls (same name + same args),
+        // only keep the first one to avoid double-execution.
+        const seenContentKeys = new Set<string>();
+        pendingToolCalls = pendingToolCalls.filter(tc => {
+          const key = `${tc.name}::${JSON.stringify(tc.arguments)}`;
+          if (seenContentKeys.has(key)) {
+            return false;
+          }
+          seenContentKeys.add(key);
+          return true;
+        });
+
+        nextToolIndex = 0;
+        session.setExecutionState({
+          mode: 'provider-tools',
+          iterations: iteration,
+          pendingProviderToolCalls: pendingToolCalls,
+          nextProviderToolIndex: nextToolIndex,
+        });
+        await checkpoint('provider-tools-after-tool-call-response');
       }
 
-      session.addMessage({
-        role: 'assistant',
-        content: responseText,
-        toolCalls,
-      });
 
-      for (const toolCall of toolCalls) {
+      for (; nextToolIndex < pendingToolCalls.length; nextToolIndex++) {
+        const toolCall = pendingToolCalls[nextToolIndex]!;
+        session.setExecutionState({
+          mode: 'provider-tools',
+          iterations: iteration,
+          pendingProviderToolCalls: pendingToolCalls,
+          nextProviderToolIndex: nextToolIndex,
+        });
+        await checkpoint('provider-tools-before-tool-execution');
+
         const result = await toolEngine.executeProviderToolCall(toolCall);
         let observation = result.observation;
         if (result.finishParseError) {
@@ -134,25 +209,50 @@ export class ProviderToolsLoop extends BaseLoop {
         }
 
         callbacks.onObservation?.(observation);
+
+        if (toolCall.name === 'action') {
+          await processFileMessages();
+          await processMemoryMessages();
+        }
+
+        const modelObservation = await session.enrichToolResponseWithMemoryHints(observation, callbacks);
         session.addMessage({
           role: 'tool',
-          content: observation,
+          content: modelObservation,
           toolCallId: toolCall.id,
           toolName: toolCall.name,
         });
 
-        if (toolCall.name === 'action') {
-          await processFileMessages();
-        }
-
         if (result.finishMessage) {
+          session.clearExecutionState();
+          await checkpoint('provider-tools-finish-message');
           callbacks.onResponse?.(result.finishMessage);
           return result.finishMessage;
         }
+
+        session.setExecutionState({
+          mode: 'provider-tools',
+          iterations: iteration,
+          pendingProviderToolCalls: pendingToolCalls,
+          nextProviderToolIndex: nextToolIndex + 1,
+        });
+        await checkpoint('provider-tools-after-tool-execution');
       }
+
+      pendingToolCalls = [];
+      nextToolIndex = 0;
+      session.setExecutionState({
+        mode: 'provider-tools',
+        iterations: iteration,
+        pendingProviderToolCalls: [],
+        nextProviderToolIndex: 0,
+      });
+      await checkpoint('provider-tools-iteration-complete');
     }
 
     const maxIterationMessage = '[Max iterations reached. Please continue with a new message if needed.]';
+    session.clearExecutionState();
+    await checkpoint('provider-tools-max-iterations');
     callbacks.onResponse?.(maxIterationMessage);
     return maxIterationMessage;
   }
@@ -162,7 +262,7 @@ export class ProviderToolsLoop extends BaseLoop {
     config: ProviderConfig,
     toolRequest: ProviderToolRequest,
     context: ProviderToolsLoopContext
-  ): Promise<{ text: string; reasoning: string; toolCalls: ProviderToolCall[] }> {
+  ): Promise<{ text: string; reasoning: string; reasoningDetails?: unknown[]; toolCalls: ProviderToolCall[] }> {
     const callbacks = context.options.callbacks ?? {};
     const provider = context.session.provider;
 
@@ -234,6 +334,7 @@ export class ProviderToolsLoop extends BaseLoop {
         return {
           text: fallbackResponse.content || '',
           reasoning: fallbackResponse.reasoning || '',
+          reasoningDetails: fallbackResponse.reasoningDetails,
           toolCalls: fallbackResponse.toolCalls || [],
         };
       }
@@ -250,21 +351,22 @@ export class ProviderToolsLoop extends BaseLoop {
     return {
       text: response.content || '',
       reasoning: response.reasoning || '',
+      reasoningDetails: response.reasoningDetails,
       toolCalls: response.toolCalls || [],
     };
   }
 
   getDescription(): string {
-    return `## Loop (provider-tools)
+    return `## Provider Tools Loop
 
-- Use native provider function tools instead of fenced syntax blocks.
-- Available tools:
-  - \`action(content)\` for TypeScript execution.
-  - \`cli(content)\` for shell command execution.
-  - \`file(filename, content)\` for single-file write/edit.
-- Tool calls are executed sequentially.
-- To finish, call \`${PRIMARY_COMPLETION_FUNCTION}("final user-facing message")\` only when the task is truly complete.
-- If you need clarification from the user, use \`message.ask(...)\` inside \`action(...)\` instead of stopping early.`;
+Use native tools only:
+- \`action({ content })\`: run TypeScript in the sandbox.
+- \`cli({ content })\`: run a shell command.
+- \`edit_file({ filename, content })\`: create, replace, or SEARCH/REPLACE one file.
+- \`view_file({ filename })\`: read and return the contents of a file.
+- \`${PRIMARY_COMPLETION_FUNCTION}({ message })\`: final user-facing answer when done.
+
+If you need user input, call \`message.ask(...)\` inside \`action\`.`;
   }
 }
 

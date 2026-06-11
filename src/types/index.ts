@@ -1,5 +1,5 @@
 /**
- * Core type definitions for the ACN agentic framework
+ * Core type definitions for the TELOS agentic framework
  */
 
 // ============================================================================
@@ -12,9 +12,12 @@ export interface Message {
   role: MessageRole;
   content: string;
   filename?: string; // Optional filename for file role messages
+  reasoning?: string; // Optional assistant reasoning, needed by some providers when replaying tool-call messages
+  reasoningDetails?: unknown[]; // Optional structured provider reasoning payload
   toolCalls?: ProviderToolCall[]; // Optional assistant tool calls
   toolCallId?: string; // Optional tool call id for role=tool
   toolName?: string; // Optional tool name for role=tool
+  adaptiveStepIndex?: number; // Optional adaptive-step-context grouping index
 }
 
 export type AgentModality = 'text' | 'voice';
@@ -26,6 +29,8 @@ export type AgentInterfaceName = 'telegram' | 'local-voice' | string;
 
 export interface ProviderConfig {
   model: string;
+  provider?: string;
+  providerOptions?: Record<string, unknown>;
   temperature?: number;
   maxTokens?: number;
   transport?: 'auto' | 'sse' | 'websocket';
@@ -144,12 +149,18 @@ export interface ProviderStreamChunk {
 export interface ProviderResponse {
   content: string;
   reasoning?: string;
+  reasoningDetails?: unknown[];
   finishReason: 'stop' | 'length' | 'content_filter' | 'stop_sequence' | 'other';
   toolCalls?: ProviderToolCall[];
   usage?: {
     promptTokens: number;
     completionTokens: number;
     totalTokens: number;
+    cachedPromptTokens?: number;
+    cacheWriteTokens?: number;
+    reasoningTokens?: number;
+    costDollars?: number;
+    raw?: unknown;
   };
 }
 
@@ -242,6 +253,27 @@ export interface AgentUtilsConfig {
   llm?: AgentUtilsLlmConfig;
 }
 
+export interface AgentAdaptiveStepContextDebugConfig {
+  enabled?: boolean;
+  port?: number;
+  openBrowser?: boolean;
+}
+
+export interface AgentAdaptiveStepContextConfig {
+  enabled?: boolean;
+  pruning?: {
+    enabled?: boolean;
+    heatThreshold?: number;
+  };
+  debug?: AgentAdaptiveStepContextDebugConfig;
+}
+
+export interface AgentInstructionAlgorithmConfig {
+  enabled?: boolean;
+  /** Agent-directory-relative or project-root-relative YAML config path. */
+  configPath?: string;
+}
+
 export interface AgentConfig {
   name: string;
   description?: string;
@@ -263,12 +295,17 @@ export interface AgentConfig {
   stream?: boolean;
   systemPrompt: string;  // filename reference
   tools: string[];       // tool names
-  loop: string;          // loop type name
-  syntax: string;        // syntax type name
-  skillsTable?: string;  // Optional: LanceDB table name for this agent's skills
+  /** @deprecated Text agents always use the AI SDK provider-tools runtime. Kept for loading old configs. */
+  loop?: string;
+  /** @deprecated Text agents no longer use syntax docs/parsing. Kept for loading old configs. */
+  syntax?: string;
   memory?: AgentMemoryConfig; // Optional: semantic graph memory configuration
+  adaptiveStepContext?: AgentAdaptiveStepContextConfig; // Optional: records step embeddings for adaptive context experiments
+  instructionAlgorithm?: AgentInstructionAlgorithmConfig; // Optional: deterministic active-step instruction tape
+  subagentInstructionAlgorithm?: AgentInstructionAlgorithmConfig; // Optional: instruction tape for sub-agents cloned from this agent
   utils?: AgentUtilsConfig; // Optional: local utility tool configuration
   sandbox?: string;      // Sandbox type: 'local' (default) or 'browser'
+  runPath?: string;      // Optional: existing working directory to use instead of creating a fresh sandbox
 
   // Model switching for dynamic model selection
   modelSwitching?: ModelSwitchingConfig;
@@ -276,8 +313,11 @@ export interface AgentConfig {
   // Agent system config
   injectAgentsList?: boolean;  // Inject available agents list into system prompt (default: true)
   requireFinish?: boolean;     // Whether the agent must call TASK_DONE/FINISH to complete a task (default: true)
+  requireFinishHeartbeat?: boolean; // Optional override for heartbeat-triggered turns
+  preserveSession?: boolean;   // Persist and resume route-bound chat session history across restarts
   subagentPrompt?: string;     // Optional: file to use as base system prompt for sub-agents (instead of CORE)
   actionAutoFix?: ActionAutoFixConfig; // Optional: auto-heal failed action() code executions
+  memoryToolDocs?: boolean; // Include compact tool docs in memory hints/search scope
 }
 
 export interface LoadedAgent {
@@ -291,9 +331,64 @@ export interface AgentInvocationOptions {
   interface?: AgentInterfaceName;
 }
 
+export interface AgentMemoryAutoHintsConfig {
+  enabled?: boolean;
+  topK?: number;
+  userPhraseWeighting?: 'llm' | 'embedding';
+  toolResponsePhraseWeighting?: 'llm' | 'embedding';
+  toolResponses?: {
+    enabled?: boolean;
+    topK?: number;
+    maxQueryLength?: number;
+  };
+}
+
+export interface AgentMemoryQueueConfig {
+  spacingSeconds?: number;
+}
+
+export interface AgentMemoryNotesSyncConfig {
+  enabled?: boolean;
+  stableDelayMinutes?: number;
+  pollIntervalSeconds?: number;
+}
+
+export interface AgentMemoryCategoryConfig {
+  name: string;
+  multiplier?: number;
+}
+
 export interface AgentMemoryConfig {
   enabled?: boolean;
+  autoHints?: AgentMemoryAutoHintsConfig;
+  queue?: AgentMemoryQueueConfig;
+  notesSync?: AgentMemoryNotesSyncConfig;
   table?: string;
+  mercuryProvider?: string;
+  mercuryModel?: string;
+  mercuryTemperature?: number;
+  mercuryMaxTokens?: number;
+  embeddingModel?: string;
+  linkCandidatePoolMax?: number;
+  maxAutoLinksPerFact?: number;
+  semanticMergeThreshold?: number;
+  overallEmbeddingWeight?: number;
+  searchDefaultAggregationMode?: 'max' | 'sum';
+  searchDefaultPhraseWeightingMode?: 'llm' | 'embedding';
+  searchDefaultCandidateMode?: 'top-k' | 'threshold' | 'range';
+  searchDefaultTopK?: number;
+  searchDefaultThreshold?: number;
+  searchDefaultRangeMin?: number;
+  searchDefaultRangeMax?: number;
+  searchMaxDepth?: number;
+  searchBeamWidth?: number;
+  searchMaxChains?: number;
+  categories?: AgentMemoryCategoryConfig[];
+  includeUncategorized?: boolean;
+  fallbackCategory?: string;
+  memoryToolDocs?: boolean;
+
+  // Deprecated legacy fields kept to avoid breaking untouched callers immediately.
   linkerProvider?: string;
   linkerModel?: string;
   linkerTemperature?: number;
@@ -309,14 +404,10 @@ export interface AgentMemoryConfig {
   docEnricherMaxTokens?: number;
   docFactConfidenceFallback?: number;
   docTopicFallback?: string;
-  embeddingModel?: string;
   candidateFactsPerTopic?: number;
   candidatePoolMax?: number;
-  maxAutoLinksPerFact?: number;
   dedupeThreshold?: number;
-  searchMaxDepth?: number;
   searchMaxStartFacts?: number;
-  searchMaxChains?: number;
 }
 
 export interface ActionAutoFixDeterministicConfig {
@@ -347,8 +438,29 @@ export interface ModelSwitchingConfig {
   whitelist?: string[];
   blacklist?: string[];
   topK?: number;
+  /**
+   * Runtime aliases applied when a configured provider/model is about to be
+   * executed. Keys may be either a bare model name ("gpt-5.5") or a
+   * provider-qualified source ("openai-codex/gpt-5.5"). String values use the
+   * same provider/model format, while object values may set provider/model
+   * independently.
+   */
+  aliases?: Record<string, string | {
+    provider?: string;
+    model?: string;
+  }>;
   overrides?: Record<string, any>;
   defaultModelId?: string;         // Default model to start with
+  /**
+   * Prompt scope used by the Not Diamond pre-trained router for sub-agent
+   * first-request evaluation. Defaults to "full".
+   */
+  evaluationPrompt?: 'full' | 'additional';
+  /**
+   * Back-compat boolean alias for evaluationPrompt.
+   * true => full prompt, false => additional sub-agent prompt only.
+   */
+  evaluateFullSystemPrompt?: boolean;
   selector?: {
     provider: string;
     model: string;
@@ -678,4 +790,3 @@ export interface ExecutionResult {
   error?: string;
   filename?: string; // Filename of the executed file (for code executions only)
 }
-

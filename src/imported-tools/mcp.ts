@@ -95,7 +95,7 @@ export async function inspectMcpImport(options: McpInspectionOptions): Promise<I
 
   try {
     const client = new Client(
-      { name: 'acn-imported-tools-studio', version: '1.0.0' },
+      { name: 'telos-imported-tools-studio', version: '1.0.0' },
       { capabilities: {} }
     );
     await withTimeout(

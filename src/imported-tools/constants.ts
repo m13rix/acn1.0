@@ -3,7 +3,7 @@ import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-export const IMPORTED_TOOLS_ROOT = process.env['ACN_IMPORTED_TOOLS_ROOT']
+export const IMPORTED_TOOLS_ROOT = process.env['TELOS_IMPORTED_TOOLS_ROOT']
   || join(__dirname, '..', '..');
 export const IMPORTED_TOOLS_DATA_DIR = join(IMPORTED_TOOLS_ROOT, 'data', 'imported-tools');
 export const IMPORTED_TOOLS_RUNTIME_DIR = join(IMPORTED_TOOLS_DATA_DIR, 'runtime');

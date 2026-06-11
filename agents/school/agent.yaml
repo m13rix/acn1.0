@@ -16,21 +16,19 @@ modelSwitching:
 tools:
   - search
   - message
-  - notepad
+  - memory
   - realtime
   - agents
   - heartbeat
   - homework
-  - skills
   - srcAgent
   - sdamgia
   - utils
 
 memory:
-  enabled: false
+  enabled: true
 
 loop: provider-tools
 syntax: markdown
-skillsTable: school
 injectAgentsList: true
 requireFinish: true

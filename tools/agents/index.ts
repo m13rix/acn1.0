@@ -1,6 +1,6 @@
 /**
  * Agents Tool
- * 
+ *
  * Thin wrapper around the core AgentRunner module.
  * Provides agent management (call, subAgent, newAgent, list).
  */
@@ -17,15 +17,22 @@ import {
     isStreamingEnabled,
     getCurrentAgent,
 } from '../../src/core/AgentContext.js';
-import { getAgentModelSwitchingConfig } from '../../src/core/AgentContext.js';
 import { getGlobalDisplay } from '../../src/core/GlobalDisplay.js';
 import type { LoadedAgent } from '../../src/types/index.js';
+import type { AgentInstructionAlgorithmConfig } from '../../src/types/index.js';
+import type { NotDiamondRoutingResult } from '../../src/services/model-selection/NotDiamondRouter.js';
 
 const SUBAGENT_SCOPE_SEPARATOR = '::';
 const AGENT_CALL_QUEUE_NOTICE = 'Parallel agents.call detected; call was queued and executed sequentially.';
 
 function normaliseModelId(model: string): string {
-    return String(model || '').trim().toLowerCase();
+    return stripInlineAlias(model).trim().toLowerCase();
+}
+
+function stripInlineAlias(model: string): string {
+    const text = String(model || '').trim();
+    const match = text.match(/^(.*?)\s*\[[^\]]+\]\s*$/);
+    return (match ? match[1] : text).trim();
 }
 
 function buildScopedSubAgentKey(name: string, parentAgentName?: string): string {
@@ -85,75 +92,23 @@ function summarizeAgentResult(result: string): string {
     }
     return text.length > 160 ? `${text.slice(0, 160)}...` : text;
 }
-/**
- * Resolve a model name or description to a valid model ID using the registry.
- */
-async function resolveModel(modelNameOrDescription: string, callingAgent: LoadedAgent): Promise<string> {
-    const rootDir = process.env.PROJECT_ROOT || process.cwd();
-    const registryPath = join(rootDir, 'data', 'models.json');
-    const contextConfig = getAgentModelSwitchingConfig() || callingAgent.config.modelSwitching;
-
-    if (!fs.existsSync(registryPath)) {
-        console.warn(`[agents] Model registry not found at ${registryPath}. Using input as model ID.`);
-        return modelNameOrDescription;
-    }
-
-    try {
-        // Base config with defaults
-        const baseConfig: SelectorConfig = {
-            registryPath,
-            mode: 'whitelist',
-            whitelist: [callingAgent.config.model],
-            selector: {
-                provider: 'openrouter', // Use openrouter provider for selection
-                model: 'openai/gpt-oss-20b', // Fast, cheap model
-                apiKey: process.env.OPENROUTER_API_KEY
-            }
-        };
-
-        // Merge with context config if available
-        const config: SelectorConfig = {
-            ...baseConfig,
-            ...contextConfig,
-            mode: contextConfig?.mode || baseConfig.mode,
-            whitelist: (Array.isArray(contextConfig?.whitelist) && contextConfig!.whitelist!.length > 0)
-                ? contextConfig!.whitelist
-                : baseConfig.whitelist,
-            // Ensure registry path is always set fallback (context might not have it)
-            registryPath: contextConfig?.registryPath || baseConfig.registryPath,
-            // Merge selector config if present
-            selector: {
-                ...baseConfig.selector!,
-                ...(contextConfig?.selector || {})
-            }
-        };
-
-        const selected = await selectModel(modelNameOrDescription, config);
-        // Default to ID, then name (as ID), then fallback to input
-        return selected.id || selected.name || modelNameOrDescription;
-    } catch (error) {
-        const fallbackModel = getSafeFallbackModel(callingAgent);
-
-        if (isModelAllowedForAgent(modelNameOrDescription, callingAgent)) {
-            console.warn(`[agents] Model selection failed (using provided model): ${error instanceof Error ? error.message : String(error)}`);
-            return modelNameOrDescription;
-        }
-
-        console.warn(`[agents] Model selection failed (fallback to ${fallbackModel}): ${error instanceof Error ? error.message : String(error)}`);
-        return fallbackModel;
-    }
-}
 
 import { sendRequest } from '../srcAgent/index.js';
 import { LocalSandbox } from '../../src/sandbox/LocalSandbox.js';
-import { selectModel, SelectorConfig } from '../../src/services/model-selection/ModelSelector.js';
 import { normalizeAgentRequest } from './request.js';
 import { actionContext } from '../../src/core/ActionContext.js';
+import { buildAgentCallTextResult, readAgentTextLog } from '../../src/core/agentTextLog.js';
+import type { SessionSnapshot } from '../../src/core/Session.js';
+import {
+    readPersistedAgentSessionState,
+    writePersistedAgentSessionState,
+    type AgentResumeDescriptor,
+} from '../../src/core/agentResumeState.js';
 
 /**
  * Get the calling agent's LoadedAgent — works across process boundaries.
  * 1. Tries AsyncLocalStorage context (same process)
- * 2. Falls back to ACN_AGENT_NAME env var (child process)
+ * 2. Falls back to TELOS_AGENT_NAME env var (child process)
  */
 async function getCallingAgent(): Promise<LoadedAgent | undefined> {
     // 1. Try AsyncLocalStorage (works in same process)
@@ -161,7 +116,7 @@ async function getCallingAgent(): Promise<LoadedAgent | undefined> {
     if (fromContext) return fromContext;
 
     // 2. Fallback: load from env var (works across process boundary)
-    const agentName = (process.env.ACN_AGENT_NAME || '').trim();
+    const agentName = (process.env.TELOS_AGENT_NAME || '').trim();
     if (agentName) {
         const loaded = await loadAgentCaseInsensitive(agentName);
         return loaded || undefined;
@@ -178,13 +133,21 @@ interface SubAgentConfig {
     name: string;
     description: string;
     systemPrompt: string;
-    model: string;
+    /** "auto" by default, or a Not Diamond/local model name requested by the agent. */
+    model?: string;
+    /** Concrete execution model selected on the first request. */
+    selectedModel?: string;
+    selectedProvider?: string;
+    notDiamondModel?: string;
+    notDiamondSessionId?: string;
+    instructionAlgorithm?: AgentInstructionAlgorithmConfig | false;
     baseSystemPrompt?: string;
     /** Name of the agent that created this sub-agent (used as base config) */
     parentAgentName?: string;
 }
 
-const SUBAGENTS_FILE = '.acn-subagents.json';
+const SUBAGENTS_FILE = '.telos-subagents.json';
+const LAST_AGENT_SESSION_FILE = '.telos-last-agent-session.json';
 let subAgentsCache: Map<string, SubAgentConfig> | null = null;
 
 async function resolveActiveSandbox(): Promise<LocalSandbox | undefined> {
@@ -206,9 +169,14 @@ async function runNamedAgentInCurrentSandbox(options: {
     interfaceOverride?: string;
     extraSystemPrompt?: string;
     modelOverride?: string;
+    providerOverride?: string;
     systemPromptOverride?: string;
+    instructionAlgorithmOverride?: AgentInstructionAlgorithmConfig | false;
     isSubagent?: boolean;
     queueNotice?: string;
+    resumeSnapshot?: SessionSnapshot;
+    resumeDescriptor?: AgentResumeDescriptor;
+    onModelRouted?: (result: NotDiamondRoutingResult) => void | Promise<void>;
 }): Promise<string> {
     const sandbox = await resolveActiveSandbox();
     if (!sandbox) {
@@ -217,21 +185,92 @@ async function runNamedAgentInCurrentSandbox(options: {
     }
 
     const sandboxKey = sandbox.directory;
-    const queued = await runInSandboxCallQueue(sandboxKey, async () => getAgentInvocationService().callAgent({
-        agent: options.agent,
-        message: options.request,
-        sandbox,
-        parentDepth: options.parentDepth,
-        extraSystemPrompt: options.extraSystemPrompt,
-        stream: options.stream,
-        modelOverride: options.modelOverride,
-        systemPromptOverride: options.systemPromptOverride,
-        isSubagent: options.isSubagent,
-        interface: options.interfaceOverride,
-        routeEnv: actionContext.getStore()?.env,
-    }));
+    const textLogPath = join(
+        sandbox.directory,
+        `.telos-agent-call-text-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jsonl`
+    );
+    const parentActionStore = actionContext.getStore();
+    const routeEnv = {
+        ...(parentActionStore?.env || {}),
+        TELOS_TEXT_LOG_PATH: textLogPath,
+    };
+    const resumeStatePath = join(sandbox.directory, LAST_AGENT_SESSION_FILE);
 
-    return queued.waited ? `${options.queueNotice || AGENT_CALL_QUEUE_NOTICE}\n\n${queued.value}` : queued.value;
+    const queued = await runInSandboxCallQueue(sandboxKey, async () => {
+        const invoke = () => getAgentInvocationService().callAgent({
+            agent: options.agent,
+            message: options.request,
+            sandbox,
+            parentDepth: options.parentDepth,
+            extraSystemPrompt: options.extraSystemPrompt,
+            stream: options.stream,
+            modelOverride: options.modelOverride,
+            providerOverride: options.providerOverride,
+            systemPromptOverride: options.systemPromptOverride,
+            instructionAlgorithmOverride: options.instructionAlgorithmOverride,
+            isSubagent: options.isSubagent,
+            interface: options.interfaceOverride,
+            routeEnv,
+            restoreSnapshot: options.resumeSnapshot,
+            onSessionSnapshot: async (snapshot) => {
+                if (!options.resumeDescriptor) {
+                    return;
+                }
+                await writePersistedAgentSessionState(resumeStatePath, {
+                    version: 1,
+                    savedAt: new Date().toISOString(),
+                    descriptor: options.resumeDescriptor,
+                    snapshot,
+                });
+            },
+            onModelRouted: async (result) => {
+                await options.onModelRouted?.(result);
+            },
+        });
+
+        return parentActionStore
+            ? actionContext.run({ ...parentActionStore, env: routeEnv }, invoke)
+            : actionContext.run({ env: routeEnv }, invoke);
+    });
+
+    const textEntries = await readAgentTextLog(textLogPath);
+    const aggregatedResult = buildAgentCallTextResult(textEntries, queued.value);
+
+    return queued.waited
+        ? `${options.queueNotice || AGENT_CALL_QUEUE_NOTICE}\n\n${aggregatedResult}`
+        : aggregatedResult;
+}
+
+function buildStandardResumeDescriptor(name: string, interfaceOverride?: string): AgentResumeDescriptor {
+    return {
+        label: name,
+        agent: name,
+        interfaceOverride,
+        isSubagent: true,
+    };
+}
+
+function buildSubagentResumeDescriptor(name: string, subConfig: SubAgentConfig, interfaceOverride?: string): AgentResumeDescriptor {
+    return {
+        label: name,
+        agent: subConfig.parentAgentName || 'CORE',
+        extraSystemPrompt: subConfig.systemPrompt,
+        modelOverride: subConfig.selectedModel || subConfig.model || 'auto',
+        providerOverride: subConfig.selectedProvider,
+        systemPromptOverride: subConfig.baseSystemPrompt,
+        instructionAlgorithmOverride: subConfig.instructionAlgorithm,
+        interfaceOverride,
+        isSubagent: true,
+    };
+}
+
+async function getLastAgentSessionState() {
+    const sandbox = await resolveActiveSandbox();
+    if (!sandbox) {
+        return null;
+    }
+
+    return readPersistedAgentSessionState(join(sandbox.directory, LAST_AGENT_SESSION_FILE));
 }
 
 /**
@@ -306,7 +345,7 @@ function saveSubAgents(subAgents: Map<string, SubAgentConfig>): void {
 /**
  * Create a session-exclusive sub-agent.
  * Sub-agents clone the calling agent with additive system prompt and a different model.
- * 
+ *
  * @param name - Unique name for this sub-agent
  * @param config - Sub-agent configuration
  * @returns Confirmation message
@@ -314,7 +353,8 @@ function saveSubAgents(subAgents: Map<string, SubAgentConfig>): void {
 export async function subAgent(name: string, config: {
     description: string;
     systemPrompt: string;
-    model: string;
+    model?: string;
+    instructionAlgorithm?: AgentInstructionAlgorithmConfig | false;
 }): Promise<string> {
     const currentSubAgents = loadSubAgents();
     const currentAgent = await getCallingAgent();
@@ -327,8 +367,7 @@ export async function subAgent(name: string, config: {
         return `Sub-agent "${name}" already exists in this session.`;
     }
 
-    // Resolve model description to actual model ID
-    const resolvedModel = await resolveModel(config.model, currentAgent);
+    const requestedModel = stripInlineAlias(config.model || 'auto') || 'auto';
 
     // Check if the current agent has a subagent base prompt defined
     const baseSystemPrompt = currentAgent?.subagentPromptContent;
@@ -338,7 +377,10 @@ export async function subAgent(name: string, config: {
         name,
         description: config.description,
         systemPrompt: config.systemPrompt,
-        model: resolvedModel,
+        model: requestedModel,
+        instructionAlgorithm: typeof config.instructionAlgorithm === 'undefined'
+            ? currentAgent.config.subagentInstructionAlgorithm
+            : config.instructionAlgorithm,
         baseSystemPrompt,
         parentAgentName,
     };
@@ -350,9 +392,9 @@ export async function subAgent(name: string, config: {
     const depth = getAgentDepth();
     const display = getGlobalDisplay();
     if (display) {
-        display.showAgentCreation(name, resolvedModel, config.systemPrompt, depth);
+        display.showAgentCreation(name, requestedModel, config.systemPrompt, depth);
     } else {
-        console.log(`[agents] Created sub-agent: ${name} (Model: ${resolvedModel})`);
+        console.log(`[agents] Created sub-agent: ${name} (Model: ${requestedModel})`);
     }
 
     return `Created sub-agent: ${name} - ${config.description}`;
@@ -360,7 +402,7 @@ export async function subAgent(name: string, config: {
 
 /**
  * Create a new permanent agent via Gemini CLI (srcAgent).
- * 
+ *
  * @param prompt - Description of the agent to create
  * @returns Result message from srcAgent
  */
@@ -376,7 +418,7 @@ export async function newAgent(prompt: string): Promise<string> {
 
     try {
         const geminiPrompt = `Create a new agent. ${prompt}
- [GUIDE: HOW TO CREATE AGENTS IN THE SYSTEM. Every agent should be based on the 'core' agent - with the exact same prompts and config, so just duplicate that. After, you need to change the name, description, and most importantly - models. You need to pick the most fitting (in price and capabilities) for base models, as well as for model switching systems (it will allow the agent to pick the most fitting for some of the use cases. Important: basically the more varied this list - the better, and this list should also include the default model). To learn about the current models read ./current_models.md file. You also need to pick the 'skillsTable' - it is basically a dynamic library of advice that the agent can fill and later use. It is recommended to use for each of the agents ITS OWN TABLE. However, if you think that the agent may benefit from the learnings of other agents in the system, you can use their tables. You also need to specify tools the agent will be able to use. As you can see, there is a large variety of them. You need to choose only the ones the agent will actually use without missing anything (skills and files tools are added automatically). And - the most important - THE SYSTEM PROMPT. You should of course use the 'core' prompt as a foundation and change it or add new details and instructions as you wish, for example keeping the core directives and adding something new. This prompt will basically dictate all of the agents' behaviour, so design it as high-quality as possible]`;
+ [GUIDE: HOW TO CREATE AGENTS IN THE SYSTEM. Every agent should be based on the 'core' agent - with the exact same prompts and config, so just duplicate that. After, change the name, description, tools, and system prompt. Keep modelSwitching focused on allowed Not Diamond routing candidates: use whitelist/blacklist/allow_all with model names from ./data/model-switching/notdiamond-models.json, and for provider-specific local names use ./data/model-switching/aliases.json or inline entries like gpt-5.4-mini[openai/gpt-5.4-mini]. Do not build a custom model-description library. Sub-agents default to model: auto and the first request is routed by Not Diamond using the assembled prompt and user request. Memory is added automatically unless explicitly disabled, so you normally should not add any separate legacy memory tools. Use memory entries with exclusive=true for agent-private reusable know-how and shared memory for cross-agent knowledge. Choose only the tools the agent will actually use without missing anything (memory and files tools are added automatically). And - the most important - THE SYSTEM PROMPT. You should of course use the 'core' prompt as a foundation and change it or add new details and instructions as you wish, for example keeping the core directives and adding something new. This prompt will basically dictate all of the agents' behaviour, so design it as high-quality as possible]`;
 
         return await sendRequest(geminiPrompt);
     } catch (error) {
@@ -388,7 +430,7 @@ export async function newAgent(prompt: string): Promise<string> {
 /**
  * Call an agent or sub-agent by name.
  * Uses the exact same Session→Executor→Display pipeline as the CLI.
- * 
+ *
  * @param name - Agent name (from agents/ directory or a sub-agent)
  * @param request - Message to send to the agent
  * @returns Agent's response
@@ -440,19 +482,25 @@ export async function call(name: string, request: unknown, options?: { interface
             }
 
             const baseAgent = subConfig.parentAgentName || 'CORE';
-            let modelOverride = subConfig.model;
+            const requestedModel = subConfig.selectedModel || subConfig.model || 'auto';
+            const selectedProvider = subConfig.selectedProvider;
 
             const baseAgentConfig = currentAgent && currentAgent.config.name === baseAgent
                 ? currentAgent
                 : await loadAgentCaseInsensitive(baseAgent);
-            if (baseAgentConfig && !isModelAllowedForAgent(modelOverride, baseAgentConfig)) {
+            if (
+                baseAgentConfig
+                && !selectedProvider
+                && requestedModel.toLowerCase() !== 'auto'
+                && !isModelAllowedForAgent(requestedModel, baseAgentConfig)
+            ) {
                 const safeFallback = getSafeFallbackModel(baseAgentConfig);
-                console.warn(`[agents] Sub-agent "${name}" model "${modelOverride}" is outside whitelist for ${baseAgent}. Using "${safeFallback}".`);
-                modelOverride = safeFallback;
+                console.warn(`[agents] Sub-agent "${name}" model "${requestedModel}" is outside whitelist for ${baseAgent}. Using "${safeFallback}".`);
                 subConfig.model = safeFallback;
                 currentSubAgents.set(resolvedKey, subConfig);
                 saveSubAgents(currentSubAgents);
             }
+            const modelOverride = subConfig.selectedModel || subConfig.model || 'auto';
 
             const result = await runNamedAgentInCurrentSandbox({
                 agent: baseAgent,
@@ -462,8 +510,19 @@ export async function call(name: string, request: unknown, options?: { interface
                 interfaceOverride: options?.interface,
                 extraSystemPrompt: subConfig.systemPrompt,
                 modelOverride,
+                providerOverride: selectedProvider,
                 systemPromptOverride: subConfig.baseSystemPrompt,
+                instructionAlgorithmOverride: subConfig.instructionAlgorithm,
                 isSubagent: true,
+                resumeDescriptor: buildSubagentResumeDescriptor(name, subConfig, options?.interface),
+                onModelRouted: async (routingResult) => {
+                    subConfig.selectedModel = routingResult.executionModel;
+                    subConfig.selectedProvider = routingResult.executionProvider;
+                    subConfig.notDiamondModel = routingResult.notDiamondModel;
+                    subConfig.notDiamondSessionId = routingResult.notDiamondSessionId;
+                    currentSubAgents.set(resolvedKey!, subConfig!);
+                    saveSubAgents(currentSubAgents);
+                },
             });
             console.error(`[agents] call("${name}") completed: ${summarizeAgentResult(result)}`);
             return result;
@@ -476,6 +535,7 @@ export async function call(name: string, request: unknown, options?: { interface
             stream,
             interfaceOverride: options?.interface,
             isSubagent: true,
+            resumeDescriptor: buildStandardResumeDescriptor(name, options?.interface),
         });
         console.error(`[agents] call("${name}") completed: ${summarizeAgentResult(result)}`);
         return result;
@@ -487,12 +547,53 @@ export async function call(name: string, request: unknown, options?: { interface
 }
 
 /**
+ * Continue the most recent agents.call session in the current sandbox.
+ *
+ * @param request - Message to send into the last agent session
+ * @returns Agent response stacked like agents.call
+ */
+export async function resume(request: unknown): Promise<string> {
+    const normalizedRequest = normalizeAgentRequest(request, 'resume');
+    const parentDepth = getAgentDepth();
+    const stream = isStreamingEnabled();
+
+    try {
+        const state = await getLastAgentSessionState();
+        if (!state) {
+            return 'Error: No previous agents.call session found to resume in this sandbox.';
+        }
+
+        const result = await runNamedAgentInCurrentSandbox({
+            agent: state.descriptor.agent,
+            request: normalizedRequest,
+            parentDepth,
+            stream,
+            interfaceOverride: state.descriptor.interfaceOverride,
+            extraSystemPrompt: state.descriptor.extraSystemPrompt,
+            modelOverride: state.descriptor.modelOverride,
+            providerOverride: state.descriptor.providerOverride,
+            systemPromptOverride: state.descriptor.systemPromptOverride,
+            instructionAlgorithmOverride: state.descriptor.instructionAlgorithmOverride,
+            isSubagent: state.descriptor.isSubagent,
+            resumeSnapshot: state.snapshot,
+            resumeDescriptor: state.descriptor,
+        });
+
+        console.error(`[agents] resume("${state.descriptor.label}") completed: ${summarizeAgentResult(result)}`);
+        return result;
+    } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+        return `Error resuming agent session: ${errorMsg}`;
+    }
+}
+
+/**
  * Call the current agent again using the same execution pipeline as agents.call().
- * Falls back to ACN_AGENT_NAME when running from heartbeat/background action code.
+ * Falls back to TELOS_AGENT_NAME when running from heartbeat/background action code.
  */
 export async function callSelf(request: unknown): Promise<string> {
     const currentAgent = await getCallingAgent();
-    const selfName = currentAgent?.config.name || (process.env.ACN_AGENT_NAME || '').trim();
+    const selfName = currentAgent?.config.name || (process.env.TELOS_AGENT_NAME || '').trim();
     const normalizedRequest = normalizeAgentRequest(request, 'callSelf');
 
     if (!selfName) {
@@ -519,7 +620,7 @@ export async function callSelf(request: unknown): Promise<string> {
 
 /**
  * List all available agents and sub-agents.
- * 
+ *
  * @returns Formatted list of agents
  */
 export async function list(): Promise<string> {

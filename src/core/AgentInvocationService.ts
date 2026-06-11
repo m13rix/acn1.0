@@ -1,8 +1,10 @@
 import { AgentLoader } from '../loaders/AgentLoader.js';
-import type { AgentInterfaceName, AgentInvocationOptions, LoadedAgent } from '../types/index.js';
+import type { AgentInstructionAlgorithmConfig, AgentInterfaceName, AgentInvocationOptions, LoadedAgent } from '../types/index.js';
 import type { ISandbox } from '../sandbox/interfaces.js';
 import { runAgent } from './AgentRunner.js';
 import { getDefaultInterfaceManager } from '../interfaces/InterfaceManager.js';
+import type { SessionSnapshot } from './Session.js';
+import type { NotDiamondRoutingResult } from '../services/model-selection/NotDiamondRouter.js';
 
 export interface CallAgentOptions extends AgentInvocationOptions {
   agent: string | LoadedAgent;
@@ -12,9 +14,14 @@ export interface CallAgentOptions extends AgentInvocationOptions {
   extraSystemPrompt?: string;
   stream?: boolean;
   modelOverride?: string;
+  providerOverride?: string;
   systemPromptOverride?: string;
+  instructionAlgorithmOverride?: AgentInstructionAlgorithmConfig | false;
   isSubagent?: boolean;
   routeEnv?: Record<string, string>;
+  restoreSnapshot?: SessionSnapshot;
+  onSessionSnapshot?: (snapshot: SessionSnapshot, agent: LoadedAgent) => void | Promise<void>;
+  onModelRouted?: (result: NotDiamondRoutingResult, agent: LoadedAgent) => void | Promise<void>;
 }
 
 export class AgentInvocationService {
@@ -42,8 +49,11 @@ export class AgentInvocationService {
       subagentPromptContent: loadedAgent.subagentPromptContent,
     };
 
-    if (options.modelOverride) {
+    if (options.modelOverride && options.modelOverride.trim().toLowerCase() !== 'auto') {
       agent.config.model = options.modelOverride;
+    }
+    if (options.providerOverride) {
+      agent.config.provider = options.providerOverride;
     }
     if (options.systemPromptOverride) {
       agent.systemPromptContent = options.systemPromptOverride;
@@ -52,7 +62,10 @@ export class AgentInvocationService {
       agent.systemPromptContent = `[Sub-agent additional context]\n${options.extraSystemPrompt}\n\n---\n\n${agent.systemPromptContent}`;
     }
     if (options.isSubagent) {
-      agent.config.skillsTable = undefined;
+      agent.config.memory = {
+        ...agent.config.memory,
+        autoHints: { enabled: false },
+      };
     }
 
     const modality = agent.config.modality || 'text';
@@ -76,8 +89,13 @@ export class AgentInvocationService {
       extraSystemPrompt: options.extraSystemPrompt,
       stream: options.stream,
       modelOverride: options.modelOverride,
+      providerOverride: options.providerOverride,
       systemPromptOverride: options.systemPromptOverride,
+      instructionAlgorithmOverride: options.instructionAlgorithmOverride,
       isSubagent: options.isSubagent,
+      restoreSnapshot: options.restoreSnapshot,
+      onSessionSnapshot: options.onSessionSnapshot,
+      onModelRouted: options.onModelRouted,
     });
   }
 

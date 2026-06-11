@@ -15,7 +15,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // Use PROJECT_ROOT from environment if available (for sandbox context)
 // Fallback to __dirname calculation, then to cwd
 const calculatedRoot = join(__dirname, '..', '..');
-const PROJECT_ROOT = process.env['PROJECT_ROOT']
+const PROJECT_ROOT = process.env['TELOS_PROJECT_ROOT'] || process.env['PROJECT_ROOT']
   || (existsSync(join(calculatedRoot, 'tools')) ? calculatedRoot : process.cwd());
 const DEFAULT_TOOLS_DIR = join(PROJECT_ROOT, 'tools');
 
@@ -138,13 +138,11 @@ export class ToolLoader {
 
           // Resolve the absolute path to the module
           const absolutePath = join(dir, config.module);
-          const skillEntries = await this.loadToolSkillEntries(config, dir);
-
           return {
             config,
             directory: dir,
             absolutePath,
-            skillEntries,
+            skillEntries: [],
           };
         }
       } catch {
@@ -167,14 +165,9 @@ export class ToolLoader {
   }
 
   private async loadToolSkillEntries(config: ToolConfig, toolDir: string): Promise<ToolSkillEntry[]> {
-    if (!config.skills?.enabled) {
-      return [];
-    }
-
-    const skillsDir = join(toolDir, config.skills.directory || 'skills');
-    const entries: ToolSkillEntry[] = [];
-    await this.scanSkillDirectory(config.name, skillsDir, entries);
-    return entries;
+    void config;
+    void toolDir;
+    return [];
   }
 
   private async scanSkillDirectory(toolName: string, dir: string, entries: ToolSkillEntry[]): Promise<void> {
@@ -262,21 +255,50 @@ export class ToolLoader {
    */
   getToolDocumentation(tools: LoadedTool[]): string {
     if (tools.length === 0) {
-      return '## Tools\n\nNo tools available.';
+      return '## Tool Modules\n\nNo tool modules are available.';
     }
 
     const toolDocs = tools.map(tool => {
-      const description = tool.config.description.trim();
-      const embeddedSkillsNote = description && tool.skillEntries && tool.skillEntries.length > 0
-        ? `\n\nThis tool also ships embedded retrieval skills for detailed usage guidance.`
-        : '';
+      const description = this.compactToolDescription(tool.config.description);
+      const relativeToolDoc = relative(this.toolsDir, join(tool.directory, 'tool.yaml')).replace(/\\/g, '/');
+      const pathHint = `tools/${relativeToolDoc}`;
       return description
-        ? `### ${tool.config.name}\n\n${description}${embeddedSkillsNote}`
-        : `### ${tool.config.name}`;
-    }).join('\n\n');
+        ? `- \`${tool.config.name}\`: ${description} Full API: \`${pathHint}\`.`
+        : `- \`${tool.config.name}\`: module available. Full API: \`${pathHint}\`.`;
+    }).join('\n');
 
-    return `## Tools.
-${toolDocs}`;
+    return `## Tool Modules
+
+Use these TypeScript modules inside \`action(content)\`; they are already available as globals. Keep calls focused and print useful results with \`console.log(...)\`.
+
+${toolDocs}
+
+For exact method signatures or uncommon options, read only the needed module doc from \`process.env.PROJECT_ROOT || process.cwd()\`, for example \`tools/search/tool.yaml\`. Do not load every tool doc up front.`;
+  }
+
+  private compactToolDescription(description: string): string {
+    const normalizedLines = description
+      .split(/\r?\n/)
+      .map(line => line.trim())
+      .filter(Boolean)
+      .filter(line => !line.startsWith('```'));
+    const methodLines = normalizedLines
+      .filter(line => /^-?\s*`?[A-Za-z0-9_.]+\(/.test(line.replace(/^-\s*/, '')))
+      .slice(0, 6)
+      .map(line => line.replace(/^-\s*/, '').replace(/`/g, '').split(/\s+-\s+|\s+->\s+|:/)[0]?.trim())
+      .filter(Boolean);
+
+    const lead = normalizedLines
+      .find(line => !line.startsWith('-') && !line.toLowerCase().startsWith('example'))
+      || normalizedLines[0]
+      || '';
+    const summary = lead.length > 180 ? `${lead.slice(0, 177)}...` : lead;
+
+    if (methodLines.length === 0) {
+      return summary;
+    }
+
+    return `${summary} Key methods: ${Array.from(new Set(methodLines)).join(', ')}.`;
   }
 }
 

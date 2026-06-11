@@ -130,4 +130,6 @@ dist
 .pnp.*
 .cursor
 
-browser-profile
+browser-profile/
+data/
+temp_research/

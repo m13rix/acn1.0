@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ACN Core Memory</title>
+    <title>TELOS Memory</title>
     <link rel="stylesheet" href="styles/main.css">
     <link
         href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
@@ -20,8 +20,9 @@
     <div class="hud">
         <header>
             <div class="logo">
-                <span class="logo-text">ACN</span>
-                <span class="logo-sub">MEMORY CORE</span>
+                <span class="logo-text">TELOS</span>
+                <span class="logo-sub">UNIFIED MEMORY</span>
+                <span id="namespace-badge" class="runtime-badge">global_memory_v2</span>
             </div>
             <div class="stats">
                 <div class="stat-box">
@@ -32,10 +33,19 @@
                     <span id="link-count" class="stat-value">0</span>
                     <span class="stat-label">LINKS</span>
                 </div>
+                <div class="stat-box">
+                    <span id="queue-count" class="stat-value">0</span>
+                    <span class="stat-label">QUEUE</span>
+                </div>
+                <div class="stat-box">
+                    <span id="notes-sync-count" class="stat-value">0</span>
+                    <span class="stat-label">NOTE SYNC</span>
+                </div>
             </div>
         </header>
 
         <div class="controls-panel">
+            <!-- GLOBAL FILTER -->
             <div class="control-section">
                 <div class="section-title">GLOBAL FILTER</div>
                 <div class="input-wrapper">
@@ -43,88 +53,253 @@
                         <circle cx="11" cy="11" r="8"></circle>
                         <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
                     </svg>
-                    <input type="text" id="search-input" class="modern-input" placeholder="Filter active nodes...">
+                    <input type="text" id="search-input" class="modern-input" placeholder="Filter graph nodes...">
                 </div>
             </div>
 
-            <div class="control-section">
-                <div class="section-title">SEMANTIC SEARCH</div>
-                <div class="input-row">
-                    <div class="input-wrapper" style="flex:1;">
-                        <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
-                        </svg>
-                        <input type="text" id="semantic-query" class="modern-input" placeholder="Why did X happen?">
-                    </div>
-                    <button id="run-search" class="modern-btn primary-btn" title="Run Search">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                            stroke-width="2">
-                            <polyline points="9 18 15 12 9 6"></polyline>
-                        </svg>
-                    </button>
-                    <button id="copy-search" class="modern-btn secondary-btn" style="padding: 0 10px;"
-                        title="Copy Results">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                            stroke-width="2">
-                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-                        </svg>
-                    </button>
+            <!-- MEMORY SEARCH ACCORDION -->
+            <div class="accordion-section expanded">
+                <div class="accordion-header">
+                    <svg class="accordion-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="9 18 15 12 9 6"></polyline>
+                    </svg>
+                    <span>MEMORY SEARCH</span>
                 </div>
-                <div class="semantic-params" style="display: flex; gap: 8px; margin-top: 10px;">
-                    <div class="input-wrapper" style="flex:1;" title="Max Search Depth">
-                        <input type="number" id="param-depth" class="modern-input" placeholder="Depth" min="1" max="10">
-                    </div>
-                    <div class="input-wrapper" style="flex:1;" title="Max Starting Facts">
-                        <input type="number" id="param-start" class="modern-input" placeholder="Starts" min="1"
-                            max="50">
-                    </div>
-                    <div class="input-wrapper" style="flex:1;" title="Max Chains">
-                        <input type="number" id="param-chains" class="modern-input" placeholder="Chains" min="1"
-                            max="20">
+                <div class="accordion-body">
+                    <div class="accordion-inner">
+                        <!-- Query row -->
+                        <div class="input-row">
+                            <div class="input-wrapper" style="flex:1;">
+                                <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                                </svg>
+                                <input type="text" id="semantic-query" class="modern-input" placeholder="Ask unified memory a question...">
+                            </div>
+                            <button id="run-search" class="modern-btn primary-btn" title="Run Search">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <polyline points="9 18 15 12 9 6"></polyline>
+                                </svg>
+                            </button>
+                            <button id="copy-search" class="modern-btn secondary-btn" style="padding: 0 10px;" title="Copy Results">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                                </svg>
+                            </button>
+                        </div>
+
+                        <!-- Scope section -->
+                        <div class="scope-section">
+                            <div class="scope-header">SCOPE</div>
+                            <div class="scope-grid two-col">
+                                <label class="field-block">
+                                    <span>Agent Name</span>
+                                    <input type="text" id="search-agent-name" class="modern-input compact-input" placeholder="Filter by agent...">
+                                </label>
+                                <label class="field-block">
+                                    <span>Categories</span>
+                                    <div class="tag-input-group">
+                                        <div id="search-categories-tags" class="tag-list"></div>
+                                        <div class="input-row" style="margin-top: 6px;">
+                                            <input type="text" id="search-cat-input" class="modern-input compact-input" placeholder="Add category..." style="flex:1;">
+                                            <button id="search-cat-add" class="modern-btn secondary-btn tag-add-btn">+</button>
+                                        </div>
+                                    </div>
+                                </label>
+                            </div>
+                            <div class="toggle-control" style="margin-top: 8px;">
+                                <span class="toggle-label">INCLUDE UNCATEGORIZED</span>
+                                <label class="switch">
+                                    <input type="checkbox" id="search-include-uncategorized" checked>
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                            <div id="search-category-multipliers" class="multiplier-list"></div>
+                        </div>
+
+                        <!-- Search parameters grid -->
+                        <div class="params-section">
+                            <div class="scope-header">PARAMETERS</div>
+                            <div class="control-grid three-col">
+                                <label class="field-block">
+                                    <span>Phrase Mode</span>
+                                    <select id="param-aggregation" class="modern-input select-input">
+                                        <option value="max">max</option>
+                                        <option value="sum">sum</option>
+                                    </select>
+                                </label>
+                                <label class="field-block">
+                                    <span>Candidate Mode</span>
+                                    <select id="param-candidate-mode" class="modern-input select-input">
+                                        <option value="top-k">top-k</option>
+                                        <option value="threshold">threshold</option>
+                                        <option value="range">range</option>
+                                        <option value="auto">auto-threshold</option>
+                                    </select>
+                                </label>
+                                <label class="field-block">
+                                    <span>Overall Weight</span>
+                                    <input type="number" id="param-overall-weight" class="modern-input compact-input" value="0.35" step="0.05" min="0">
+                                </label>
+                                <label class="field-block">
+                                    <span>Max Depth</span>
+                                    <input type="number" id="param-depth" class="modern-input compact-input" value="2" min="1" max="10">
+                                </label>
+                                <label class="field-block">
+                                    <span>Beam Width</span>
+                                    <input type="number" id="param-beam" class="modern-input compact-input" value="10" min="1" max="50">
+                                </label>
+                                <label class="field-block">
+                                    <span>Max Chains</span>
+                                    <input type="number" id="param-chains" class="modern-input compact-input" value="5" min="1" max="20">
+                                </label>
+                                <label class="field-block">
+                                    <span>Top-K</span>
+                                    <input type="number" id="param-top-k" class="modern-input compact-input" value="5" min="1" max="50">
+                                </label>
+                                <label class="field-block">
+                                    <span>Threshold</span>
+                                    <input type="number" id="param-threshold" class="modern-input compact-input" value="0.35" step="0.01">
+                                </label>
+                                <label class="field-block">
+                                    <span>Range Min</span>
+                                    <input type="number" id="param-range-min" class="modern-input compact-input" value="3" min="1" max="50">
+                                </label>
+                                <label class="field-block">
+                                    <span>Range Max</span>
+                                    <input type="number" id="param-range-max" class="modern-input compact-input" value="8" min="1" max="50">
+                                </label>
+                            </div>
+                        </div>
+
+                        <div class="toggle-control" style="margin-top: 4px;">
+                            <span class="toggle-label">VERBOSE DEBUG</span>
+                            <label class="switch">
+                                <input type="checkbox" id="debug-enabled" checked>
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+
+                        <div id="search-status" class="status-text"></div>
+                        <pre id="search-results" class="search-results hidden"></pre>
+
+                        <div class="results-grid">
+                            <div class="result-panel">
+                                <div class="mini-title">QUERY PHRASES</div>
+                                <div id="query-phrases" class="chip-list empty-state">Run a search to inspect weights.</div>
+                            </div>
+                            <div class="result-panel">
+                                <div class="mini-title">SEED FACTS</div>
+                                <div id="seed-facts" class="list-panel empty-state">Run a search to inspect scores.</div>
+                            </div>
+                        </div>
+
+                        <div class="result-panel">
+                            <div class="mini-title">DEBUG TRACE</div>
+                            <pre id="debug-output" class="debug-output empty-state">Run ingest, search, or migration to inspect the full pipeline trace.</pre>
+                        </div>
                     </div>
                 </div>
-                <div id="search-status" class="status-text"></div>
-                <pre id="search-results" class="search-results hidden"></pre>
             </div>
 
-            <div class="control-section row-controls">
-                <div class="toggle-control">
-                    <span class="toggle-label">PHYSICS UI</span>
-                    <label class="switch">
-                        <input type="checkbox" id="toggle-sim" checked>
-                        <span class="slider"></span>
-                    </label>
+            <!-- VIEW / PHYSICS ACCORDION -->
+            <div class="accordion-section collapsed">
+                <div class="accordion-header">
+                    <svg class="accordion-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="9 18 15 12 9 6"></polyline>
+                    </svg>
+                    <span>VIEW / PHYSICS</span>
                 </div>
-                <div class="toggle-control">
-                    <span class="toggle-label">LABELS</span>
-                    <label class="switch">
-                        <input type="checkbox" id="show-labels">
-                        <span class="slider"></span>
-                    </label>
+                <div class="accordion-body">
+                    <div class="accordion-inner">
+                        <div class="row-controls">
+                            <div class="toggle-control">
+                                <span class="toggle-label">PHYSICS UI</span>
+                                <label class="switch">
+                                    <input type="checkbox" id="toggle-sim" checked>
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                            <div class="toggle-control">
+                                <span class="toggle-label">LABELS</span>
+                                <label class="switch">
+                                    <input type="checkbox" id="show-labels">
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                        </div>
+                        <div style="margin-top: 10px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+                                <span class="toggle-label" style="font-size: 11px; opacity: 0.8;">FADE COEFFICIENT</span>
+                                <span id="fade-coeff-val" style="font-size: 11px; opacity: 0.8; font-family: 'JetBrains Mono'">0.3</span>
+                            </div>
+                            <input type="range" id="fade-coeff" min="0.05" max="1.0" step="0.05" value="0.3" style="width: 100%;">
+                        </div>
+                    </div>
                 </div>
             </div>
 
-            <div class="control-section">
-                <div class="section-title">VIEW SETTINGS</div>
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
-                    <span class="toggle-label" style="font-size: 11px; opacity: 0.8;">FADE COEFFICIENT</span>
-                    <span id="fade-coeff-val"
-                        style="font-size: 11px; opacity: 0.8; font-family: 'JetBrains Mono'">0.3</span>
+            <!-- QUEUE MEMORY ADD ACCORDION -->
+            <div class="accordion-section collapsed">
+                <div class="accordion-header">
+                    <svg class="accordion-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="9 18 15 12 9 6"></polyline>
+                    </svg>
+                    <span>QUEUE MEMORY ADD</span>
                 </div>
-                <input type="range" id="fade-coeff" min="0.05" max="1.0" step="0.05" value="0.3" style="width: 100%;">
+                <div class="accordion-body">
+                    <div class="accordion-inner">
+                        <label class="field-block">
+                            <span>Text</span>
+                            <textarea id="ingest-text" class="modern-textarea" placeholder="Paste raw text here. It will be queued for background normalization into memory facts."></textarea>
+                        </label>
+                        <label class="field-block">
+                            <span>Retrieval Hints</span>
+                            <textarea id="ingest-hints" class="modern-textarea compact-area" placeholder="Optional. One hint sentence per line. These become retrieval hints for future search."></textarea>
+                        </label>
+
+                        <div class="scope-section" style="margin-top: 6px;">
+                            <div class="scope-header">VISIBILITY</div>
+                            <div class="toggle-control" style="margin-bottom: 8px;">
+                                <span class="toggle-label">EXCLUSIVE TO AGENT</span>
+                                <label class="switch">
+                                    <input type="checkbox" id="ingest-exclusive-enabled">
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                            <label class="field-block">
+                                <span>Agent Name</span>
+                                <input type="text" id="ingest-agent-name" class="modern-input compact-input" placeholder="Hidden from all other agents unless names match">
+                            </label>
+                        </div>
+
+                        <div class="input-row" style="margin-top: 8px;">
+                            <button id="ingest-text-btn" class="modern-btn secondary-btn" style="flex:1;">Queue Add</button>
+                            <button id="refresh-graph" class="modern-btn secondary-btn">Refresh</button>
+                        </div>
+                        <div id="import-status" class="status-text"></div>
+                    </div>
+                </div>
             </div>
 
-            <div class="control-section">
-                <div class="section-title">INGEST KNOWLEDGE</div>
-                <div class="file-upload-wrapper">
-                    <label for="doc-file" class="file-drop-area">
-                        <span class="file-msg" id="file-msg-text">Choose .md or .txt file</span>
-                        <input type="file" id="doc-file" class="file-input" accept=".md,.txt,text/markdown,text/plain">
-                    </label>
-                    <button id="import-doc" class="modern-btn secondary-btn">Ingest</button>
+            <!-- LEGACY MIGRATION ACCORDION -->
+            <div class="accordion-section collapsed">
+                <div class="accordion-header">
+                    <svg class="accordion-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="9 18 15 12 9 6"></polyline>
+                    </svg>
+                    <span>LEGACY MIGRATION</span>
                 </div>
-                <div id="import-status" class="status-text"></div>
+                <div class="accordion-body">
+                    <div class="accordion-inner">
+                        <label class="field-block">
+                            <span>Source Namespace</span>
+                            <input type="text" id="migration-source" class="modern-input compact-input" value="global_memory">
+                        </label>
+                        <button id="run-migration" class="modern-btn secondary-btn">Migrate V1 Namespace</button>
+                        <div id="migration-status" class="status-text"></div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -132,13 +307,6 @@
     <div id="tooltip" class="tooltip hidden"></div>
 
     <script type="module" src="app.js"></script>
-    <script>
-        // Simple file label update
-        document.getElementById('doc-file').addEventListener('change', function (e) {
-            const fileName = e.target.files[0] ? e.target.files[0].name : "Choose .md or .txt file";
-            document.getElementById('file-msg-text').innerText = fileName;
-        });
-    </script>
 </body>
 
 </html>

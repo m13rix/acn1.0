@@ -4,8 +4,9 @@ description: |
   
   Methods:
   - agents.call(name, request, options?): Call any agent/sub-agent. Uses the same pipeline as user messages. `options.interface` can override the configured interface when compatible.
+  - agents.resume(request): Continue the most recent agents.call session in the current sandbox, reusing its conversation history.
   - agents.callSelf(request): Re-run the current agent as itself (not as a sub-agent), useful from heartbeat handlers.
-  - agents.subAgent(name, config): Create session-exclusive sub-agent (copy of caller with additive prompt + model override)
+  - agents.subAgent(name, config): Create session-exclusive sub-agent (copy of caller with additive prompt; config.model is optional and defaults to "auto")
   - agents.newAgent(prompt): Create new permanent agent via Gemini CLI
   - agents.list(): List all available agents with descriptions
 

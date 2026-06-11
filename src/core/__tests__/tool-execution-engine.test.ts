@@ -47,7 +47,7 @@ async function withTempSandbox(
   ) => Promise<ExecutionResult> = async () => ({ success: true, output: '', filename: '' }),
   actionFn?: (code: string) => Promise<ExecutionResult>
 ): Promise<void> {
-  const sandboxDir = await mkdtemp(join(tmpdir(), 'acn-tool-engine-'));
+  const sandboxDir = await mkdtemp(join(tmpdir(), 'telos-tool-engine-'));
   try {
     const sandbox = new MockSandbox(sandboxDir, parseFn, applyFn, actionFn);
     const session = { sandbox } as any;
@@ -62,7 +62,7 @@ test('recovers filename/content from embedded JSON payload', async () => {
   await withTempSandbox(async (engine, sandboxDir) => {
     const result = await engine.executeProviderToolCall({
       id: 'tool_1',
-      name: 'file',
+      name: 'edit_file',
       arguments: {
         content: '{"filename":"./documentation/x.md","content":"hello from json"}',
       },
@@ -75,11 +75,38 @@ test('recovers filename/content from embedded JSON payload', async () => {
   });
 });
 
+test('backward compat: old "file" tool name still works', async () => {
+  await withTempSandbox(async (engine, sandboxDir) => {
+    const result = await engine.executeProviderToolCall({
+      id: 'tool_compat',
+      name: 'file',
+      arguments: { filename: './compat.md', content: 'legacy name works' },
+    });
+    assert.match(result.observation, /created\/updated/i);
+    const fileBody = await readFile(join(sandboxDir, 'compat.md'), 'utf-8');
+    assert.equal(fileBody, 'legacy name works');
+  });
+});
+
+test('view_file reads file contents', async () => {
+  await withTempSandbox(async (engine, sandboxDir) => {
+    const { writeFileSync, mkdirSync } = await import('fs');
+    mkdirSync(join(sandboxDir, 'sub'), { recursive: true });
+    writeFileSync(join(sandboxDir, 'sub', 'test.txt'), 'hello world', 'utf-8');
+    const result = await engine.executeProviderToolCall({
+      id: 'tool_view',
+      name: 'view_file',
+      arguments: { filename: './sub/test.txt' },
+    });
+    assert.equal(result.observation, 'hello world');
+  });
+});
+
 test('normalizes typo path .documentation to ./documentation', async () => {
   await withTempSandbox(async (engine, sandboxDir) => {
     const result = await engine.executeProviderToolCall({
       id: 'tool_2',
-      name: 'file',
+      name: 'edit_file',
       arguments: {
         filename: '.documentation/06_sandbox_environment.md',
         content: 'chapter body',
@@ -97,7 +124,7 @@ test('accepts filename/content aliases for file tool payload', async () => {
   await withTempSandbox(async (engine, sandboxDir) => {
     const result = await engine.executeProviderToolCall({
       id: 'tool_alias',
-      name: 'FILE',
+      name: 'EDIT_FILE',
       arguments: {
         path: './documentation/alias.md',
         body: 'alias content',
@@ -125,7 +152,7 @@ test('recovers missing file edit by creating file from REPLACE payload', async (
 
       const result = await engine.executeProviderToolCall({
         id: 'tool_3',
-        name: 'file',
+        name: 'edit_file',
         arguments: {
           filename: './documentation/generated.md',
           content: editPayload,

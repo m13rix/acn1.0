@@ -6,7 +6,7 @@ import { join } from 'path';
 import { writeGeneratedTool } from '../generator.js';
 
 test('writeGeneratedTool emits embedded skills files and tool.yaml skills config', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'acn-imported-generator-'));
+  const root = await mkdtemp(join(tmpdir(), 'telos-imported-generator-'));
   try {
     const toolDir = join(root, 'demo');
     await writeGeneratedTool({

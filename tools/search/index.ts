@@ -1,15 +1,12 @@
 /**
  * Search Tool
  *
- * Provides Tavily-backed search, answer, and crawl capabilities,
- * plus Exa-backed long-form research and Google Image Search.
+ * Provides Tavily-backed search, answer, crawl, and image capabilities,
+ * plus Exa-backed long-form research.
  */
 
 import { tavily } from '@tavily/core';
 import { Exa } from 'exa-js';
-import {
-  GOOGLE_IMG_SCRAP
-} from 'google-img-scrap';
 
 const tavilyClient = tavily({ apiKey: process.env.TAVILY_API_KEY });
 const exa = new Exa(process.env.EXA_API_KEY);
@@ -79,17 +76,15 @@ export interface ResearchResult {
 }
 
 export interface ImageSearchResult {
-  id: string;
-  title: string;
-  url: string;
   originalUrl: string;
-  height: number;
-  width: number;
 }
 
 export interface ImageSearchOptions {
   limit?: number;
+  count?: number;
 }
+
+type TavilyImageEntry = string | { url?: string | null } | null | undefined;
 
 function truncateText(value: string | undefined, maxChars: number, label: string): string | undefined {
   if (!value || value.length <= maxChars) {
@@ -247,43 +242,52 @@ export async function crawl(url: string, prompt: string): Promise<CrawlResult> {
 }
 
 /**
- * Search for images using Google Image Search
+ * Search for images using Tavily image search
  *
  * @param query - The search query for images
- * @param options - Image search options (limit)
+ * @param options - Image search options (limit; count is accepted as an alias)
  * @returns Array of image search results (deduplicated)
  */
 export async function imageSearch(
   query: string,
   options: ImageSearchOptions = {}
 ): Promise<ImageSearchResult[]> {
-  const { limit = 5 } = options;
+  const limit = Math.max(1, Math.floor(options.limit ?? options.count ?? 5));
 
   console.log(`[Search] Searching for images: "${query}" (limit: ${limit})`);
 
   try {
-    const response = await GOOGLE_IMG_SCRAP({
-      search: query
+    const response = await tavilyClient.search(query, {
+      searchDepth: 'basic',
+      includeImages: true,
+      includeImageDescriptions: false,
+      maxResults: Math.max(limit, 5),
     });
 
-    if (!response || !response.result || !Array.isArray(response.result)) {
-      throw new Error('Invalid response from Google Image Search');
+    if (!response || !Array.isArray(response.images)) {
+      throw new Error('Invalid response from Tavily image search');
     }
 
-    const seenIds = new Set<string>();
+    const seenUrls = new Set<string>();
     const deduplicatedResults: ImageSearchResult[] = [];
+    const candidateImages: TavilyImageEntry[] = [
+      ...response.images,
+      ...((response.results ?? []).flatMap((result: any) => Array.isArray(result?.images) ? result.images : [])),
+    ];
 
-    for (const item of response.result) {
-      if (item.id && !seenIds.has(item.id) && deduplicatedResults.length < limit) {
-        seenIds.add(item.id);
-        deduplicatedResults.push({
-          id: item.id,
-          title: item.title || 'Untitled',
-          url: item.url || '',
-          originalUrl: item.originalUrl || item.url || '',
-          height: item.height || 0,
-          width: item.width || 0,
-        });
+    for (const entry of candidateImages) {
+      const imageUrl = typeof entry === 'string' ? entry : entry?.url;
+      if (typeof imageUrl !== 'string' || imageUrl.length === 0 || seenUrls.has(imageUrl)) {
+        continue;
+      }
+
+      seenUrls.add(imageUrl);
+      deduplicatedResults.push({
+        originalUrl: imageUrl,
+      });
+
+      if (deduplicatedResults.length >= limit) {
+        break;
       }
     }
 
@@ -291,7 +295,7 @@ export async function imageSearch(
     return deduplicatedResults;
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
-    throw new Error(`Google Image Search failed: ${message}`);
+    throw new Error(`Tavily image search failed: ${message}`);
   }
 }
 

@@ -1,0 +1,16 @@
+name: instruction
+description: |
+  Deterministic active-step instruction algorithm for agents that use an instruction tape.
+
+  Public API:
+  - `instruction.current(): Promise<object>`
+    Emits and returns the current algorithm step, active instructions, completed breadcrumbs, and preferred model.
+
+  - `instruction.next(input?): Promise<object>`
+    Advances to the next predetermined step. `input` can be a string note or `{ note?: string, step?: string }`.
+    Emits and returns the next active step instructions as action observation content.
+
+  - `instruction.set(stepId: string, note?: string): Promise<object>`
+    Jumps to a named step when recovery is needed, then emits and returns that step's active instructions.
+
+module: index.ts

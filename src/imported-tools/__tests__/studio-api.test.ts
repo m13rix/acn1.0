@@ -7,11 +7,11 @@ import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const TEST_ROOT = join(tmpdir(), 'acn-imported-tools-tests');
+const TEST_ROOT = join(tmpdir(), 'telos-imported-tools-tests');
 const FIXTURE_DIR = join(__dirname, '..', '__fixtures__');
 const FIXTURE_SERVER = join(FIXTURE_DIR, 'fake-mcp-server.js');
 
-process.env.ACN_IMPORTED_TOOLS_ROOT = TEST_ROOT;
+process.env.TELOS_IMPORTED_TOOLS_ROOT = TEST_ROOT;
 process.env.IMPORTED_TOOLS_DOCS_MODE = 'test';
 process.env.IMPORTED_TOOLS_SKIP_GEMINI = '1';
 
@@ -55,7 +55,7 @@ test('API flow inspects, applies, lists, and deletes an MCP import', async () =>
         command: process.execPath,
         args: [FIXTURE_SERVER],
       },
-      docs: [{ name: 'notes.md', content: 'Prefer compact ACN docs.' }],
+      docs: [{ name: 'notes.md', content: 'Prefer compact TELOS docs.' }],
     };
 
     const inspected = await request(baseUrl, '/api/imports/inspect', {

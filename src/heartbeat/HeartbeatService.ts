@@ -103,7 +103,7 @@ function shouldLogEventDispatch(event: HeartbeatSensorEvent, matchingCount: numb
     return true;
   }
 
-  if (event.sensor === 'clock' && event.event === 'every') {
+  if (event.sensor === 'clock') {
     return false;
   }
 
@@ -209,6 +209,20 @@ interface ClockScheduleMatch {
   matchedRules: ClockScheduleRule[];
 }
 
+interface ClockEveryDefinition {
+  normalized: string;
+  totalMs: number;
+}
+
+const CLOCK_INTERVAL_UNIT_MS: Record<string, number> = {
+  s: 1000,
+  m: 60 * 1000,
+  h: 60 * 60 * 1000,
+  d: 24 * 60 * 60 * 1000,
+};
+
+const CLOCK_CIVIL_EPOCH_MS = Date.UTC(1970, 0, 1, 0, 0, 0, 0);
+
 function pad2(value: number): string {
   return value.toString().padStart(2, '0');
 }
@@ -248,6 +262,67 @@ function normalizeClockTime(value: unknown): string | null {
   }
 
   return `${pad2(hours)}:${pad2(minutes)}`;
+}
+
+function parseClockEveryDefinition(args: unknown[]): ClockEveryDefinition | null {
+  if (!Array.isArray(args) || args.length !== 1 || typeof args[0] !== 'string') {
+    return null;
+  }
+
+  const raw = args[0].trim().toLowerCase();
+  if (!raw) {
+    return null;
+  }
+
+  const matcher = /(\d+)\s*([smhd])/g;
+  let totalMs = 0;
+  let normalized = '';
+  let consumed = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = matcher.exec(raw)) !== null) {
+    if (match.index !== consumed) {
+      return null;
+    }
+
+    const amount = Number(match[1]);
+    const unit = match[2] as keyof typeof CLOCK_INTERVAL_UNIT_MS;
+    const unitMs = CLOCK_INTERVAL_UNIT_MS[unit];
+    if (!Number.isInteger(amount) || amount <= 0 || !unitMs) {
+      return null;
+    }
+
+    totalMs += amount * unitMs;
+    normalized += `${amount}${unit}`;
+    consumed = matcher.lastIndex;
+  }
+
+  if (consumed !== raw.length || totalMs <= 0) {
+    return null;
+  }
+
+  return { normalized, totalMs };
+}
+
+function getClockEverySecondMs(now: Date): number {
+  return Math.floor(now.getTime() / 1000) * 1000;
+}
+
+function getClockCivilTimestampMs(now: Date): number {
+  return Date.UTC(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate(),
+    now.getHours(),
+    now.getMinutes(),
+    now.getSeconds(),
+    0,
+  );
+}
+
+function doesClockEveryMatch(definition: ClockEveryDefinition, now: Date): boolean {
+  const occurrenceCivilMs = getClockCivilTimestampMs(now);
+  return (occurrenceCivilMs - CLOCK_CIVIL_EPOCH_MS) % definition.totalMs === 0;
 }
 
 function parseClockScheduleDefinition(args: unknown[]): ClockScheduleDefinition | null {
@@ -332,6 +407,7 @@ export class HeartbeatService extends EventEmitter {
   private initializing = false;
   private started = false;
   private bindingsWatcher?: fs.FSWatcher;
+  private lastClockEverySecondMs: number | null = null;
 
   public constructor(options: HeartbeatServiceOptions = {}) {
     super();
@@ -421,6 +497,7 @@ export class HeartbeatService extends EventEmitter {
     const stops = Array.from(this.sensors.values()).map(sensor => sensor.runtime.stop());
     await Promise.allSettled(stops);
     this.started = false;
+    this.lastClockEverySecondMs = null;
   }
 
   private archiveLegacyTasksIfNeeded(): void {
@@ -576,12 +653,11 @@ export class HeartbeatService extends EventEmitter {
   private async resolveCreatorContext(): Promise<{
     ownerAgent: string;
     toolNames: string[];
-    skillsTable?: string;
     memoryConfig?: AgentMemoryConfig;
     loadedAgent?: LoadedAgent | null;
   }> {
     const fromContext = getCurrentAgent();
-    const explicitAgentName = fromContext?.config.name || (process.env.ACN_AGENT_NAME || '').trim();
+    const explicitAgentName = fromContext?.config.name || (process.env.TELOS_AGENT_NAME || '').trim();
     const ownerAgent = explicitAgentName || 'CORE';
     const loadedAgent = explicitAgentName
       ? (fromContext || await this.agentLoader.loadByName(explicitAgentName))
@@ -594,10 +670,7 @@ export class HeartbeatService extends EventEmitter {
     } else if (loadedAgent?.config) {
       toolNames = [...(loadedAgent.config.tools || [])];
       toolNames.push('files');
-      if (loadedAgent.config.skillsTable) {
-        toolNames.push('skills');
-      }
-      if (loadedAgent.config.memory?.enabled !== false && loadedAgent.config.memory) {
+      if (loadedAgent.config.memory?.enabled !== false) {
         toolNames.push('memory');
       }
     }
@@ -605,7 +678,6 @@ export class HeartbeatService extends EventEmitter {
     return {
       ownerAgent,
       toolNames: normalizeToolSnapshot(toolNames),
-      skillsTable: loadedAgent?.config.skillsTable,
       memoryConfig: loadedAgent?.config.memory,
       loadedAgent,
     };
@@ -634,7 +706,6 @@ export class HeartbeatService extends EventEmitter {
       handlerSource,
       ownerAgent: creator.ownerAgent,
       toolNames: creator.toolNames,
-      skillsTable: creator.skillsTable,
       memoryConfig: creator.memoryConfig,
       metadata: options.metadata,
       enabled: options.enabled !== false,
@@ -760,6 +831,62 @@ export class HeartbeatService extends EventEmitter {
       occurredAt: event.occurredAt || new Date().toISOString(),
     };
 
+    if (normalized.sensor === 'clock' && normalized.event === 'every') {
+      const occurrence = new Date(normalized.occurredAt);
+      const occurrenceSecondMs = getClockEverySecondMs(occurrence);
+      if (!Number.isFinite(occurrenceSecondMs)) {
+        console.warn(`[Heartbeat] Ignoring invalid clock.every occurrence '${normalized.occurredAt}'.`);
+        return;
+      }
+
+      if (this.lastClockEverySecondMs === occurrenceSecondMs) {
+        return;
+      }
+      this.lastClockEverySecondMs = occurrenceSecondMs;
+
+      const matching = Array.from(this.bindings.values()).flatMap((binding) => {
+        if (!binding.enabled || binding.eventRef.sensor !== 'clock' || binding.eventRef.event !== 'every') {
+          return [];
+        }
+
+        const definition = parseClockEveryDefinition(binding.eventRef.args);
+        if (!definition || !doesClockEveryMatch(definition, occurrence)) {
+          return [];
+        }
+
+        const payload = isPlainObject(normalized.payload)
+          ? {
+              ...normalized.payload,
+              every: {
+                interval: definition.normalized,
+                milliseconds: definition.totalMs,
+              },
+            }
+          : normalized.payload;
+
+        return [{
+          binding,
+          event: {
+            ...normalized,
+            args: binding.eventRef.args,
+            payload,
+            occurredAt: new Date(occurrenceSecondMs).toISOString(),
+          } as HeartbeatSensorEvent,
+        }];
+      });
+
+      if (shouldLogEventDispatch(normalized, matching.length)) {
+        this.log(`Event '${normalized.sensor}.${normalized.event}' received with ${matching.length} matching binding(s).`, {
+          args: normalized.args,
+          occurredAt: new Date(occurrenceSecondMs).toISOString(),
+          bindingIds: matching.map(item => item.binding.id),
+        });
+      }
+
+      await Promise.all(matching.map(item => this.executeBinding(item.binding, item.event)));
+      return;
+    }
+
     if (normalized.sensor === 'clock' && normalized.event === 'schedule') {
       const occurrence = new Date(normalized.occurredAt);
       const matching = Array.from(this.bindings.values()).flatMap((binding) => {
@@ -838,7 +965,7 @@ export class HeartbeatService extends EventEmitter {
 
       try {
         this.log(`Executing binding '${binding.id}' for event '${event.sensor}.${event.event}'.`);
-        await sandbox.initialize(tools, binding.skillsTable, binding.memoryConfig);
+        await sandbox.initialize(tools, binding.memoryConfig);
         const runtimeEvent = {
           ...event,
           bindingId: binding.id,
@@ -877,9 +1004,9 @@ if (typeof __handlerResult !== 'undefined') {
 `;
 
         const result = await sandbox.execute(code, undefined, {
-          ACN_AGENT_NAME: binding.ownerAgent,
-          ACN_API_URL: process.env.ACN_API_URL || '',
-          ACN_CHAT_ID: 'HEARTBEAT_ROUTE',
+          TELOS_AGENT_NAME: binding.ownerAgent,
+          TELOS_API_URL: process.env.TELOS_API_URL || '',
+          TELOS_CHAT_ID: 'HEARTBEAT_ROUTE',
           HEARTBEAT_DATA_DIR: this.paths.dataDir,
           HEARTBEAT_SENSORS_DIR: this.paths.sensorsDir,
         }, (chunk) => process.stderr.write(chunk));

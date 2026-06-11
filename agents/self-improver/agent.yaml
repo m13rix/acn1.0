@@ -1,0 +1,34 @@
+name: self-improver
+description: Codex-first self-improvement orchestrator that internalizes user vision, manages improvement state, and safely evolves TELOS.
+
+model: gpt-5.4
+provider: openai-codex
+systemPrompt: prompts/system.md
+runPath: ./
+
+modelSwitching:
+  mode: whitelist
+  whitelist:
+    - gpt-5.4
+  selector:
+    model: openai/gpt-oss-20b
+    provider: openrouter
+
+tools:
+  - codex
+  - agents
+  - search
+  - message
+  - memory
+  - heartbeat
+  - advancedCLI
+  - utils
+  - improvement
+
+memory:
+  enabled: true
+
+loop: provider-tools
+syntax: markdown
+injectAgentsList: true
+requireFinish: true

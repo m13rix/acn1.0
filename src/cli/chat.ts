@@ -11,11 +11,7 @@ import { AgentLoader } from '../loaders/AgentLoader.js';
 import { ToolLoader } from '../loaders/ToolLoader.js';
 import { Session } from '../core/Session.js';
 import { Executor } from '../core/Executor.js';
-import { SCORE_THRESHOLD as SKILLS_SCORE_THRESHOLD } from '../skills_system/SkillsService.js';
-import { getProvider } from '../providers/base.js';
-import { getSyntax } from '../syntax/base.js';
-
-import { getLoop } from '../loops/base.js';
+import { resolveTextAgentRuntime } from '../core/SessionFactory.js';
 import { TelegramService } from '../services/TelegramService.js';
 import { HeartbeatService } from '../heartbeat/HeartbeatService.js';
 import { COLORS, SYMBOLS, StreamDisplay } from './display.js';
@@ -24,6 +20,7 @@ import { setGlobalDisplay } from '../core/GlobalDisplay.js';
 import { InterfaceBridgeServer } from '../interfaces/InterfaceBridgeServer.js';
 import { InterfaceManager, setDefaultInterfaceManager } from '../interfaces/InterfaceManager.js';
 import { LocalVoiceInterfaceRuntime } from '../interfaces/local-voice.js';
+import { RealtimeAdvisorInterfaceRuntime } from '../interfaces/realtime-advisor/index.js';
 import { TelegramInterfaceRuntime } from '../interfaces/telegram-runtime.js';
 
 // Import to register all modules
@@ -39,7 +36,44 @@ const toolLoader = new ToolLoader();
 // Streaming is ON by default, use --no-stream to disable
 const disableStreaming = process.argv.includes('--no-stream');
 const enableStreaming = !disableStreaming;
-let debugMode = false;
+let debugMode = true;
+const isTestInstance = process.argv.includes('--test-instance') || readBooleanEnv('TELOS_TEST_INSTANCE');
+
+if (isTestInstance) {
+  if (!process.env.TELOS_INTERNAL_API_PORT) {
+    process.env.TELOS_INTERNAL_API_PORT = '0';
+  }
+  if (!process.env.TELOS_DISABLE_TELEGRAM_BOT) {
+    process.env.TELOS_DISABLE_TELEGRAM_BOT = '1';
+  }
+  if (!process.env.TELOS_DISABLE_HEARTBEAT) {
+    process.env.TELOS_DISABLE_HEARTBEAT = '1';
+  }
+  if (!process.env.TELOS_DISABLE_CONFIGURED_INTERFACES) {
+    process.env.TELOS_DISABLE_CONFIGURED_INTERFACES = '1';
+  }
+}
+
+function readBooleanEnv(name: string): boolean {
+  const raw = (process.env[name] || '').trim().toLowerCase();
+  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
+}
+
+async function waitForShutdownSignal(cleanup: () => Promise<void>): Promise<void> {
+  await new Promise<void>((resolve) => {
+    let resolved = false;
+    const finish = () => {
+      if (resolved) return;
+      resolved = true;
+      resolve();
+    };
+
+    process.once('SIGINT', finish);
+    process.once('SIGTERM', finish);
+  });
+
+  await cleanup();
+}
 
 // UI Constants
 
@@ -98,15 +132,12 @@ async function createSession(agentName: string): Promise<Session> {
     throw new Error(`Agent "${agentName}" uses modality "${agent.config.modality}" and cannot be opened in the text CLI.`);
   }
 
-  const provider = getProvider(agent.config.provider || 'gemini');
-  const syntax = getSyntax(agent.config.syntax);
-  const loop = getLoop(agent.config.loop);
+  const runtime = resolveTextAgentRuntime(agent);
 
   // Load tools
   const toolNames = [...(agent.config.tools || [])];
   if (!toolNames.includes('files')) toolNames.push('files');
-  if (agent.config.skillsTable && !toolNames.includes('skills')) toolNames.push('skills');
-  if (agent.config.memory && agent.config.memory.enabled !== false && !toolNames.includes('memory')) {
+  if (agent.config.memory?.enabled !== false && !toolNames.includes('memory')) {
     toolNames.push('memory');
   }
 
@@ -116,9 +147,9 @@ async function createSession(agentName: string): Promise<Session> {
 
   const session = new Session({
     agent,
-    provider,
-    syntax,
-    loop,
+    provider: runtime.provider,
+    syntax: runtime.syntax,
+    loop: runtime.loop,
     tools,
   });
 
@@ -207,15 +238,14 @@ async function runChat(session: Session, interfaceManager: InterfaceManager, tel
         display.endText();
       },
 
-      // Skills callbacks
-      onSkillsRetrieved: (content: string, score: number) => {
-        console.log(COLORS.skills(`\n${SYMBOLS.skills} Skills retrieved (${(score * 100).toFixed(0)}% match)`));
-        const preview = content.length > 80 ? content.slice(0, 80) + '...' : content;
+      onMemoryHintsRetrieved: (content: string, score: number) => {
+        console.log(COLORS.skills(`\n${SYMBOLS.skills} Memory hints retrieved (${(score * 100).toFixed(0)}% match)`));
+        const preview = content.length > 8000 ? content.slice(0, 8000) + '...' : content;
         console.log(COLORS.muted(`  ${preview}`));
       },
-      onSkillsSearched: (topScore: number | null) => {
+      onMemoryHintsSearched: (topScore: number | null) => {
         if (debugMode && topScore !== null) {
-          console.log(COLORS.muted(`\n  Skills: top score ${(topScore * 100).toFixed(0)}% (below ${(SKILLS_SCORE_THRESHOLD * 100).toFixed(0)}% threshold)`));
+          console.log(COLORS.muted(`\n  Memory hints: top score ${(topScore * 100).toFixed(0)}%`));
         }
       },
 
@@ -256,14 +286,14 @@ async function runChat(session: Session, interfaceManager: InterfaceManager, tel
   console.log(COLORS.muted('─'.repeat(50)));
   const statusParts = [COLORS.secondary(`  ${SYMBOLS.complete} Ready`)];
   if (enableStreaming) statusParts.push(COLORS.muted('streaming'));
-  if (session.skillsService) statusParts.push(COLORS.skills('skills'));
+  if (session.agent.config.memory?.enabled !== false) statusParts.push(COLORS.skills('memory'));
   console.log(statusParts.join(COLORS.muted(' | ')));
   console.log(COLORS.muted('  Commands: exit, clear, debug, debug on/off'));
   console.log(COLORS.muted('─'.repeat(50)));
   console.log('');
 
   // Check if we can use raw mode (TTY support)
-  const canUseRawMode = process.stdin.isTTY && session.skillsService;
+  const canUseRawMode = process.stdin.isTTY;
 
   if (canUseRawMode) {
     // Real-time input mode with raw stdin
@@ -294,7 +324,6 @@ async function runChat(session: Session, interfaceManager: InterfaceManager, tel
 
       if (lower === 'clear') {
         session.clearHistory();
-        session.skillsService?.clearHistory();
         console.log(COLORS.muted('Conversation cleared.\n'));
         return true;
       }
@@ -459,7 +488,6 @@ async function runChat(session: Session, interfaceManager: InterfaceManager, tel
 
         if (cmd === 'clear') {
           session.clearHistory();
-          session.skillsService?.clearHistory();
           console.log(COLORS.muted('Conversation cleared.\n'));
           prompt();
           return;
@@ -541,8 +569,10 @@ async function runChat(session: Session, interfaceManager: InterfaceManager, tel
 
 async function main(): Promise<void> {
   console.log('');
-  console.log(COLORS.primary.bold('  ACN Agent Framework'));
+  console.log(COLORS.primary.bold('  TELOS Agent Framework'));
   console.log('');
+  const disableConfiguredInterfaces = readBooleanEnv('TELOS_DISABLE_CONFIGURED_INTERFACES');
+  const disableHeartbeat = readBooleanEnv('TELOS_DISABLE_HEARTBEAT');
 
   // Check for API keys
   if (!process.env['GEMINI_KEY'] && !process.env['OPENROUTER_API_KEY']) {
@@ -555,11 +585,12 @@ async function main(): Promise<void> {
   const interfaceManager = new InterfaceManager(agentLoader);
   interfaceManager.registerRuntime(new TelegramInterfaceRuntime());
   interfaceManager.registerRuntime(new LocalVoiceInterfaceRuntime());
+  interfaceManager.registerRuntime(new RealtimeAdvisorInterfaceRuntime());
   setDefaultInterfaceManager(interfaceManager);
 
   try {
     await bridgeServer.start();
-    process.env.ACN_INTERFACE_API_URL = bridgeServer.getApiUrl();
+    process.env.TELOS_INTERFACE_API_URL = bridgeServer.getApiUrl();
   } catch (error) {
     console.error(COLORS.error('Failed to start Interface Bridge:'), error);
   }
@@ -572,21 +603,50 @@ async function main(): Promise<void> {
     console.error(COLORS.error('Failed to start Telegram Service:'), error);
   }
 
-  try {
-    await interfaceManager.startConfiguredInterfaces();
-  } catch (error) {
-    console.error(COLORS.error('Failed to start interface runtimes:'), error);
+  if (!disableConfiguredInterfaces) {
+    try {
+      await interfaceManager.startConfiguredInterfaces();
+    } catch (error) {
+      console.error(COLORS.error('Failed to start interface runtimes:'), error);
+    }
+  } else {
+    console.log(COLORS.muted('Configured interface runtimes disabled by TELOS_DISABLE_CONFIGURED_INTERFACES.'));
   }
 
   // Initialize Heartbeat Service
-  try {
-    const heartbeat = HeartbeatService.getInstance();
-    await heartbeat.initialize();
-    await heartbeat.start();
-  } catch (error) {
-    console.error(COLORS.error('Failed to start Heartbeat Service:'), error);
+  const heartbeat = HeartbeatService.getInstance();
+  if (!disableHeartbeat) {
+    try {
+      await heartbeat.initialize();
+      await heartbeat.start();
+    } catch (error) {
+      console.error(COLORS.error('Failed to start Heartbeat Service:'), error);
+    }
+  } else {
+    console.log(COLORS.muted('Heartbeat disabled by TELOS_DISABLE_HEARTBEAT.'));
   }
 
+  if (isTestInstance) {
+    const readyPayload = {
+      apiUrl: telegramService?.getApiUrl() || process.env.TELOS_API_URL || '',
+      interfaceApiUrl: process.env.TELOS_INTERFACE_API_URL || '',
+      heartbeatEnabled: !disableHeartbeat,
+      configuredInterfacesEnabled: !disableConfiguredInterfaces,
+      telegramBotEnabled: !readBooleanEnv('TELOS_DISABLE_TELEGRAM_BOT'),
+      mode: 'test-instance',
+    };
+    console.log(`TELOS_TEST_INSTANCE_READY ${JSON.stringify(readyPayload)}`);
+
+    await waitForShutdownSignal(async () => {
+      await Promise.allSettled([
+        bridgeServer.stop(),
+        interfaceManager.stopAll(),
+        heartbeat.stop(),
+        telegramService?.stop() || Promise.resolve(),
+      ]);
+    });
+    return;
+  }
 
   try {
     const agentName = await selectAgent();

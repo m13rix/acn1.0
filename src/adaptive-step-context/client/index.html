@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Adaptive Step Context Heatmap</title>
+    <link rel="stylesheet" href="./styles/main.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="mark">ASC</div>
+          <div>
+            <h1>Step Heatmap</h1>
+            <p>latent context telemetry</p>
+          </div>
+        </div>
+
+        <section class="panel">
+          <label class="field">
+            <span>Session</span>
+            <select id="sessionSelect"></select>
+          </label>
+          <div class="session-meta" id="sessionMeta">Waiting for a session...</div>
+        </section>
+
+        <section class="panel timeline-panel">
+          <h2>Timeline Lens</h2>
+          <label class="toggle-row">
+            <span>Live tail</span>
+            <input id="liveTimeline" type="checkbox" checked>
+          </label>
+          <label class="slider"><span id="timelineLabel">Context after latest step</span><input id="timelineStep" type="range" min="0" max="0" step="1" value="0"><b></b></label>
+          <div id="timelineTrack" class="timeline-track"></div>
+        </section>
+
+        <section class="panel controls">
+          <h2>Scoring Field</h2>
+          <label class="slider"><span>Current position</span><input id="wCurrent" type="range" min="0" max="3" step="0.05" value="0"><b></b></label>
+          <label class="slider sub"><span>current reasoning</span><input id="wCurrentReasoning" type="range" min="0" max="3" step="0.05" value="1.35"><b></b></label>
+          <label class="slider sub"><span>current output</span><input id="wCurrentOutput" type="range" min="0" max="3" step="0.05" value="0.85"><b></b></label>
+          <label class="slider sub"><span>current observation</span><input id="wCurrentObservation" type="range" min="0" max="3" step="0.05" value="0.75"><b></b></label>
+
+          <label class="slider"><span>Original goal</span><input id="wGoal" type="range" min="0" max="3" step="0.05" value="0"><b></b></label>
+
+          <label class="slider"><span>Projected position</span><input id="wProjected" type="range" min="0" max="3" step="0.05" value="1"><b></b></label>
+          <label class="slider sub"><span>project reasoning</span><input id="wProjectedReasoning" type="range" min="0" max="3" step="0.05" value="2.1"><b></b></label>
+          <label class="slider sub"><span>project output</span><input id="wProjectedOutput" type="range" min="0" max="3" step="0.05" value="1.1"><b></b></label>
+          <label class="slider sub"><span>project observation</span><input id="wProjectedObservation" type="range" min="0" max="3" step="0.05" value="1"><b></b></label>
+
+          <label class="slider"><span>Projection alpha</span><input id="projectionAlpha" type="range" min="-1" max="3" step="0.05" value="1.5"><b></b></label>
+          <label class="slider disabled"><span>Recency bias</span><input id="wRecency" type="range" min="0" max="3" step="0.05" value="0" disabled><b></b></label>
+          <label class="slider disabled"><span>Recency range</span><input id="recencyRange" type="range" min="1" max="24" step="1" value="6" disabled><b></b></label>
+        </section>
+
+        <section class="panel gradient-panel">
+          <h2>Gradient</h2>
+          <label class="color-row"><span>cold</span><input id="coldColor" type="color" value="#20314f"></label>
+          <label class="color-row"><span>mid</span><input id="midColor" type="color" value="#d4b24f"></label>
+          <label class="color-row"><span>hot</span><input id="hotColor" type="color" value="#ff4f39"></label>
+          <div id="gradientPreview" class="gradient-preview"></div>
+        </section>
+      </aside>
+
+      <main>
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">adaptive step context</p>
+            <h2 id="title">Heatmap lab</h2>
+          </div>
+          <div class="stats">
+            <div><span id="stepCount">0</span><small>steps</small></div>
+            <div><span id="readyCount">0</span><small>embedded</small></div>
+            <div><span id="meanHeat">0.00</span><small>mean heat</small></div>
+            <div><span id="meanProjection">0.00</span><small>projection hit</small></div>
+          </div>
+        </header>
+
+        <section class="goal-strip">
+          <div>
+            <strong>Original goal</strong>
+            <p id="goalText">No goal captured yet.</p>
+          </div>
+          <div class="legend">
+            <span>cold</span><div id="legendRamp"></div><span>hot</span>
+          </div>
+        </section>
+
+        <section class="heatmap-card">
+          <div class="heatmap-head">
+            <span>#</span>
+            <span>heat</span>
+            <span>reasoning</span>
+            <span>output</span>
+            <span>observation</span>
+            <span>goal</span>
+            <span>projection accuracy</span>
+          </div>
+          <div id="lensBanner" class="lens-banner"></div>
+          <div id="rows" class="rows"></div>
+        </section>
+      </main>
+    </div>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

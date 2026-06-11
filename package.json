@@ -1,12 +1,12 @@
 {
-   "name": "acn",
+   "name": "telos",
    "version": "1.0.0",
    "description": "High-performance agentic AI framework",
    "type": "module",
    "main": "dist/index.js",
    "types": "dist/index.d.ts",
    "bin": {
-      "acn": "./dist/cli/chat.js"
+      "telos": "./dist/cli/chat.js"
    },
    "scripts": {
       "build": "tsc",
@@ -17,7 +17,11 @@
       "imports:studio": "tsx src/imported-tools-studio/server/index.ts",
       "skills-test": "tsx src/skills_system/test/server.ts",
       "memory:viz": "tsx src/memory-viz/server/index.ts",
+      "memory:migrate-v2": "tsx scripts/migrate-memory-v2.ts",
+      "memory:test": "node --import tsx --test tests/memory-v2-phrases.test.ts tests/memory-v2-search.test.ts tests/memory-v2-mercury.test.ts",
       "homework:viz": "tsx src/homework-viz/server/index.ts",
+      "realtime:advisor": "tsx src/interfaces/realtime-advisor/dev-server.ts",
+      "realtime:embed-speakers": "tsx src/interfaces/realtime-advisor/embed-speakers.ts",
       "strategy:viz": "tsx tools/strategy/viz/server.ts"
    },
    "keywords": [
@@ -41,16 +45,25 @@
       "typescript": "^5.3.3"
    },
    "dependencies": {
+      "@ai-sdk/anthropic": "^3.0.81",
+      "@ai-sdk/google": "^3.0.64",
+      "@ai-sdk/openai-compatible": "^2.0.41",
+      "@ai-sdk/provider": "^3.0.8",
+      "@ai-sdk/provider-utils": "^4.0.23",
       "@deepgram/sdk": "^4.11.3",
       "@ffmpeg-installer/ffmpeg": "^1.1.0",
       "@google/genai": "1.42.0",
       "@google/generative-ai": "^0.24.1",
       "@lancedb/lancedb": "^0.23.0",
       "@modelcontextprotocol/sdk": "^1.27.1",
+      "@moonshot-ai/kimi-agent-sdk": "^0.1.8",
+      "@openrouter/ai-sdk-provider": "^2.8.0",
       "@openrouter/sdk": "^0.3.11",
       "@tavily/core": "^0.7.2",
       "@types/multer": "^2.1.0",
+      "ai": "^6.0.168",
       "chalk": "^5.3.0",
+      "cloudconvert": "^3.0.0",
       "commander": "^14.0.3",
       "compute-cosine-similarity": "^1.1.0",
       "dotenv": "^16.4.5",

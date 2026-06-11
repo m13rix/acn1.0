@@ -9,18 +9,16 @@ description: |
     Example: `const text = await homework.getSectionText("istoriya-rossii-8", 17);`
 
   - `homework.ask(bookId: string, question: string): Promise<string>`
-    NotebookLM CLI-backed access to the shared textbooks notebook.
-    Allowed `bookId`: `algebra`, `geometry`, `social_studies`, `history`, `russian`. The question is normalized to one line and sent through `notebooklm ask ... -n b14102a9-29f2-4cf9-ad2a-10238008c138`.
+    Ask the shared textbooks notebook.
+    Allowed `bookId`: `algebra`, `geometry`, `social_studies`, `history`, `russian`, 'english'.
 
   - `homework.generateSVG(taskText: string): Promise<string>`
     Generates a clean SVG drawing for a geometry problem.
 
   - `homework.formatHomework(taskContent: string, fileName: string): Promise<string>`
-    Formats a completed homework solution and saves it to a `.txt` file.
+    Format a completed homework solution and save it to a `.txt` file.
 
   - `homework.generateSectionVideo(documentId: string, sectionNumber: number): Promise<string>`
-    Generates an explainer video for a document section using NotebookLM.
-    Creates a notebook, uploads the section PDF, generates a Russian-language explainer video,
-    waits for completion (15-45 min), downloads it, and auto-sends to Telegram.
+    Generate an explainer video for a document section.
     Example: `const result = await homework.generateSectionVideo("istoriya-rossii-8", 17);`
 module: index.ts

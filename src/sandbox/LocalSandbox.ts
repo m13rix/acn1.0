@@ -5,9 +5,10 @@
  * Each session gets a fresh sandbox directory.
  */
 
-import { spawn } from 'child_process';
-import { mkdir, writeFile, readFile, rm } from 'fs/promises';
-import { join, dirname } from 'path';
+import { spawn, type ChildProcess } from 'child_process';
+import { existsSync } from 'fs';
+import { mkdir, writeFile, readFile, rm, stat } from 'fs/promises';
+import { join, dirname, resolve } from 'path';
 import { randomUUID } from 'crypto';
 import { fileURLToPath } from 'url';
 import type { AgentMemoryConfig, ExecutionResult, LoadedTool } from '../types/index.js';
@@ -23,20 +24,29 @@ import { buildPowerShellCommand, normalizeCliCommand, shouldFallbackToCmd } from
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = join(__dirname, '..', '..');
 
-// Path to the built-in skills tool
-const SKILLS_TOOL_PATH = join(PROJECT_ROOT, 'tools', 'skills', 'index.ts');
 // Path to the built-in files tool
 const FILES_TOOL_PATH = join(PROJECT_ROOT, 'tools', 'files', 'index.ts');
 // Path to the built-in agents tool
 const AGENTS_TOOL_PATH = join(PROJECT_ROOT, 'tools', 'agents', 'index.ts');
+const ACTION_WORKER_JS_PATH = join(__dirname, 'action-worker.js');
+const ACTION_WORKER_TS_PATH = join(__dirname, 'action-worker.ts');
+const ACTION_WORKER_PATH = existsSync(ACTION_WORKER_JS_PATH) ? ACTION_WORKER_JS_PATH : ACTION_WORKER_TS_PATH;
 
 export class LocalSandbox implements ISandbox {
     public readonly id: string;
     public readonly directory: string;
+    private readonly ownsDirectory: boolean;
     private tools: LoadedTool[] = [];
     private initialized = false;
-    private skillsTable: string | undefined;
     private memoryConfig: AgentMemoryConfig | undefined;
+    private actionWorker: ChildProcess | null = null;
+    private actionWorkerRequestCounter = 0;
+    private actionWorkerPending = new Map<string, {
+        resolve: (result: ExecutionResult) => void;
+        onStderr?: (data: string) => void;
+        keepAlive: NodeJS.Timeout;
+    }>();
+    private actionWorkerQueue: Promise<void> = Promise.resolve();
 
     private executionCounter: number = 0; // Counter for execution files, starts at 0
     private executedFiles: Map<string, string> = new Map(); // filename -> filePath mapping for diff support
@@ -44,36 +54,41 @@ export class LocalSandbox implements ISandbox {
     constructor(optionsOrBaseDir?: string | { baseDir?: string; existingPath?: string }) {
         if (typeof optionsOrBaseDir === 'object' && optionsOrBaseDir.existingPath) {
             this.id = 'attached'; // Special ID for attached sandboxes
-            this.directory = optionsOrBaseDir.existingPath;
+            this.directory = resolve(optionsOrBaseDir.existingPath);
+            this.ownsDirectory = false;
         } else {
             const baseDir = typeof optionsOrBaseDir === 'string' ? optionsOrBaseDir : optionsOrBaseDir?.baseDir;
             this.id = randomUUID().slice(0, 8);
             this.directory = join(baseDir || join(PROJECT_ROOT, 'sandboxes'), `session-${this.id}`);
+            this.ownsDirectory = true;
         }
     }
 
     /**
      * @param tools - Array of loaded tools to make available in the sandbox
-     * @param skillsTable - Optional skills table name for the system tool
      * @param memoryConfig - Optional memory configuration for memory tool env wiring
      */
-    async initialize(tools: LoadedTool[], skillsTable?: string, memoryConfig?: AgentMemoryConfig): Promise<void> {
+    async initialize(tools: LoadedTool[], memoryConfig?: AgentMemoryConfig): Promise<void> {
         this.tools = tools;
-        this.skillsTable = skillsTable;
         this.memoryConfig = memoryConfig;
 
-        if (this.id !== 'attached') {
+        if (this.ownsDirectory) {
             // Create sandbox directory
             await mkdir(this.directory, { recursive: true });
 
             // Create package.json for npm installs
             await this.createPackageJson();
 
-            // Create globals.ts for system functions
-            await this.createGlobalsFile();
-
             // Create tsconfig for the sandbox
             await this.createTsConfig();
+        } else {
+            const info = await stat(this.directory).catch(() => null);
+            if (!info) {
+                throw new Error(`Attached sandbox path does not exist: ${this.directory}`);
+            }
+            if (!info.isDirectory()) {
+                throw new Error(`Attached sandbox path must be a directory: ${this.directory}`);
+            }
         }
 
         this.initialized = true;
@@ -83,20 +98,29 @@ export class LocalSandbox implements ISandbox {
         return this.tools;
     }
 
+    async warmUp(): Promise<void> {
+        if (!this.initialized || process.env.TELOS_SANDBOX_WARM_UP === 'false') {
+            return;
+        }
+        if (process.env.TELOS_SANDBOX_PERSISTENT_ACTION_WORKER === 'false') {
+            return;
+        }
+
+        const result = await this.execute('void 0;');
+        if (!result.success) {
+            throw new Error(result.error || result.output || 'Sandbox warm-up action failed');
+        }
+    }
+
     getDescription(): string {
-        return `## Sandbox (Local)
+        return `## Local Sandbox
 
-The agent runs in a local sandbox environment.
+\`action\` runs TypeScript in an isolated action context; variables do not persist between calls. Use files for state and \`console.log(...)\` for observations.
+\`cli\` runs shell commands in the sandbox directory.
 
-### Action
-The content of actions is TypeScript code executed locally.
-- Use \`console.log(...)\` to produce observations.
-- Each \`action\` call runs in a fresh process. Variables declared in one action are NOT available in the next one.
-- Persist reusable data via files (for example, write JSON/text and read it in the next action).
-
-### CLI
-The content of cli tags are shell commands executed in the sandbox directory.
-- Use for npm install, file operations, git, etc.`;
+Available inside \`action\`:
+- \`edit_file(filename, content)\` — create or overwrite a file.
+- \`view_file(filename)\` — read and return a file's contents as a string.`;
     }
 
     /**
@@ -132,8 +156,9 @@ The content of cli tags are shell commands executed in the sandbox directory.
         }
 
         // Regular execution - generate the execution file with tool imports
-        const fileContent = this.generateExecutionFile(cleanedCode);
-        const filename = `exec_${this.executionCounter}.ts`;
+        const usePersistentWorker = process.env.TELOS_SANDBOX_PERSISTENT_ACTION_WORKER !== 'false';
+        const fileContent = this.generateExecutionFile(cleanedCode, usePersistentWorker ? 'worker' : 'process');
+        const filename = `exec_${this.executionCounter}.cts`;
         const filePath = join(this.directory, filename);
         this.executionCounter++; // Increment counter for next execution
 
@@ -142,8 +167,17 @@ The content of cli tags are shell commands executed in the sandbox directory.
         // Track this file for future diff edits
         this.executedFiles.set(filename, filePath);
 
-        // Execute with tsx
-        const result = await this.runTypeScript(filePath, env, onStderr);
+        let result: ExecutionResult;
+        try {
+            result = usePersistentWorker
+                ? await this.runTypeScriptInWorker(filePath, env, onStderr)
+                : await this.runTypeScript(filePath, env, onStderr);
+        } finally {
+            this.executedFiles.delete(filename);
+            await rm(filePath, { force: true }).catch(() => {
+                // Ignore temp file cleanup errors.
+            });
+        }
 
         // Add filename to result
         return {
@@ -173,9 +207,6 @@ The content of cli tags are shell commands executed in the sandbox directory.
      */
     private async runShellCommand(command: string, onStdout?: (data: string) => void, onStderr?: (data: string) => void): Promise<ExecutionResult> {
         const env: NodeJS.ProcessEnv = { ...process.env };
-        if (this.skillsTable) {
-            env.SKILLS_TABLE = this.skillsTable;
-        }
         this.applyMemoryEnv(env);
 
         if (process.platform === 'win32') {
@@ -320,38 +351,31 @@ The content of cli tags are shell commands executed in the sandbox directory.
     /**
      * Generate the execution file with tool imports
      */
-    private generateExecutionFile(code: string): string {
+    private generateExecutionFile(code: string, runtime: 'process' | 'worker' = 'process'): string {
         const requireStatements: string[] = [];
-
-        // Import globals (completion helpers)
-        requireStatements.push(`require('./globals.js');`);
+        const injectedToolNames: string[] = ['files'];
 
         // Always require the files tool (built-in system tool)
         const filesToolRelativePath = this.getRelativePath(FILES_TOOL_PATH);
-        requireStatements.push(`const files = require('${filesToolRelativePath}');`);
-
-        // Require the skills tool if configured
-        if (this.skillsTable) {
-            const skillsToolRelativePath = this.getRelativePath(SKILLS_TOOL_PATH);
-            requireStatements.push(`const skills = require('${skillsToolRelativePath}');`);
-        }
+        requireStatements.push(`const files = __telosLazyWaitableTool(() => require('${filesToolRelativePath}'), 'files');`);
 
         // Add user-configured tools
         for (const tool of this.tools) {
             // Skip built-in tools if they were explicitly added in config
-            if (tool.config.name === 'skills' || tool.config.name === 'files') continue;
+            if (tool.config.name === 'files') continue;
 
             const relativePath = this.getRelativePath(tool.absolutePath);
-            requireStatements.push(`const ${tool.config.name} = require('${relativePath}');`);
+            requireStatements.push(`const ${tool.config.name} = __telosLazyWaitableTool(() => require('${relativePath}'), '${tool.config.name}');`);
+            injectedToolNames.push(tool.config.name);
         }
 
         const toolRequires = requireStatements.join('\n');
+        const toolGlobals = this.getToolGlobalsBootstrap(injectedToolNames);
 
         // Build the set of tool names already auto-imported so we can strip duplicates
         const autoImportedNames = new Set<string>(['files']);
-        if (this.skillsTable) autoImportedNames.add('skills');
         for (const tool of this.tools) {
-            if (tool.config.name !== 'skills' && tool.config.name !== 'files') {
+            if (tool.config.name !== 'files') {
                 autoImportedNames.add(tool.config.name);
             }
         }
@@ -367,7 +391,52 @@ The content of cli tags are shell commands executed in the sandbox directory.
         // Agent requires (npm packages) are converted to require() calls inside the IIFE
 
         // Wrap the code in an async IIFE to support top-level await
-        return `${toolRequires}
+        const globalsBootstrap = this.getGlobalsBootstrap();
+        const asyncToolTrackingBootstrap = this.getAsyncToolTrackingBootstrap();
+
+        if (runtime === 'worker') {
+            return `${globalsBootstrap}
+
+${asyncToolTrackingBootstrap}
+${toolRequires}
+${toolGlobals}
+
+// Agent code execution
+module.exports = (async () => {
+try {
+// Package requires
+${agentRequires}
+
+${codeWithoutImports}
+  await __telosWaitForTrackedAsyncTasks();
+  const exitGraceMs = __telosReadNonNegativeIntEnv('TELOS_SANDBOX_EXIT_GRACE_MS', 0);
+  if (exitGraceMs > 0) {
+    await __telosSleep(exitGraceMs);
+  }
+} catch (err) {
+  if (err && err.__telosCompletionSignal) {
+    return;
+  }
+  if (err && err.__telosWorkerProcessExit) {
+    process.exitCode = err.code ?? 0;
+    return;
+  }
+  console.error(err);
+  process.exitCode = 1;
+  const errorExitGraceMs = __telosReadNonNegativeIntEnv('TELOS_SANDBOX_ERROR_EXIT_GRACE_MS', 0);
+  if (errorExitGraceMs > 0) {
+    await __telosSleep(errorExitGraceMs);
+  }
+}
+})();
+`;
+        }
+
+        return `${globalsBootstrap}
+
+${asyncToolTrackingBootstrap}
+${toolRequires}
+${toolGlobals}
 
 // Agent code execution
 (async () => {
@@ -375,18 +444,153 @@ The content of cli tags are shell commands executed in the sandbox directory.
 ${agentRequires}
 
 ${codeWithoutImports}
-})().then(() => {
-  // Keep the event loop alive to allow promise chains (like .then() calls) to complete
-  return new Promise(resolve => setTimeout(resolve, 500));
+})().then(async () => {
+  await __telosWaitForTrackedAsyncTasks();
+  const exitGraceMs = __telosReadNonNegativeIntEnv('TELOS_SANDBOX_EXIT_GRACE_MS', 0);
+  if (exitGraceMs > 0) {
+    await __telosSleep(exitGraceMs);
+  }
+}).then(() => {
+  process.exit(process.exitCode ?? 0);
 }).catch(async err => {
   console.error(err);
   process.exitCode = 1;
-  await new Promise(resolve => setTimeout(resolve, 200));
+  const errorExitGraceMs = __telosReadNonNegativeIntEnv('TELOS_SANDBOX_ERROR_EXIT_GRACE_MS', 0);
+  if (errorExitGraceMs > 0) {
+    await __telosSleep(errorExitGraceMs);
+  }
+  process.exit(process.exitCode ?? 1);
 }).catch(err => {
   console.error('Error in promise chain:', err);
-  process.exitCode = 1;
+  process.exit(1);
 });
 `;
+    }
+
+    private getAsyncToolTrackingBootstrap(): string {
+        return `
+// Tracks async tool calls that agents sometimes start without awaiting at top
+// level (e.g. calling an async function but not awaiting its return promise).
+// This keeps actions alive until all floating promise chains finish.
+const __telosTrackedAsyncTasks = new Set();
+
+function __telosReadNonNegativeIntEnv(name, fallbackValue) {
+  const raw = process.env[name];
+  if (!raw) return fallbackValue;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallbackValue;
+}
+
+function __telosSleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function __telosTrackAsyncTask(value, label) {
+  if (!value || typeof value.then !== 'function') {
+    return value;
+  }
+
+  let tracked;
+  tracked = Promise.resolve(value)
+    .then(() => undefined, () => undefined)
+    .finally(() => {
+      __telosTrackedAsyncTasks.delete(tracked);
+    });
+
+  __telosTrackedAsyncTasks.add(tracked);
+  return value;
+}
+
+function __telosWrapWaitableTool(tool, toolName) {
+  if (!tool || (typeof tool !== 'object' && typeof tool !== 'function')) {
+    return tool;
+  }
+
+  return new Proxy(tool, {
+    get(target, prop, receiver) {
+      const value = Reflect.get(target, prop, receiver);
+      if (typeof prop === 'string' && typeof value === 'function') {
+        return function (...args) {
+          const result = Reflect.apply(value, target, args);
+          if (result && typeof result.then === 'function') {
+            return __telosTrackAsyncTask(result, \`\${toolName}.\${prop}\`);
+          }
+          return result;
+        };
+      }
+      return value;
+    },
+  });
+}
+
+function __telosLazyWaitableTool(loadTool, toolName) {
+  let loaded = false;
+  let tool;
+
+  function getLoadedTool() {
+    if (!loaded) {
+      tool = __telosWrapWaitableTool(loadTool(), toolName);
+      loaded = true;
+    }
+    return tool;
+  }
+
+  return new Proxy(function __telosLazyToolProxy() {}, {
+    get(_target, prop, receiver) {
+      if (prop === '__telosIsLazyTool') {
+        return true;
+      }
+      return Reflect.get(getLoadedTool(), prop, receiver);
+    },
+    set(_target, prop, value, receiver) {
+      return Reflect.set(getLoadedTool(), prop, value, receiver);
+    },
+    has(_target, prop) {
+      return prop in getLoadedTool();
+    },
+    ownKeys() {
+      return Reflect.ownKeys(getLoadedTool());
+    },
+    getOwnPropertyDescriptor(_target, prop) {
+      return Reflect.getOwnPropertyDescriptor(getLoadedTool(), prop);
+    },
+    apply(_target, thisArg, args) {
+      const loadedTool = getLoadedTool();
+      if (typeof loadedTool !== 'function') {
+        throw new TypeError(\`Tool "\${toolName}" is not directly callable; call one of its methods instead.\`);
+      }
+      return Reflect.apply(loadedTool, thisArg, args);
+    },
+  });
+}
+
+async function __telosWaitForTrackedAsyncTasks() {
+  const idleMs = __telosReadNonNegativeIntEnv('TELOS_SANDBOX_ASYNC_IDLE_MS', 0);
+
+  for (;;) {
+    if (__telosTrackedAsyncTasks.size === 0) {
+      await __telosSleep(idleMs);
+      if (__telosTrackedAsyncTasks.size === 0) {
+        return;
+      }
+      continue;
+    }
+
+    await Promise.race(Array.from(__telosTrackedAsyncTasks));
+  }
+}
+`;
+    }
+
+    private getToolGlobalsBootstrap(toolNames: string[]): string {
+        const uniqueToolNames = Array.from(new Set(toolNames.filter(Boolean)));
+        if (uniqueToolNames.length === 0) {
+            return '';
+        }
+
+        return uniqueToolNames
+            .map((toolName) => `(globalThis as any)[${JSON.stringify(toolName)}] = ${toolName};`)
+            .join('\n');
     }
 
     /**
@@ -471,27 +675,40 @@ ${codeWithoutImports}
     private stripDuplicateToolImports(code: string, autoImportedNames: Set<string>): string {
         const lines = (code || '').split('\n');
         const result: string[] = [];
+        const aliasRewrites = new Map<string, string>();
 
         for (const line of lines) {
             const trimmed = line.trim();
 
             // Match: const/let/var name = require('...');
-            const requireMatch = trimmed.match(/^(?:const|let|var)\s+(\w+)\s*=\s*require\s*\(/);
+            const requireMatch = trimmed.match(/^(?:const|let|var)\s+(\w+)\s*=\s*require\s*\(\s*['"]([^'"]+)['"]\s*\)\s*;?\s*$/);
             if (requireMatch) {
                 const name = requireMatch[1];
+                const moduleName = requireMatch[2];
                 if (name && autoImportedNames.has(name)) {
                     // Drop the line — this tool is already auto-imported at the top
                     result.push(`// [auto-fix] removed duplicate require for already-injected tool: ${name}`);
                     continue;
                 }
+                if (name && moduleName && autoImportedNames.has(moduleName)) {
+                    aliasRewrites.set(name, moduleName);
+                    result.push(`// [auto-fix] removed aliased require for already-injected tool: ${name} -> ${moduleName}`);
+                    continue;
+                }
             }
 
             // Match: import name from '...' or import * as name from '...'
-            const importMatch = trimmed.match(/^import\s+(?:\*\s+as\s+)?(\w+)\s+from\s+['"]/);
+            const importMatch = trimmed.match(/^import\s+(?:\*\s+as\s+)?(\w+)\s+from\s+['"]([^'"]+)['"]\s*;?\s*$/);
             if (importMatch) {
                 const name = importMatch[1];
+                const moduleName = importMatch[2];
                 if (name && autoImportedNames.has(name)) {
                     result.push(`// [auto-fix] removed duplicate import for already-injected tool: ${name}`);
+                    continue;
+                }
+                if (name && moduleName && autoImportedNames.has(moduleName)) {
+                    aliasRewrites.set(name, moduleName);
+                    result.push(`// [auto-fix] removed aliased import for already-injected tool: ${name} -> ${moduleName}`);
                     continue;
                 }
             }
@@ -499,7 +716,13 @@ ${codeWithoutImports}
             result.push(line);
         }
 
-        return result.join('\n');
+        let normalized = result.join('\n');
+        for (const [alias, toolName] of aliasRewrites.entries()) {
+            const pattern = new RegExp(`\\b${this.escapeRegExp(alias)}\\.`, 'g');
+            normalized = normalized.replace(pattern, `${toolName}.`);
+        }
+
+        return normalized;
     }
 
     /**
@@ -579,7 +802,15 @@ ${codeWithoutImports}
         // Keep .ts extension — tsx handles TypeScript requires natively
         const requirePath = upPath + downPath;
 
-        return requirePath || './';
+        if (!requirePath) {
+            return './';
+        }
+
+        if (requirePath.startsWith('../') || requirePath.startsWith('./') || requirePath.startsWith('/')) {
+            return requirePath;
+        }
+
+        return `./${requirePath}`;
     }
 
     /**
@@ -589,7 +820,7 @@ ${codeWithoutImports}
         const packageJson = {
             name: `sandbox-${this.id}`,
             version: '1.0.0',
-            description: 'ACN agent sandbox',
+            description: 'TELOS agent sandbox',
             private: true,
         };
 
@@ -621,18 +852,28 @@ ${codeWithoutImports}
         await writeFile(tsconfigPath, tsconfigContent, 'utf-8');
     }
 
-    /**
-     * Create globals.ts with system functions like TASK_DONE
-     */
-    private async createGlobalsFile(): Promise<void> {
-        const content = `
+    private getGlobalsBootstrap(): string {
+        return `
 import { exit } from 'process';
 import fs from 'fs';
 import path from 'path';
 
+class __TelosCompletionSignal extends Error {
+    __telosCompletionSignal = true;
+    code: number;
+
+    constructor(code = 0) {
+        super('__TELOS_COMPLETION_SIGNAL__');
+        this.code = code;
+    }
+}
+
 // System function to complete the task and send the final user-facing result.
 const completeTask = (message: string) => {
     console.log('${COMPLETION_SIGNAL_START}' + JSON.stringify(message) + '${COMPLETION_SIGNAL_END}');
+    if ((global as any).__TELOS_ACTION_WORKER_RUNTIME__) {
+        throw new __TelosCompletionSignal(0);
+    }
     exit(0);
 };
 
@@ -641,9 +882,9 @@ const completeTask = (message: string) => {
 
 // Convenience helper available in action snippets.
 // Writes a file in sandbox scope and logs a standard confirmation line.
-(global as any).file = (filename: string, content: unknown) => {
+(global as any).edit_file = (filename: string, content: unknown) => {
     if (typeof filename !== 'string' || filename.trim().length === 0) {
-        throw new Error('file(filename, content): filename must be a non-empty string');
+        throw new Error('edit_file(filename, content): filename must be a non-empty string');
     }
 
     const sandboxRoot = path.resolve(process.env.SANDBOX_DIR || process.cwd());
@@ -672,14 +913,38 @@ const completeTask = (message: string) => {
     console.log(\`File \${filename} created/updated.\`);
 };
 
+// Convenience helper to view file contents in action snippets.
+// Reads a file from the sandbox and returns its content as a string.
+(global as any).view_file = (filename: string): string => {
+    if (typeof filename !== 'string' || filename.trim().length === 0) {
+        throw new Error('view_file(filename): filename must be a non-empty string');
+    }
+
+    const sandboxRoot = path.resolve(process.env.SANDBOX_DIR || process.cwd());
+    const targetPath = path.resolve(sandboxRoot, filename);
+    const relative = path.relative(sandboxRoot, targetPath);
+
+    if (relative.startsWith('..') || path.isAbsolute(relative)) {
+        throw new Error(\`Security Error: Cannot read outside sandbox: \${filename}\`);
+    }
+
+    if (!fs.existsSync(targetPath)) {
+        throw new Error(\`File not found: \${filename}\`);
+    }
+
+    const content = fs.readFileSync(targetPath, 'utf-8');
+    console.log(\`File \${filename} read (\${content.length} chars).\`);
+    return content;
+};
+
 // Type definition for TypeScript (doesn't affect runtime but good for documentation if we generated d.ts)
 declare global {
     function ${PRIMARY_COMPLETION_FUNCTION}(message: string): void;
     function ${LEGACY_COMPLETION_FUNCTION}(message: string): void;
-    function file(filename: string, content: unknown): void;
+    function edit_file(filename: string, content: unknown): void;
+    function view_file(filename: string): string;
 }
 `;
-        await writeFile(join(this.directory, 'globals.ts'), content, 'utf-8');
     }
 
     /**
@@ -694,25 +959,26 @@ declare global {
             const stdout: string[] = [];
             const stderr: string[] = [];
 
-            // Build environment with SKILLS_TABLE if configured and extraEnv
+            // Build environment with memory configuration and extraEnv
             const env = { ...process.env, ...extraEnv };
-            if (this.skillsTable) {
-                env.SKILLS_TABLE = this.skillsTable;
-            }
             this.applyMemoryEnv(env);
             // Provide sandbox directory to tools, guaranteed string
             env.SANDBOX_DIR = this.directory;
-            // Provide project root, fallback to current dir if missing (though calculatedRoot handles it)
-            env.PROJECT_ROOT = PROJECT_ROOT || process.cwd();
+            // The agent's process.cwd() already points to sandbox dir (see cwd: this.directory below).
+            // Override PROJECT_ROOT to the sandbox dir so agent code sees both env var and cwd
+            // consistent with the session directory.
+            env.PROJECT_ROOT = this.directory;
+            // Preserve the actual project root for tools/internal code that need it.
+            env.TELOS_PROJECT_ROOT = PROJECT_ROOT || process.cwd();
 
             // Ensure PATH is a string
             if (process.env.PATH) {
                 env.PATH = process.env.PATH;
             }
 
-            const proc = spawn('npx', ['tsx', filePath], {
+            const proc = spawn(process.execPath, ['--import', 'tsx', filePath], {
                 cwd: this.directory,
-                shell: true,
+                shell: false,
                 env: env as NodeJS.ProcessEnv, // Cast to satisfy type if needed
             });
 
@@ -756,34 +1022,213 @@ declare global {
         });
     }
 
+    private runTypeScriptInWorker(
+        filePath: string,
+        extraEnv?: Record<string, string>,
+        onStderr?: (data: string) => void
+    ): Promise<ExecutionResult> {
+        const run = () => this.runTypeScriptInWorkerOnce(filePath, extraEnv, onStderr)
+            .catch(async (error: any) => {
+                await this.stopActionWorker();
+                return {
+                    success: false,
+                    output: '',
+                    error: `Persistent action worker failed: ${error?.message || String(error)}`,
+                };
+            });
+
+        const queued = this.actionWorkerQueue.then(run, run);
+        this.actionWorkerQueue = queued.then(() => undefined, () => undefined);
+        return queued;
+    }
+
+    private runTypeScriptInWorkerOnce(
+        filePath: string,
+        extraEnv?: Record<string, string>,
+        onStderr?: (data: string) => void
+    ): Promise<ExecutionResult> {
+        return new Promise((resolve) => {
+            const worker = this.ensureActionWorker();
+            const env = { ...process.env, ...extraEnv };
+            this.applyMemoryEnv(env);
+            env.SANDBOX_DIR = this.directory;
+            env.PROJECT_ROOT = this.directory;
+            env.TELOS_PROJECT_ROOT = PROJECT_ROOT || process.cwd();
+            if (process.env.PATH) {
+                env.PATH = process.env.PATH;
+            }
+
+            const id = String(++this.actionWorkerRequestCounter);
+            const keepAlive = setInterval(() => {
+                // Keeps the parent event loop alive while this unrefed worker request is pending.
+            }, 1000);
+            this.actionWorkerPending.set(id, { resolve, onStderr, keepAlive });
+            this.refActionWorker(worker);
+            worker.send?.({ type: 'run', id, filePath, env }, (error) => {
+                if (!error) {
+                    return;
+                }
+                const pending = this.actionWorkerPending.get(id);
+                if (pending) {
+                    clearInterval(pending.keepAlive);
+                    this.actionWorkerPending.delete(id);
+                }
+                this.unrefActionWorkerIfIdle();
+                resolve({
+                    success: false,
+                    output: '',
+                    error: `Failed to send action to persistent worker: ${error.message}`,
+                });
+            });
+        });
+    }
+
+    private ensureActionWorker(): ChildProcess {
+        if (this.actionWorker && !this.actionWorker.killed) {
+            return this.actionWorker;
+        }
+
+        const worker = spawn(process.execPath, ['--import', 'tsx', ACTION_WORKER_PATH], {
+            cwd: this.directory,
+            env: {
+                ...process.env,
+                SANDBOX_DIR: this.directory,
+                PROJECT_ROOT: this.directory,
+                TELOS_PROJECT_ROOT: PROJECT_ROOT || process.cwd(),
+            },
+            shell: false,
+            stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
+        });
+        this.unrefActionWorker(worker);
+
+        worker.stderr?.on('data', (data) => {
+            const str = data.toString();
+            for (const pending of this.actionWorkerPending.values()) {
+                pending.onStderr?.(str);
+            }
+        });
+
+        worker.on('message', (message: any) => {
+            if (!message || typeof message !== 'object') {
+                return;
+            }
+            const id = String(message.id || '');
+            const pending = this.actionWorkerPending.get(id);
+            if (!pending) {
+                return;
+            }
+            if (message.type === 'stderr') {
+                const data = String(message.data || '');
+                pending.onStderr?.(data);
+                return;
+            }
+            if (message.type !== 'result') {
+                return;
+            }
+            this.actionWorkerPending.delete(id);
+            clearInterval(pending.keepAlive);
+            this.unrefActionWorkerIfIdle();
+            pending.resolve({
+                success: Boolean(message.success),
+                output: String(message.output || ''),
+                error: message.error ? String(message.error) : undefined,
+            });
+        });
+
+        worker.on('exit', (code, signal) => {
+            this.actionWorker = null;
+            const error = `Persistent action worker exited${code === null ? '' : ` with code ${code}`}${signal ? ` (${signal})` : ''}`;
+            for (const [id, pending] of this.actionWorkerPending.entries()) {
+                this.actionWorkerPending.delete(id);
+                clearInterval(pending.keepAlive);
+                pending.resolve({ success: false, output: '', error });
+            }
+        });
+
+        worker.on('error', (error) => {
+            this.actionWorker = null;
+            for (const [id, pending] of this.actionWorkerPending.entries()) {
+                this.actionWorkerPending.delete(id);
+                clearInterval(pending.keepAlive);
+                pending.resolve({ success: false, output: '', error: `Persistent action worker error: ${error.message}` });
+            }
+        });
+
+        this.actionWorker = worker;
+        return worker;
+    }
+
+    private refActionWorker(worker: ChildProcess = this.actionWorker as ChildProcess): void {
+        worker.ref();
+        worker.channel?.ref();
+        (worker.stderr as any)?.ref?.();
+    }
+
+    private unrefActionWorker(worker: ChildProcess = this.actionWorker as ChildProcess): void {
+        worker.unref();
+        worker.channel?.unref();
+        (worker.stderr as any)?.unref?.();
+    }
+
+    private unrefActionWorkerIfIdle(): void {
+        if (this.actionWorker && this.actionWorkerPending.size === 0) {
+            this.unrefActionWorker(this.actionWorker);
+        }
+    }
+
+    private async stopActionWorker(): Promise<void> {
+        const worker = this.actionWorker;
+        this.actionWorker = null;
+        if (!worker || worker.killed) {
+            return;
+        }
+        await new Promise<void>((resolve) => {
+            const done = () => resolve();
+            this.refActionWorker(worker);
+            worker.once('exit', done);
+            worker.kill();
+            setTimeout(done, 1000);
+        });
+    }
+
     private applyMemoryEnv(env: Record<string, string | undefined>): void {
         const cfg = this.memoryConfig;
         if (!cfg) return;
 
         if (cfg.table) env.MEMORY_TABLE = cfg.table;
-        if (cfg.linkerProvider) env.MEMORY_LINKER_PROVIDER = cfg.linkerProvider;
-        if (cfg.linkerModel) env.MEMORY_LINKER_MODEL = cfg.linkerModel;
-        if (typeof cfg.linkerTemperature === 'number') env.MEMORY_LINKER_TEMPERATURE = String(cfg.linkerTemperature);
-        if (typeof cfg.linkerMaxTokens === 'number') env.MEMORY_LINKER_MAX_TOKENS = String(cfg.linkerMaxTokens);
-        if (cfg.docParserProvider) env.MEMORY_DOC_PARSER_PROVIDER = cfg.docParserProvider;
-        if (cfg.docParserModel) env.MEMORY_DOC_PARSER_MODEL = cfg.docParserModel;
-        if (typeof cfg.docParserTemperature === 'number') env.MEMORY_DOC_PARSER_TEMPERATURE = String(cfg.docParserTemperature);
-        if (typeof cfg.docParserMaxTokens === 'number') env.MEMORY_DOC_PARSER_MAX_TOKENS = String(cfg.docParserMaxTokens);
-        if (typeof cfg.docCrossLinkMax === 'number') env.MEMORY_DOC_CROSSLINK_MAX = String(cfg.docCrossLinkMax);
-        if (cfg.docEnricherProvider) env.MEMORY_DOC_ENRICHER_PROVIDER = cfg.docEnricherProvider;
-        if (cfg.docEnricherModel) env.MEMORY_DOC_ENRICHER_MODEL = cfg.docEnricherModel;
-        if (typeof cfg.docEnricherTemperature === 'number') env.MEMORY_DOC_ENRICHER_TEMPERATURE = String(cfg.docEnricherTemperature);
-        if (typeof cfg.docEnricherMaxTokens === 'number') env.MEMORY_DOC_ENRICHER_MAX_TOKENS = String(cfg.docEnricherMaxTokens);
-        if (typeof cfg.docFactConfidenceFallback === 'number') env.MEMORY_DOC_FACT_CONFIDENCE_FALLBACK = String(cfg.docFactConfidenceFallback);
-        if (cfg.docTopicFallback) env.MEMORY_DOC_TOPIC_FALLBACK = cfg.docTopicFallback;
+        const mercuryProvider = cfg.mercuryProvider ?? cfg.linkerProvider;
+        const mercuryModel = cfg.mercuryModel ?? cfg.linkerModel;
+        const mercuryTemperature = cfg.mercuryTemperature ?? cfg.linkerTemperature;
+        const mercuryMaxTokens = cfg.mercuryMaxTokens ?? cfg.linkerMaxTokens;
+        const linkCandidatePoolMax = cfg.linkCandidatePoolMax ?? cfg.candidatePoolMax;
+        const semanticMergeThreshold = cfg.semanticMergeThreshold ?? cfg.dedupeThreshold;
+
+        if (mercuryProvider) env.MEMORY_MERCURY_PROVIDER = mercuryProvider;
+        if (mercuryModel) env.MEMORY_MERCURY_MODEL = mercuryModel;
+        if (typeof mercuryTemperature === 'number') env.MEMORY_MERCURY_TEMPERATURE = String(mercuryTemperature);
+        if (typeof mercuryMaxTokens === 'number') env.MEMORY_MERCURY_MAX_TOKENS = String(mercuryMaxTokens);
         if (cfg.embeddingModel) env.MEMORY_EMBEDDING_MODEL = cfg.embeddingModel;
-        if (typeof cfg.candidateFactsPerTopic === 'number') env.MEMORY_CANDIDATE_FACTS_PER_TOPIC = String(cfg.candidateFactsPerTopic);
-        if (typeof cfg.candidatePoolMax === 'number') env.MEMORY_CANDIDATE_POOL_MAX = String(cfg.candidatePoolMax);
+        if (typeof linkCandidatePoolMax === 'number') env.MEMORY_LINK_CANDIDATE_POOL_MAX = String(linkCandidatePoolMax);
         if (typeof cfg.maxAutoLinksPerFact === 'number') env.MEMORY_MAX_AUTO_LINKS_PER_FACT = String(cfg.maxAutoLinksPerFact);
-        if (typeof cfg.dedupeThreshold === 'number') env.MEMORY_DEDUPE_THRESHOLD = String(cfg.dedupeThreshold);
+        if (typeof semanticMergeThreshold === 'number') env.MEMORY_SEMANTIC_MERGE_THRESHOLD = String(semanticMergeThreshold);
+        if (typeof cfg.overallEmbeddingWeight === 'number') env.MEMORY_OVERALL_EMBEDDING_WEIGHT = String(cfg.overallEmbeddingWeight);
+        if (cfg.searchDefaultAggregationMode) env.MEMORY_SEARCH_DEFAULT_AGGREGATION_MODE = cfg.searchDefaultAggregationMode;
+        if (cfg.searchDefaultCandidateMode) env.MEMORY_SEARCH_DEFAULT_CANDIDATE_MODE = cfg.searchDefaultCandidateMode;
+        if (typeof cfg.searchDefaultTopK === 'number') env.MEMORY_SEARCH_DEFAULT_TOP_K = String(cfg.searchDefaultTopK);
+        if (typeof cfg.searchDefaultThreshold === 'number') env.MEMORY_SEARCH_DEFAULT_THRESHOLD = String(cfg.searchDefaultThreshold);
+        if (typeof cfg.searchDefaultRangeMin === 'number') env.MEMORY_SEARCH_DEFAULT_RANGE_MIN = String(cfg.searchDefaultRangeMin);
+        if (typeof cfg.searchDefaultRangeMax === 'number') env.MEMORY_SEARCH_DEFAULT_RANGE_MAX = String(cfg.searchDefaultRangeMax);
         if (typeof cfg.searchMaxDepth === 'number') env.MEMORY_SEARCH_MAX_DEPTH = String(cfg.searchMaxDepth);
-        if (typeof cfg.searchMaxStartFacts === 'number') env.MEMORY_SEARCH_MAX_START_FACTS = String(cfg.searchMaxStartFacts);
+        if (typeof cfg.searchBeamWidth === 'number') env.MEMORY_SEARCH_BEAM_WIDTH = String(cfg.searchBeamWidth);
         if (typeof cfg.searchMaxChains === 'number') env.MEMORY_SEARCH_MAX_CHAINS = String(cfg.searchMaxChains);
+        if (typeof cfg.queue?.spacingSeconds === 'number') env.MEMORY_QUEUE_SPACING_SECONDS = String(cfg.queue.spacingSeconds);
+        if (cfg.notesSync?.enabled === false) env.MEMORY_NOTES_SYNC_ENABLED = 'false';
+        if (typeof cfg.notesSync?.stableDelayMinutes === 'number') {
+            env.MEMORY_NOTES_SYNC_STABLE_DELAY_MINUTES = String(cfg.notesSync.stableDelayMinutes);
+        }
+        if (typeof cfg.notesSync?.pollIntervalSeconds === 'number') {
+            env.MEMORY_NOTES_SYNC_POLL_INTERVAL_SECONDS = String(cfg.notesSync.pollIntervalSeconds);
+        }
     }
 
     /**
@@ -1034,7 +1479,7 @@ declare global {
                         // This handles cases where file has extra lines inserted compared to what hunk expects
                         const searchLimit = 20; // Look ahead 20 lines
                         for (let i = 0; i < searchLimit && (originalIndex + i) < originalLines.length; i++) {
-                            if (originalLines[originalIndex + i].trim() === contentToDelete) {
+                            if (originalLines[originalIndex + i]!.trim() === contentToDelete) {
                                 foundAt = originalIndex + i;
                                 break;
                             }
@@ -1061,7 +1506,7 @@ declare global {
 
                         const searchLimit = 20;
                         for (let i = 0; i < searchLimit && (originalIndex + i) < originalLines.length; i++) {
-                            if (originalLines[originalIndex + i].trim() === contentToMatch) {
+                            if (originalLines[originalIndex + i]!.trim() === contentToMatch) {
                                 foundAt = originalIndex + i;
                                 break;
                             }
@@ -1071,11 +1516,11 @@ declare global {
                             // Found the context line
                             // Preserve everything before it
                             while (originalIndex < foundAt) {
-                                result.push(originalLines[originalIndex]);
+                                result.push(originalLines[originalIndex]!);
                                 originalIndex++;
                             }
                             // Keep the context line
-                            result.push(originalLines[originalIndex]);
+                            result.push(originalLines[originalIndex]!);
                             originalIndex++;
                         } else {
                             // Context line not found.
@@ -1096,7 +1541,7 @@ declare global {
             } else {
                 // No more hunks, copy remainder
                 if (originalIndex < originalLines.length) {
-                    result.push(originalLines[originalIndex]);
+                    result.push(originalLines[originalIndex]!);
                     originalIndex++;
                 } else {
                     break;
@@ -1337,11 +1782,21 @@ declare global {
      * Clean up the sandbox directory
      */
     async cleanup(): Promise<void> {
+        await this.stopActionWorker();
+
+        if (!this.ownsDirectory) {
+            return;
+        }
+
         try {
             await rm(this.directory, { recursive: true, force: true });
         } catch {
             // Ignore cleanup errors
         }
+    }
+
+    private escapeRegExp(value: string): string {
+        return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     }
 }
 
@@ -1369,4 +1824,3 @@ interface SearchReplaceEdit {
 }
 
 export default LocalSandbox;
-

@@ -1,5 +1,5 @@
 /**
- * ACN - Agentic AI Framework
+ * TELOS - Agentic AI Framework
  * 
  * Main entry point and public API exports
  */
@@ -27,7 +27,8 @@ export { AgentLoader } from './loaders/AgentLoader.js';
 export { ToolLoader } from './loaders/ToolLoader.js';
 
 // Sandbox
-export { Sandbox } from './sandbox/Sandbox.js';
+export { LocalSandbox } from './sandbox/LocalSandbox.js';
+export { BrowserSandbox } from './sandbox/BrowserSandbox.js';
 
 // Interfaces
 export * from './interfaces/index.js';

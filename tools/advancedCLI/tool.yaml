@@ -1,0 +1,27 @@
+name: advancedCLI
+description: |
+  Advanced shell execution helper for agent TypeScript actions.
+
+  - `await advancedCLI.eval(command: string, options?: { waitForCompletion?: boolean; logFile?: string; env?: Record<string, string> })`
+    Runs a shell command in the agent sandbox.
+    By default it waits for completion and returns the full combined log, similar to the normal `cli` flow.
+    If `waitForCompletion` is `false`, it starts the command in the background and returns immediately with a managed run id.
+    `logFile` is optional and is resolved relative to the agent sandbox; logs are written there in real time.
+    `env` is optional and lets you override environment variables for the managed process.
+
+  - `await advancedCLI.status(id: string)`
+    Returns current status for a background run, including pid, exit code, log file path, and output preview.
+
+  - `await advancedCLI.wait(id: string, pollMs?: number)`
+    Waits until a background run completes and then returns the final status plus full log output.
+
+  - `await advancedCLI.terminate(id: string)`
+    Terminates a running background command tree.
+
+  - `await advancedCLI.readLog(id: string)`
+    Reads the current full log file for a managed run.
+
+  This is useful for cases like:
+  start a dev server in the background, run test scripts, inspect logs, and then terminate the server.
+
+module: index.ts

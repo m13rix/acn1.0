@@ -36,7 +36,7 @@ export class MarkdownSyntax extends BaseSyntax {
 
     // Fallback to XML style for thought if mixed
     const xmlMatch = text.match(/<think>([\s\S]*?)<\/think>/i);
-    return xmlMatch ? xmlMatch[1].trim() : null;
+    return xmlMatch?.[1] ? xmlMatch[1].trim() : null;
   }
 
   getAction(text: string): string | null {

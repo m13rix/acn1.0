@@ -1,7 +1,6 @@
 import type { ExecutionResult } from '../types/index.js';
 import { applyDeterministicFixes } from './action-autofix/deterministic.js';
-import { BUILTIN_IDENTIFIER_TO_MODULE, resolveActionAutoFixConfig } from './action-autofix/constants.js';
-import { classifyActionError } from './action-autofix/error-classifier.js';
+import { resolveActionAutoFixConfig } from './action-autofix/constants.js';
 import { repairCodeWithModel } from './action-autofix/model-repair.js';
 import type { Session } from './Session.js';
 
@@ -108,6 +107,7 @@ export class ActionAutoFixEngine {
           `AUTO-FIX: attempt ${attemptsUsed}/${config.maxAttempts} model-repair via ${config.modelRepair.provider}/${config.modelRepair.model}`
         );
 
+        const toolDocs = this.buildToolDocs();
         const repairResult = await modelRepair({
           code: currentCode,
           errorText: this.buildFailureText(currentResult),
@@ -115,6 +115,7 @@ export class ActionAutoFixEngine {
           model: config.modelRepair.model,
           temperature: config.modelRepair.temperature,
           maxTokens: config.modelRepair.maxTokens,
+          toolDocs,
         });
 
         if (!repairResult.repairedCode) {
@@ -146,6 +147,21 @@ export class ActionAutoFixEngine {
     return [result.error || '', result.output || ''].filter(Boolean).join('\n').trim();
   }
 
+  private buildToolDocs(): string | undefined {
+    const tools = this.session.tools;
+    if (!tools || tools.length === 0) return undefined;
+    const lines: string[] = [];
+    for (const tool of tools) {
+      const desc = tool.config.description?.trim();
+      if (desc) {
+        lines.push(`--- ${tool.config.name} ---`);
+        lines.push(desc);
+        lines.push('');
+      }
+    }
+    return lines.length > 0 ? lines.join('\n') : undefined;
+  }
+
   private isLocalSandbox(): boolean {
     const sandboxType = (this.session.agent.config.sandbox || 'local').toLowerCase();
     return sandboxType !== 'browser';
@@ -166,21 +182,11 @@ export class ActionAutoFixEngine {
       return { allowed: false, reason: 'provider returned empty response (not a code issue)' };
     }
 
-    const classification = classifyActionError(normalizedError);
-    if (classification.hasSyntaxError || Boolean(classification.missingPackage)) {
-      return { allowed: true, reason: 'syntax or package issue detected' };
-    }
-
-    if (classification.missingIdentifier) {
-      const id = classification.missingIdentifier;
-      const moduleName = BUILTIN_IDENTIFIER_TO_MODULE[id] || BUILTIN_IDENTIFIER_TO_MODULE[id.toLowerCase()];
-      if (moduleName) {
-        return { allowed: true, reason: `missing builtin identifier "${id}"` };
-      }
-      return { allowed: false, reason: `missing runtime identifier "${id}"` };
-    }
-
-    return { allowed: false, reason: 'non-syntax runtime/tool failure' };
+    // Model repair is a cheap last resort after deterministic fixes fail.
+    // Attempt it for all code-level errors — including runtime type errors, tool
+    // misuse, missing identifiers, and non-syntax issues — since the LLM can
+    // often spot what went wrong and generate a corrected version.
+    return { allowed: true, reason: 'attempting model repair' };
   }
 }
 

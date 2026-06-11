@@ -290,8 +290,8 @@ export class VoiceAgentSessionController {
           finishReason: 'stop',
         }),
       },
-      syntax: getSyntax(this.agent.config.syntax),
-      loop: getLoop(this.agent.config.loop),
+      syntax: getSyntax(this.agent.config.syntax || 'markdown'),
+      loop: getLoop(this.agent.config.loop || 'provider-tools'),
       tools,
       sandbox: this.sandbox,
     });
@@ -299,7 +299,7 @@ export class VoiceAgentSessionController {
 
     const env = {
       ...this.routeEnv,
-      ACN_AGENT_NAME: this.agent.config.name,
+      TELOS_AGENT_NAME: this.agent.config.name,
     };
 
     return new class extends ToolExecutionEngine {

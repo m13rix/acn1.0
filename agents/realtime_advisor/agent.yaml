@@ -1,0 +1,38 @@
+name: realtime_advisor
+description: Lightning fast agent for quick advice and processing
+
+model: mercury-2
+provider: inception
+interface: realtime-advisor
+systemPrompt: prompts/system.md
+
+modelSwitching:
+  mode: whitelist
+  whitelist:
+    - mercury-2
+  selector:
+    model: openai/gpt-oss-20b
+    provider: openrouter
+
+tools:
+  - context
+  - message
+
+memoryToolDocs: false
+
+memory:
+  enabled: false
+
+  memoryToolDocs: false
+
+  autoHints:
+    enabled: false
+
+adaptiveStepContext:
+  enabled: false
+
+injectAgentsList: false
+requireFinish: false
+
+interfaceOptions:
+  launchDefault: true

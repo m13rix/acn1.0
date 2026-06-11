@@ -1,11 +1,11 @@
 /**
  * AgentRunner
- * 
+ *
  * Central module for running agents. Provides a single `runAgent()` function
  * that creates a fresh Session (with shared sandbox) and Executor, then
  * executes a message — using the **exact same** pipeline and display as
  * the CLI chat loop.
- * 
+ *
  * Used by the `agents` tool to call/sub-call agents.
  */
 
@@ -13,14 +13,16 @@ import { AgentLoader } from '../loaders/AgentLoader.js';
 import { ToolLoader } from '../loaders/ToolLoader.js';
 import { Session } from './Session.js';
 import { Executor, type ExecutorCallbacks } from './Executor.js';
-import { getProvider } from '../providers/index.js';
-import { getSyntax } from '../syntax/index.js';
-import { getLoop } from '../loops/index.js';
+import { resolveTextAgentRuntime } from './SessionFactory.js';
 import { runWithAgentContext } from './AgentContext.js';
 import { getGlobalDisplay } from './GlobalDisplay.js';
 import { StreamDisplay, COLORS, SYMBOLS, getLineContinuation } from '../cli/display.js';
 import type { ISandbox } from '../sandbox/interfaces.js';
-import type { LoadedAgent } from '../types/index.js';
+import type { AgentInstructionAlgorithmConfig, LoadedAgent } from '../types/index.js';
+import { appendAgentTextLog, readAgentTextLog } from './agentTextLog.js';
+import { actionContext } from './ActionContext.js';
+import type { SessionSnapshot } from './Session.js';
+import { selectNotDiamondModelForSubagent, type NotDiamondRoutingResult } from '../services/model-selection/NotDiamondRouter.js';
 
 // Shared loader instances (singleton-like, safe to reuse)
 // Shared loader instances (singleton-like, safe to reuse)
@@ -46,6 +48,27 @@ const UI_BRIDGE_LIMITS: Partial<Record<keyof UiBridgePayload, number>> = {
     content: 24000,
     agentName: 200,
 };
+
+function getLastUserMessagePreview(snapshot?: SessionSnapshot, maxLength = 160): string | null {
+    const messages = snapshot?.messages || [];
+    for (let i = messages.length - 1; i >= 0; i--) {
+        const message = messages[i];
+        if (message?.role !== 'user') {
+            continue;
+        }
+
+        const normalized = String(message.content || '').replace(/\s+/g, ' ').trim();
+        if (!normalized) {
+            continue;
+        }
+
+        return normalized.length > maxLength
+            ? `${normalized.slice(0, maxLength - 3)}...`
+            : normalized;
+    }
+
+    return null;
+}
 
 function truncateUiBridgeValue(value: string, maxChars: number, label: string): string {
     if (value.length <= maxChars) {
@@ -74,8 +97,8 @@ function sanitizeUiBridgePayload(payload: UiBridgePayload): UiBridgePayload {
 }
 
 function createTelegramUiBridge(scopeId: string, agentName: string): ExecutorCallbacks | null {
-    const apiUrl = process.env.ACN_API_URL;
-    const chatId = process.env.ACN_CHAT_ID;
+    const apiUrl = process.env.TELOS_API_URL;
+    const chatId = process.env.TELOS_CHAT_ID;
 
     if (!apiUrl || !chatId) {
         return null;
@@ -115,7 +138,26 @@ function createTelegramUiBridge(scopeId: string, agentName: string): ExecutorCal
         onCli: (command) => post({ event: 'executor.cli', command }),
         onFile: (filename, content) => post({ event: 'executor.file', filename, content }),
         onObservation: (content) => post({ event: 'executor.observation', content }),
+        onModelSelected: (model, provider, reason) => post({
+            event: 'executor.observation',
+            content: `[model-switch] Selected ${provider}/${model}${reason ? ` (${reason})` : ''}`,
+        }),
         onResponse: (content) => post({ event: 'executor.response', content }),
+    };
+}
+
+function createAgentTextLogCallbacks(logPath?: string): ExecutorCallbacks | null {
+    if (!logPath) {
+        return null;
+    }
+
+    return {
+        onTextDone: (text) => {
+            appendAgentTextLog(logPath, 'assistant_text', text);
+        },
+        onResponse: (content) => {
+            appendAgentTextLog(logPath, 'response', content);
+        },
     };
 }
 
@@ -153,6 +195,9 @@ function composeCallbacks(...callbackSets: Array<ExecutorCallbacks | null | unde
         onObservation: (output) => {
             for (const set of sets) set.onObservation?.(output);
         },
+        onModelSelected: (model, provider, reason) => {
+            for (const set of sets) set.onModelSelected?.(model, provider, reason);
+        },
         onResponse: (content) => {
             for (const set of sets) set.onResponse?.(content);
         },
@@ -162,11 +207,11 @@ function composeCallbacks(...callbackSets: Array<ExecutorCallbacks | null | unde
         onBeforeProviderCall: (messages, config, actualRequest) => {
             for (const set of sets) set.onBeforeProviderCall?.(messages, config, actualRequest);
         },
-        onSkillsRetrieved: (content, score) => {
-            for (const set of sets) set.onSkillsRetrieved?.(content, score);
+        onMemoryHintsRetrieved: (content, score) => {
+            for (const set of sets) set.onMemoryHintsRetrieved?.(content, score);
         },
-        onSkillsSearched: (topScore) => {
-            for (const set of sets) set.onSkillsSearched?.(topScore);
+        onMemoryHintsSearched: (topScore) => {
+            for (const set of sets) set.onMemoryHintsSearched?.(topScore);
         },
         onStreamChunk: (delta, accumulated) => {
             for (const set of sets) set.onStreamChunk?.(delta, accumulated);
@@ -192,10 +237,20 @@ export interface RunAgentOptions {
     stream?: boolean;
     /** Override model for the agent (used by subAgent with model switching) */
     modelOverride?: string;
+    /** Override provider for the agent (used by Not Diamond model routing) */
+    providerOverride?: string;
     /** Completely replace system prompt (for sub-agents) */
     systemPromptOverride?: string;
+    /** Override or disable the active instruction algorithm for this run */
+    instructionAlgorithmOverride?: AgentInstructionAlgorithmConfig | false;
     /** Whether this agent is being run as a sub-agent (disables skills to prevent infinite loops) */
     isSubagent?: boolean;
+    /** Restore a previous text session history before executing the new request */
+    restoreSnapshot?: SessionSnapshot;
+    /** Persist the updated session snapshot after execution */
+    onSessionSnapshot?: (snapshot: SessionSnapshot, agent: LoadedAgent) => void | Promise<void>;
+    /** Called after a sub-agent first request is routed to a concrete model */
+    onModelRouted?: (result: NotDiamondRoutingResult, agent: LoadedAgent) => void | Promise<void>;
 }
 
 /**
@@ -213,6 +268,11 @@ export async function runAgent(options: RunAgentOptions): Promise<string> {
         systemPromptOverride,
         stream = true,
         modelOverride,
+        providerOverride,
+        instructionAlgorithmOverride,
+        restoreSnapshot,
+        onSessionSnapshot,
+        onModelRouted,
     } = options;
 
     const childDepth = parentDepth + 1;
@@ -277,33 +337,40 @@ export async function runAgent(options: RunAgentOptions): Promise<string> {
     }
 
     // Apply model override (for subAgents with model switching)
-    if (modelOverride) {
+    if (modelOverride && modelOverride.trim().toLowerCase() !== 'auto') {
         agentForSession.config = { ...agentForSession.config, model: modelOverride };
     }
+    if (providerOverride) {
+        agentForSession.config = { ...agentForSession.config, provider: providerOverride };
+    }
 
-    // Disable ALL skills systems for subagents to prevent infinite recursive loops.
-    // This covers BOTH:
-    //   1. The `skills` tool (manual calls to skills.search()/skills.add())
-    //   2. The SkillsService (automatic skill injection into LLM context via Executor)
-    // The SkillsService is created in Session constructor when skillsTable is set,
-    // so we must clear it from the config BEFORE creating the Session.
     if (options.isSubagent) {
-        agentForSession.config = { ...agentForSession.config, skillsTable: undefined };
+        agentForSession.config = { ...agentForSession.config, memory: { ...agentForSession.config.memory, autoHints: { enabled: false } } };
+    }
+    if (typeof instructionAlgorithmOverride !== 'undefined') {
+        agentForSession.config = {
+            ...agentForSession.config,
+            instructionAlgorithm: instructionAlgorithmOverride === false
+                ? { enabled: false }
+                : instructionAlgorithmOverride,
+        };
+    } else if (options.isSubagent && extraSystemPrompt) {
+        agentForSession.config = {
+            ...agentForSession.config,
+            instructionAlgorithm: agentForSession.config.subagentInstructionAlgorithm?.enabled
+                ? agentForSession.config.subagentInstructionAlgorithm
+                : { enabled: false },
+        };
     }
 
     // ── 3. Resolve components ──────────────────────────────────────────
 
-    const provider = getProvider(agentForSession.config.provider || 'openrouter');
-    const syntax = getSyntax(agentForSession.config.syntax);
-    const loop = getLoop(agentForSession.config.loop);
+    let runtime = resolveTextAgentRuntime(agentForSession);
 
     // Load tools (same logic as chat.ts)
     let toolNames = [...(agentForSession.config.tools || [])];
     if (!toolNames.includes('files')) toolNames.push('files');
-    if (agentForSession.config.skillsTable && !toolNames.includes('skills')) {
-        toolNames.push('skills');
-    }
-    if (agentForSession.config.memory && agentForSession.config.memory.enabled !== false && !toolNames.includes('memory')) {
+    if (agentForSession.config.memory?.enabled !== false && !toolNames.includes('memory')) {
         toolNames.push('memory');
     }
 
@@ -313,14 +380,32 @@ export async function runAgent(options: RunAgentOptions): Promise<string> {
 
     const session = new Session({
         agent: agentForSession,
-        provider,
-        syntax,
-        loop,
+        provider: runtime.provider,
+        syntax: runtime.syntax,
+        loop: runtime.loop,
         tools,
         sandbox, // SHARED — same filesystem as the caller
     });
 
     await session.initialize();
+    if (restoreSnapshot) {
+        session.applySnapshot(restoreSnapshot);
+        const lastUserMessage = getLastUserMessagePreview(restoreSnapshot);
+        if (lastUserMessage) {
+            const prefix = getLineContinuation(childDepth);
+            console.error(prefix + COLORS.muted(`[session] Restored previous session. Last user message: ${lastUserMessage}`));
+        } else {
+            const prefix = getLineContinuation(childDepth);
+            console.error(prefix + COLORS.muted('[session] Restored previous session.'));
+        }
+    }
+    const continuingActiveTurn = session.hasActiveTurn();
+    const executionMessage = continuingActiveTurn
+        ? (session.getActiveTurnUserMessage() || message)
+        : message;
+    if (!continuingActiveTurn) {
+        session.beginTurn(message, process.env.TELOS_CHAT_ID === 'HEARTBEAT_ROUTE' ? 'heartbeat' : 'user');
+    }
 
     // ── 5. Create executor with display callbacks ──────────────────────
     // These callbacks are IDENTICAL to what chat.ts uses — so the CLI
@@ -340,8 +425,9 @@ export async function runAgent(options: RunAgentOptions): Promise<string> {
             display.startText();
             display.writeText(delta);
         },
-        onTextDone: () => {
+        onTextDone: (fullText: string) => {
             display.endText();
+            session.recordVisibleAssistantOutput(fullText);
         },
         onAction: (code: string) => {
             display.showAction(code);
@@ -352,13 +438,46 @@ export async function runAgent(options: RunAgentOptions): Promise<string> {
         onBeforeProviderCall: () => {
             display.reset();
         },
-        onSkillsRetrieved: (content: string, score: number) => {
+        onMemoryHintsRetrieved: (_content: string, score: number) => {
             const prefix = getLineContinuation(childDepth);
-            console.error(prefix + COLORS.skills(`${SYMBOLS.skills} Skills retrieved (${(score * 100).toFixed(0)}% match)`));
+            console.error(prefix + COLORS.skills(`${SYMBOLS.skills} Memory hints retrieved (${(score * 100).toFixed(0)}% match)`));
+        },
+        onResponse: (content: string) => {
+            session.recordVisibleAssistantOutput(content);
         },
     };
     const bridgeCallbacks = createTelegramUiBridge(`subagent:${agentName}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`, agentName);
-    const callbacks = composeCallbacks(localCallbacks, bridgeCallbacks);
+    const textLogPath = actionContext.getStore()?.env?.TELOS_TEXT_LOG_PATH;
+    const textLogCallbacks = createAgentTextLogCallbacks(textLogPath);
+    const callbacks = composeCallbacks(localCallbacks, bridgeCallbacks, textLogCallbacks);
+
+    if (options.isSubagent && modelOverride !== undefined && !providerOverride && !continuingActiveTurn) {
+        const routingResult = await selectNotDiamondModelForSubagent({
+            requestedModel: modelOverride,
+            baseProvider: agentForSession.config.provider || 'openrouter',
+            switchingConfig: agentForSession.config.modelSwitching,
+            fullSystemPrompt: session.getSystemPrompt(),
+            additionalSystemPrompt: extraSystemPrompt,
+            userMessage: executionMessage,
+        });
+
+        if (routingResult.changed) {
+            agentForSession.config = {
+                ...agentForSession.config,
+                model: routingResult.executionModel,
+                provider: routingResult.executionProvider,
+            };
+            runtime = resolveTextAgentRuntime(agentForSession);
+            session.rebuildPrompt(agentForSession, runtime.provider, runtime.syntax, runtime.loop, tools);
+        }
+
+        console.error(COLORS.muted(`[model-switch] ${agentName}: ${routingResult.executionProvider}/${routingResult.executionModel}${routingResult.reason ? ` (${routingResult.reason})` : ''}`));
+        callbacks.onModelSelected?.(routingResult.executionModel, routingResult.executionProvider, routingResult.reason);
+
+        if (onModelRouted) {
+            await onModelRouted(routingResult, agentForSession);
+        }
+    }
 
     display.showAgentStart(agentName, childDepth);
 
@@ -366,7 +485,14 @@ export async function runAgent(options: RunAgentOptions): Promise<string> {
         maxIterations: 500,
         stream,
         callbacks,
-        requireFinish: agentForSession.config.requireFinish,
+        onCheckpoint: async (snapshot) => {
+            if (onSessionSnapshot) {
+                await onSessionSnapshot(snapshot, agentForSession);
+            }
+        },
+        requireFinish: process.env.TELOS_CHAT_ID === 'HEARTBEAT_ROUTE'
+            ? (agentForSession.config.requireFinishHeartbeat ?? agentForSession.config.requireFinish)
+            : agentForSession.config.requireFinish,
     });
 
     // ── 6. Execute in agent context ────────────────────────────────────
@@ -374,13 +500,25 @@ export async function runAgent(options: RunAgentOptions): Promise<string> {
     try {
         const response = await runWithAgentContext(
             agentName,
-            async () => executor.execute(message),
+            async () => executor.execute(executionMessage, { continueActiveTurn: continuingActiveTurn }),
             callbacks,
             stream,
             sandbox,
             agentForSession.config.modelSwitching,
             agentForSession
         );
+
+        const textEntries = await readAgentTextLog(textLogPath);
+        for (const entry of textEntries) {
+            if (entry.source === 'sent_text') {
+                session.recordVisibleAssistantOutput(entry.text);
+            }
+        }
+        session.endTurn();
+
+        if (onSessionSnapshot) {
+            await onSessionSnapshot(session.exportSnapshot(), agentForSession);
+        }
 
         // Show completion
         const preview = response.length > 200 ? response.slice(0, 200) + '...' : response;
@@ -392,6 +530,20 @@ export async function runAgent(options: RunAgentOptions): Promise<string> {
         return response;
 
     } catch (error) {
+        try {
+            const textEntries = await readAgentTextLog(textLogPath);
+            for (const entry of textEntries) {
+                if (entry.source === 'sent_text') {
+                    session.recordVisibleAssistantOutput(entry.text);
+                }
+            }
+        } catch {
+            // Best-effort log recovery only.
+        }
+        session.endTurn();
+        if (onSessionSnapshot) {
+            await onSessionSnapshot(session.exportSnapshot(), agentForSession);
+        }
         const errorMsg = error instanceof Error ? error.message : String(error);
         display.showAgentError(agentName, errorMsg, childDepth);
         display.setDepth(parentDepth);

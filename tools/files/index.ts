@@ -23,7 +23,7 @@ const SUPPORTED_EXTENSIONS = new Set([
 
 /**
  * View files from the sandbox directory and add them to context
- * Files are read as base64 and stored in .acn-files.json for the Executor to process
+ * Files are read as base64 and stored in .telos-files.json for the Executor to process
  * 
  * @param filePaths - Array of file paths relative to the sandbox directory
  * @param baseDir - Optional base directory (defaults to process.cwd())
@@ -49,7 +49,7 @@ export async function View(
     }
 
     const sandboxDir = baseDir || process.cwd(); // Sandbox directory is the current working directory or baseDir
-    const filesJsonPath = path.join(sandboxDir, '.acn-files.json');
+    const filesJsonPath = path.join(sandboxDir, '.telos-files.json');
 
     const files: Array<{ content: string; filename: string }> = [];
     const errors: string[] = [];
@@ -104,13 +104,13 @@ export async function View(
         }
     }
 
-    // Write files to .acn-files.json
+    // Write files to .telos-files.json
     if (files.length > 0) {
         try {
             fs.writeFileSync(filesJsonPath, JSON.stringify(files, null, 2), 'utf-8');
             console.log(`[Files] Added ${files.length} file(s) to context`);
         } catch (error: any) {
-            errors.push(`Failed to write .acn-files.json: ${error.message}`);
+            errors.push(`Failed to write .telos-files.json: ${error.message}`);
         }
     }
 

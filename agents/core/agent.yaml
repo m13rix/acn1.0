@@ -1,14 +1,14 @@
 name: CORE
 description: The primary and base agent.
 
-model: gpt-5.4-mini
-provider: openai-codex
+model: deepseek/deepseek-v4-flash
+provider: openrouter
 systemPrompt: prompts/system.md
 
 modelSwitching:
   mode: whitelist
   whitelist:
-    - gpt-5.4-mini
+    - deepseek/deepseek-v4-flash
   selector:
     model: openai/gpt-oss-20b
     provider: openrouter
@@ -16,21 +16,43 @@ modelSwitching:
 tools:
   - search
   - message
-  - notepad
-  - realtime
+  - memory
   - agents
-  - srcAgent
   - heartbeat
-  - strategy
+  - googleCalendar
   - homework
   - utils
 
+memoryToolDocs: true
+
 memory:
-  enabled: false
+  enabled: true
 
-loop: provider-tools
-syntax: markdown
-skillsTable: test
+  memoryToolDocs: true
+
+  autoHints:
+    enabled: true
+    toolResponses:
+      enabled: false
+    userPhraseWeighting: "llm"
+
+  categories:
+    - name: core_prompt_v1
+
+  includeUncategorized: false
+  fallbackCategory: core
+
+  searchMaxChains: 8
+
+adaptiveStepContext:
+  enabled: true
+  pruning:
+    enabled: true
+    heatThreshold: 0.6
+  debug:
+    enabled: true
+    port: 3067
+    openBrowser: true
+
 injectAgentsList: true
-requireFinish: true # Set to false to disable mandatory FINISH command
-
+requireFinish: false

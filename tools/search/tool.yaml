@@ -1,6 +1,6 @@
 name: search
 description: |
-  Web search, deep research, plus Image Search.
+  Web search, deep research, plus image search.
 
   `search.answer(...)` is the main way to search.
   Use it by default when you want the most useful grounded result, because it returns a synthesized answer plus sources.
@@ -31,9 +31,9 @@ description: |
   - Large raw page bodies may be intelligently truncated to keep observations usable
 
   search.imageSearch(query, options?): ImageSearchResult[] - the only way to SEARCH FOR IMAGES
-  - Search for images using Google Image Search
-  - options: { limit? } - maximum number of images to return (default: 5)
-  - Returns: [{ id, title, url, originalUrl, height, width }, ...]
+  - Search for images using Tavily (`includeImages: true`)
+  - options: { limit?, count? } - maximum number of images to return (default: 5); count is an alias for limit
+  - Returns: [{ originalUrl }, ...]
 
   search.research(topic, options?): { output, status, costDollars? }
   - Deep research

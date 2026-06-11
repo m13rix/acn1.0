@@ -6,7 +6,7 @@ import { tmpdir } from 'os';
 import { resolveImportedSource } from '../sourceResolver.js';
 
 test('resolveImportedSource runs shebang node bins through node on Windows-friendly paths', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'acn-source-resolver-'));
+  const root = await mkdtemp(join(tmpdir(), 'telos-source-resolver-'));
   try {
     const binDir = join(root, 'bin');
     await mkdir(binDir, { recursive: true });

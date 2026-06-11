@@ -65,8 +65,13 @@ test('falls back to model repair only after deterministic attempt fails', async 
   assert.ok(result.summaryLines.some((line) => line.includes('attempt 2/2 model-repair')));
 });
 
-test('skips model repair for missing runtime identifiers', async () => {
-  const sandbox = new MockSandbox(() => ({ success: false, output: '', error: 'still broken' }));
+test('attempts model repair for missing runtime identifiers (was previously skipped)', async () => {
+  const sandbox = new MockSandbox((code) => {
+    if (code.includes('fixed')) {
+      return { success: true, output: 'ok' };
+    }
+    return { success: false, output: '', error: 'still broken' };
+  });
 
   let modelCalls = 0;
   const session = {
@@ -100,9 +105,9 @@ test('skips model repair for missing runtime identifiers', async () => {
     env: {},
   });
 
-  assert.equal(modelCalls, 0);
-  assert.equal(result.result.success, false);
-  assert.ok(result.summaryLines.some((line) => line.includes('model repair skipped (missing runtime identifier "task557")')));
+  assert.equal(modelCalls, 1);
+  assert.equal(result.result.success, true);
+  assert.ok(result.summaryLines.some((line) => line.includes('model-repair')));
 });
 
 test('respects maxAttempts and does not call model when limit is 1', async () => {

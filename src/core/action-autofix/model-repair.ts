@@ -8,6 +8,7 @@ export interface ModelRepairInput {
   model: string;
   temperature: number;
   maxTokens: number;
+  toolDocs?: string;
 }
 
 export interface ModelRepairResult {
@@ -28,16 +29,22 @@ export async function repairCodeWithModel(input: ModelRepairInput): Promise<Mode
       'Keep edits minimal and preserve intent.',
     ].join(' ');
 
-    const userMessage = [
+    const parts: string[] = [
       'Fix this TypeScript code so it executes successfully in Node.js/tsx.',
       'Return code only.',
       '',
-      'ERROR:',
-      truncate(input.errorText, MAX_ERROR_CHARS),
-      '',
-      'CODE:',
-      truncate(input.code, MAX_CODE_CHARS),
-    ].join('\n');
+    ];
+
+    if (input.toolDocs) {
+      parts.push('AVAILABLE TOOLS (name -> return type / shape):');
+      parts.push(truncate(input.toolDocs, MAX_CODE_CHARS));
+      parts.push('');
+    }
+
+    parts.push('ERROR:', truncate(input.errorText, MAX_ERROR_CHARS));
+    parts.push('', 'CODE:', truncate(input.code, MAX_CODE_CHARS));
+
+    const userMessage = parts.join('\n');
 
     const messages: Message[] = [
       { role: 'system', content: systemMessage },

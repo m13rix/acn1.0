@@ -22,11 +22,10 @@ tools:
   - utils
 
 memory:
-  enabled: false
+  enabled: true
 
 loop: provider-tools
 syntax: markdown
-skillsTable: director
 injectAgentsList: false
 requireFinish: true
 

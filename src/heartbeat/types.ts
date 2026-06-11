@@ -22,7 +22,6 @@ export interface HeartbeatBindingRecord {
   handlerSource: string;
   ownerAgent: string;
   toolNames: string[];
-  skillsTable?: string;
   memoryConfig?: AgentMemoryConfig;
   metadata?: Record<string, unknown>;
   enabled: boolean;

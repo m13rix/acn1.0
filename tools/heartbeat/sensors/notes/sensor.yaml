@@ -1,9 +1,9 @@
 name: notes
 description: >
-  Microsoft OneNote heartbeat sensor for rich note-ingest events.
+  Google Keep heartbeat sensor for rich note-ingest events.
 events:
   - name: newNote
-    description: Fires when a newly finished OneNote page is detected.
+    description: Fires when a newly created or updated user-owned Google Keep note is detected.
     argsSchema:
       type: array
       items: []
@@ -17,8 +17,37 @@ events:
           type: string
         title:
           type: string
+        logicalTitle:
+          type: string
+        rawTitle:
+          type: string
+        owner:
+          type: string
+        kind:
+          type: string
         text:
           type: string
+        items:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              id:
+                type: string
+              text:
+                type: string
+              checked:
+                type: boolean
+              sort:
+                type:
+                  - number
+                  - 'null'
+            required:
+              - id
+              - text
+              - checked
+              - sort
         createdAt:
           type:
             - string
@@ -27,12 +56,14 @@ events:
           type:
             - string
             - 'null'
-        contentUrl:
-          type: string
       required:
         - id
         - title
+        - logicalTitle
+        - rawTitle
+        - owner
+        - kind
         - text
+        - items
         - createdAt
         - modifiedAt
-        - contentUrl

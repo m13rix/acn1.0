@@ -4,12 +4,12 @@ description: The personal conversational and support agent for the subject 13 wi
 model: moonshotai/kimi-k2.5
 provider: openrouter
 systemPrompt: prompts/system.md
+runPath: ./
 
 modelSwitching:
   whitelist:
-    - x-ai/grok-4.1-fast
     - deepseek/deepseek-v3.2
-    - minimax/minimax-m2.5
+    - minimax/minimax-m2.7
     - moonshotai/kimi-k2.5
   selector:
     model: openai/gpt-oss-20b
@@ -18,18 +18,19 @@ modelSwitching:
 tools:
   - search
   - message
-  - notepad
   - memory
   - heartbeat
+  - googleCalendar
   - agents
   - utils
 
 injectAgentsList: true
 requireFinish: false
+preserveSession: true
+requireFinishHeartbeat: true
 
 memory:
-  enabled: false
+  enabled: true
 
 loop: provider-tools
 syntax: markdown
-skillsTable: 13_personal

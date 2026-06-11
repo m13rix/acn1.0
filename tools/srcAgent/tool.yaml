@@ -1,7 +1,7 @@
 name: srcAgent
 description: |
   - `srcAgent.sendRequest(prompt: string): Promise<string>`
-    Sends a request to an external AI agent (Gemini CLI) that has access to the source code of the ACN system. 
+    Sends a request to an external AI agent (Gemini CLI) that has access to the source code of the TELOS system. 
     Returns the response from the agent. Useful for querying the system structure or requesting changes.
     Example: `const response = await srcAgent.sendRequest("Опиши как работает The loop");`
 

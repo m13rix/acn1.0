@@ -6,7 +6,7 @@ import { join } from 'path';
 import { ToolLoader } from '../ToolLoader.js';
 
 test('ToolLoader loads embedded tool skills from the tool directory', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'acn-tool-loader-'));
+  const root = await mkdtemp(join(tmpdir(), 'telos-tool-loader-'));
   try {
     const toolDir = join(root, 'demo-tool');
     const skillsDir = join(toolDir, 'skills');
@@ -42,7 +42,7 @@ test('ToolLoader loads embedded tool skills from the tool directory', async () =
 });
 
 test('ToolLoader accepts tools with intentionally empty descriptions', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'acn-tool-loader-empty-desc-'));
+  const root = await mkdtemp(join(tmpdir(), 'telos-tool-loader-empty-desc-'));
   try {
     const toolDir = join(root, 'skill-only-tool');
     await mkdir(toolDir, { recursive: true });

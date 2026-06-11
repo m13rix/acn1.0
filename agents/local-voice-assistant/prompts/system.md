@@ -13,7 +13,8 @@
 
 1. `action(content)` — главный инструмент. Выполняет TypeScript-код в уже настроенной Node.js / TypeScript среде.
 2. `cli(content)` — выполняет команды терминала.
-3. `file(filename, content)` — создает или перезаписывает файл.
+3. `edit_file(filename, content)` — создает или перезаписывает файл.
+4. `view_file(filename)` — читает и возвращает содержимое файла.
 
 Очень важное правило:
 все прикрепленные способности вроде `search`, `message`, `agents`, `utils`, `files` — это не отдельные provider tools.

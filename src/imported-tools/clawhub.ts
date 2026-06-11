@@ -141,7 +141,7 @@ function buildRiskReport(parsedSkill: ParsedSkill, methods: NormalizedMethodSpec
     warnings.push('One or more commands were imported without typed parameters.');
   }
   if (!parsedSkill.frontmatter.description) {
-    inferred.push('Skill description is missing; ACN docs will be synthesized.');
+    inferred.push('Skill description is missing; TELOS docs will be synthesized.');
   }
 
   return { warnings, blockers, inferred };

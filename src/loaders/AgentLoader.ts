@@ -15,7 +15,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // Use PROJECT_ROOT from environment if available (for sandbox context)
 // Fallback to __dirname calculation (src/loaders -> project root)
 const calculatedRoot = join(__dirname, '..', '..');
-const PROJECT_ROOT = process.env['PROJECT_ROOT']
+const PROJECT_ROOT = process.env['TELOS_PROJECT_ROOT'] || process.env['PROJECT_ROOT']
   || (existsSync(join(calculatedRoot, 'agents')) ? calculatedRoot : process.cwd());
 const DEFAULT_AGENTS_DIR = join(PROJECT_ROOT, 'agents');
 import type { AgentConfig, LoadedAgent } from '../types/index.js';
@@ -122,8 +122,13 @@ export class AgentLoader {
 
           // Apply defaults
           config.tools = config.tools || [];
-          config.loop = config.loop || 'accumulator';
-          config.syntax = config.syntax || 'xml-tags';
+          if ((config.modality || 'text') === 'text') {
+            config.loop = 'provider-tools';
+            config.syntax = 'markdown';
+          } else {
+            config.loop = config.loop || 'provider-tools';
+            config.syntax = config.syntax || 'markdown';
+          }
           config.injectAgentsList = config.injectAgentsList ?? true;
           config.actionAutoFix = resolveActionAutoFixConfig(config.actionAutoFix);
 

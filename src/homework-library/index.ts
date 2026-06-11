@@ -101,7 +101,12 @@ function buildUnitScopeInstructions(sectionType: string, fullName: string): stri
 
 function normalizeForSearch(text: string): string {
   return text
+    .normalize('NFKC')
     .toLowerCase()
+    // OCR often mixes Latin/Cyrillic Roman-numeral glyphs and digit 1 in headings.
+    .replace(/[хx]/g, 'x')
+    .replace(/[іi1l|!]/g, 'i')
+    .replace(/ё/g, 'е')
     .replace(/[^\p{L}\p{N}\s]/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -137,6 +142,7 @@ function trimSectionExtras(rawText: string, targetSection: HomeworkDocumentSecti
   if (!text) return '';
 
   const headingPosition = findNormalizedIndex(text, targetSection.fullName);
+  const foundTargetHeading = headingPosition >= 0;
   if (headingPosition > 0) {
     text = text.slice(headingPosition).trim();
   }
@@ -164,16 +170,20 @@ function trimSectionExtras(rawText: string, targetSection: HomeworkDocumentSecti
     'Основные понятия',
   ];
 
-  let earliestStop = -1;
-  for (const marker of stopMarkers) {
-    const markerPosition = findNormalizedIndex(text, marker);
-    if (markerPosition > 0 && (earliestStop === -1 || markerPosition < earliestStop)) {
-      earliestStop = markerPosition;
+  // If OCR could not align the section heading, avoid trimming on generic
+  // markers like "Документ" that may belong to the previous section prelude.
+  if (foundTargetHeading) {
+    let earliestStop = -1;
+    for (const marker of stopMarkers) {
+      const markerPosition = findNormalizedIndex(text, marker);
+      if (markerPosition > 0 && (earliestStop === -1 || markerPosition < earliestStop)) {
+        earliestStop = markerPosition;
+      }
     }
-  }
 
-  if (earliestStop > 0) {
-    text = text.slice(0, earliestStop).trim();
+    if (earliestStop > 0) {
+      text = text.slice(0, earliestStop).trim();
+    }
   }
 
   text = text

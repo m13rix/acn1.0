@@ -1,142 +1,104 @@
-export interface ManualLinkEndpointInput {
-  id?: string;
-  ref?: string;
-}
+import type { PhraseType, ParserMode, WeightedQueryPhrase } from './phrases.js';
+import type { StanzaDependencyWord } from './stanzaRuntime.js';
 
-export interface ManualLinkInput {
-  from: ManualLinkEndpointInput;
-  to: ManualLinkEndpointInput;
-  relation: string;
-  confidence?: number;
-}
-
-export interface FactDraftInput {
-  ref?: string;
+export interface IngestTextInput {
   text: string;
-  confidence: number;
-  topics: string[];
+  retrievalHints?: string[];
+  exclusiveToAgentName?: string;
+  sourceId?: string | null;
+  sourceLabel?: string | null;
 }
 
-export interface AddFactInput {
-  fact: string;
-  confidence: number;
-  topics: string[];
-  ref?: string;
-}
-
-export interface AddFactsInput {
-  facts: FactDraftInput[];
-}
-
-export interface AddLinksInput {
-  links: ManualLinkInput[];
-  refMap?: Record<string, string>;
-}
-
-export interface AddLinksResult {
-  created: number;
-  skipped: number;
-  total: number;
-}
-
-export interface AddDocResult {
-  documentPath: string;
-  documentFactCount: number;
-  documentInternalLinks: number;
-  documentExternalAutoLinks: number;
+export interface IngestTextResult {
   factIds: string[];
-  refMap: Record<string, string>;
-  totalLinksAdded: number;
+  factCount: number;
+  hintCount: number;
+  linkCount: number;
   warnings?: string[];
 }
 
-export interface AddedFactInfo {
-  factId: string;
-  ref?: string;
-  text: string;
-}
+export type PhraseAggregationMode = 'max' | 'sum';
+export type CandidateSelectionMode = 'top-k' | 'threshold' | 'range' | 'auto';
+export type QueryPhraseWeightingMode = 'llm' | 'embedding';
 
-export interface AddFactsResult {
-  facts: AddedFactInfo[];
-  refMap: Record<string, string>;
-  autoLinks: number;
-  softMergeLinks: number;
-  totalLinks: number;
-}
-
-export interface AddFactResult extends AddFactsResult {
-  factId: string;
-  ref?: string;
+export interface CandidateSelectionOptions {
+  mode?: CandidateSelectionMode;
+  topK?: number;
+  threshold?: number;
+  minCandidates?: number;
+  maxCandidates?: number;
 }
 
 export interface SearchOptions {
   maxDepth?: number;
-  maxStartFacts?: number;
   maxChains?: number;
   beamWidth?: number;
+  phraseAggregationMode?: PhraseAggregationMode;
+  candidateSelection?: CandidateSelectionOptions;
+  overallEmbeddingWeight?: number;
+  agentName?: string;
+  categories?: string[];
+  includeUncategorized?: boolean;
+  fallbackCategory?: string;
+  categoryMultipliers?: Record<string, number>;
+  excludeFactIds?: string[];
+  queryPhraseWeightingMode?: QueryPhraseWeightingMode;
 }
 
-export interface MemoryRuntimeConfig {
-  table: string;
-  linkerProvider: string;
-  linkerModel: string;
-  linkerTemperature: number;
-  linkerMaxTokens: number;
-  docParserProvider: string;
-  docParserModel: string;
-  docParserTemperature: number;
-  docParserMaxTokens: number;
-  docCrossLinkMax: number;
-  docEnricherProvider: string;
-  docEnricherModel: string;
-  docEnricherTemperature: number;
-  docEnricherMaxTokens: number;
-  docFactConfidenceFallback: number;
-  docTopicFallback: string;
-  embeddingModel: string;
-  candidateFactsPerTopic: number;
-  candidatePoolMax: number;
-  maxAutoLinksPerFact: number;
-  dedupeThreshold: number;
-  searchMaxDepth: number;
-  searchMaxStartFacts: number;
-  searchMaxChains: number;
+export interface SeedFactScore {
+  factId: string;
+  score: number;
 }
 
-export const DEFAULT_MEMORY_CONFIG: MemoryRuntimeConfig = {
-  table: 'global_memory',
-  linkerProvider: 'openrouter',
-  linkerModel: 'google/gemini-2.5-flash-lite-preview-09-2025',
-  linkerTemperature: 1,
-  linkerMaxTokens: 40000,
-  docParserProvider: 'openrouter',
-  docParserModel: 'google/gemini-2.5-flash-lite-preview-09-2025',
-  docParserTemperature: 1,
-  docParserMaxTokens: 40000,
-  docCrossLinkMax: 10,
-  docEnricherProvider: 'openrouter',
-  docEnricherModel: 'google/gemini-2.5-flash-lite-preview-09-2025',
-  docEnricherTemperature: 1,
-  docEnricherMaxTokens: 40000,
-  docFactConfidenceFallback: 0.75,
-  docTopicFallback: 'document-import',
-  embeddingModel: 'bge-m3',
-  candidateFactsPerTopic: 15,
-  candidatePoolMax: 40,
-  maxAutoLinksPerFact: 4,
-  dedupeThreshold: 0.92,
-  searchMaxDepth: 2,
-  searchMaxStartFacts: 5,
-  searchMaxChains: 5,
-};
+export interface SearchResult {
+  text: string;
+  chains: string[];
+  seedFacts: SeedFactScore[];
+  surfacedFactIds: string[];
+  queryPhrases: WeightedQueryPhrase[];
+  phraseAggregationMode: PhraseAggregationMode;
+  candidateSelection: Required<CandidateSelectionOptions>;
+  overallEmbeddingWeight: number;
+}
+
+export interface EmbeddedPhraseRecord {
+  text: string;
+  embedding: number[];
+}
+
+export interface PhraseRecordSet {
+  np: EmbeddedPhraseRecord[];
+  vp: EmbeddedPhraseRecord[];
+  adjp: EmbeddedPhraseRecord[];
+}
 
 export interface FactRecord {
   id: string;
   text: string;
-  confidence: number;
-  embedding: number[];
-  topics: string[];
-  topicEmbeddings: number[][];
+  language: 'en' | 'ru';
+  parserMode: ParserMode;
+  globalEmbedding: number[];
+  constituency: string | null;
+  dependencies: StanzaDependencyWord[];
+  phrases: PhraseRecordSet;
+  exclusiveToAgentName: string | null;
+  sourceId?: string | null;
+  sourceLabel?: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface RetrievalHintRecord {
+  id: string;
+  factId: string;
+  text: string;
+  language: 'en' | 'ru';
+  parserMode: ParserMode;
+  globalEmbedding: number[];
+  constituency: string | null;
+  dependencies: StanzaDependencyWord[];
+  phrases: PhraseRecordSet;
+  exclusiveToAgentName: string | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -149,35 +111,98 @@ export interface LinkRecord {
   confidence: number;
   relationEmbedding: number[];
   directionEmbedding: number[];
-  isManual: boolean;
+  exclusiveToAgentName: string | null;
   createdAt: number;
   updatedAt: number;
 }
 
-export interface LinkSuggestion {
+export interface MemoryLinkSuggestion {
   fromFactId: string;
   toFactId: string;
   relation: string;
   confidence?: number;
 }
 
-export interface LinkerInput {
+export interface LinkGenerationInput {
   newFacts: Array<{
     id: string;
     text: string;
-    confidence: number;
-    topics: string[];
   }>;
   candidateFacts: Array<{
     id: string;
     text: string;
-    confidence: number;
-    topics: string[];
-  }>;
-  manualLinks: Array<{
-    fromFactId: string;
-    toFactId: string;
-    relation: string;
   }>;
   maxAutoLinksPerFact: number;
 }
+
+export interface QueryPhraseCandidate {
+  type: PhraseType;
+  text: string;
+}
+
+export interface MemoryRuntimeConfig {
+  table: string;
+  mercuryProvider: string;
+  mercuryModel: string;
+  mercuryTemperature: number;
+  mercuryMaxTokens: number;
+  embeddingModel: string;
+  linkCandidatePoolMax: number;
+  maxAutoLinksPerFact: number;
+  semanticMergeThreshold: number;
+  overallEmbeddingWeight: number;
+  searchDefaultAggregationMode: PhraseAggregationMode;
+  searchDefaultPhraseWeightingMode: QueryPhraseWeightingMode;
+  searchDefaultCandidateMode: CandidateSelectionMode;
+  searchDefaultTopK: number;
+  searchDefaultThreshold: number;
+  searchDefaultRangeMin: number;
+  searchDefaultRangeMax: number;
+  searchMaxDepth: number;
+  searchBeamWidth: number;
+  searchMaxChains: number;
+
+  // Deprecated legacy fields kept optional so older repo files still type-check
+  linkerProvider?: string;
+  linkerModel?: string;
+  linkerTemperature?: number;
+  linkerMaxTokens?: number;
+  docParserProvider?: string;
+  docParserModel?: string;
+  docParserTemperature?: number;
+  docParserMaxTokens?: number;
+  docCrossLinkMax?: number;
+  docEnricherProvider?: string;
+  docEnricherModel?: string;
+  docEnricherTemperature?: number;
+  docEnricherMaxTokens?: number;
+  docFactConfidenceFallback?: number;
+  docTopicFallback?: string;
+  candidateFactsPerTopic?: number;
+  candidatePoolMax?: number;
+  dedupeThreshold?: number;
+  searchMaxStartFacts?: number;
+}
+
+export const DEFAULT_MEMORY_CONFIG: MemoryRuntimeConfig = {
+  table: 'global_memory_v2',
+  mercuryProvider: 'inception',
+  mercuryModel: 'mercury-2',
+  mercuryTemperature: 0,
+  mercuryMaxTokens: 4000,
+  embeddingModel: 'qwen3-embedding:8b',
+  linkCandidatePoolMax: 40,
+  maxAutoLinksPerFact: 4,
+  semanticMergeThreshold: 0.92,
+  overallEmbeddingWeight: 0.35,
+  searchDefaultAggregationMode: 'max',
+  searchDefaultPhraseWeightingMode: 'llm',
+  searchDefaultCandidateMode: 'top-k',
+  searchDefaultTopK: 5,
+  searchDefaultThreshold: 0.35,
+  searchDefaultRangeMin: 3,
+  searchDefaultRangeMax: 8,
+  searchMaxDepth: 2,
+  searchBeamWidth: 10,
+  searchMaxChains: 5,
+};

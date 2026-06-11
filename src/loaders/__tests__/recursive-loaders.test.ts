@@ -7,7 +7,7 @@ import { AgentLoader } from '../AgentLoader.js';
 import { ToolLoader } from '../ToolLoader.js';
 
 async function withTempDir(run: (root: string) => Promise<void>): Promise<void> {
-  const root = await mkdtemp(join(tmpdir(), 'acn-loader-'));
+  const root = await mkdtemp(join(tmpdir(), 'telos-loader-'));
   try {
     await run(root);
   } finally {

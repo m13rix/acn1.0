@@ -3,12 +3,12 @@ description: >
   Time-based heartbeat sensor.
 events:
   - name: every
-    description: Fires when the internal heartbeat clock reaches a supported interval.
+    description: Fires when the internal heartbeat clock reaches an interval boundary such as 1s, 4h, or 1h30m.
     argsSchema:
       type: array
       items:
         - type: string
-          description: Interval label such as 1s, 5s, 10s, 1m, 5m, 10m, or 1h.
+          description: Interval label such as 1s, 5m, 4h, or 1h30m.
       minItems: 1
       maxItems: 1
     payloadSchema:

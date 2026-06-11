@@ -18,8 +18,10 @@ tools:
   - message
   - utils
 
+memory:
+  enabled: true
+
 loop: message-passthrough
 syntax: markdown
-skillsTable: pptx_skills
 injectAgentsList: false
 

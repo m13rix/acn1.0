@@ -1,5 +1,5 @@
 name: researcher
-description: Specialized agent for high-quality and efficient research. Automatically selects the best search method (answer, search, or deep research) based on query complexity.
+description: High-quality research specialist. Uses search.answer as the default grounded search path, escalates to search.search / search.crawl / search.research when needed, and stores durable user context in memory.
 
 model: gpt-5.4-mini
 provider: openai-codex
@@ -15,10 +15,10 @@ modelSwitching:
 tools:
   - search
   - message
+  - memory
   - utils
 
 loop: provider-tools
 syntax: markdown
-skillsTable: researcher_skills
 injectAgentsList: false
-
+requireFinish: true

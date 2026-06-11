@@ -1,13 +1,18 @@
 import { existsSync } from 'fs';
 import { readFile } from 'fs/promises';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { Ollama } from 'ollama';
 import { AgentLoader } from '../loaders/AgentLoader.js';
+import { createProvider } from '../providers/factory.js';
 import type { AgentConfig } from '../types/index.js';
+import type { Message, ProviderConfig } from '../types/index.js';
 import type { ZodTypeAny } from 'zod';
 
 const DEFAULT_MODEL = 'qwen3.5:9b';
 const DEFAULT_OLLAMA_HOST = process.env.OLLAMA_HOST || 'http://localhost:11434';
+const STRUCTURED_LLM_DIR = path.dirname(fileURLToPath(import.meta.url));
+const FAST_LLM_CONFIG_PATH = path.resolve(STRUCTURED_LLM_DIR, '..', '..', 'config', 'fast-llm.json');
 const SUPPORTED_IMAGE_EXTENSIONS = new Set([
   '.png',
   '.jpg',
@@ -23,6 +28,12 @@ export interface StructuredLlmRuntimeConfig {
   provider: string;
   model: string;
   host: string;
+}
+
+interface StructuredLlmProjectConfig {
+  provider?: string;
+  model?: string;
+  host?: string;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -465,16 +476,17 @@ function validateAgainstJsonSchema(schema: JsonSchema, value: unknown, pathParts
       throw new Error(`${joinPath(pathParts)}: expected at most ${schema.maxItems} item(s)`);
     }
 
-    if (Array.isArray(schema.items)) {
+    const items = schema.items;
+    if (Array.isArray(items)) {
       value.forEach((entry, index) => {
-        const itemSchema = schema.items![index];
+        const itemSchema = items[index];
         if (itemSchema) {
           validateAgainstJsonSchema(itemSchema as JsonSchema, entry, [...pathParts, String(index)]);
         }
       });
-    } else if (isPlainObject(schema.items)) {
+    } else if (isPlainObject(items)) {
       value.forEach((entry, index) => {
-        validateAgainstJsonSchema(schema.items as JsonSchema, entry, [...pathParts, String(index)]);
+        validateAgainstJsonSchema(items as JsonSchema, entry, [...pathParts, String(index)]);
       });
     }
   }
@@ -597,7 +609,7 @@ async function loadImageAsBase64(imagePath: string): Promise<string> {
 }
 
 async function loadCurrentAgentConfig(): Promise<AgentConfig | null> {
-  const currentAgentName = process.env.ACN_AGENT_NAME;
+  const currentAgentName = process.env.TELOS_AGENT_NAME;
   if (!currentAgentName) {
     return null;
   }
@@ -607,16 +619,50 @@ async function loadCurrentAgentConfig(): Promise<AgentConfig | null> {
   return loadedAgent?.config || null;
 }
 
+async function loadProjectStructuredLlmConfig(): Promise<StructuredLlmProjectConfig | null> {
+  if (!existsSync(FAST_LLM_CONFIG_PATH)) {
+    return null;
+  }
+
+  try {
+    const raw = await readFile(FAST_LLM_CONFIG_PATH, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (!isPlainObject(parsed)) {
+      return null;
+    }
+
+    return {
+      provider: typeof parsed.provider === 'string' && parsed.provider.trim() ? parsed.provider.trim() : undefined,
+      model: typeof parsed.model === 'string' && parsed.model.trim() ? parsed.model.trim() : undefined,
+      host: typeof parsed.host === 'string' && parsed.host.trim() ? parsed.host.trim() : undefined,
+    };
+  } catch (error) {
+    console.warn(`[structuredLlm] Failed to load ${FAST_LLM_CONFIG_PATH}:`, error);
+    return null;
+  }
+}
+
 export async function resolveStructuredLlmConfig(): Promise<StructuredLlmRuntimeConfig> {
+  const projectConfig = await loadProjectStructuredLlmConfig();
   const agentConfig = await loadCurrentAgentConfig();
   const configuredProvider = agentConfig?.utils?.llm?.provider?.trim();
   const configuredModel = agentConfig?.utils?.llm?.model?.trim();
   const configuredHost = agentConfig?.utils?.llm?.host?.trim();
 
   return {
-    provider: configuredProvider || 'ollama',
-    model: configuredModel || process.env.ACN_UTILS_LLM_MODEL || DEFAULT_MODEL,
-    host: configuredHost || DEFAULT_OLLAMA_HOST,
+    provider: process.env.TELOS_FAST_LLM_PROVIDER?.trim()
+      || projectConfig?.provider
+      || configuredProvider
+      || 'ollama',
+    model: process.env.TELOS_FAST_LLM_MODEL?.trim()
+      || projectConfig?.model
+      || configuredModel
+      || process.env.TELOS_UTILS_LLM_MODEL
+      || DEFAULT_MODEL,
+    host: process.env.TELOS_FAST_LLM_HOST?.trim()
+      || projectConfig?.host
+      || configuredHost
+      || DEFAULT_OLLAMA_HOST,
   };
 }
 
@@ -649,14 +695,7 @@ export async function structuredLlm(
   }
 
   const runtime = await resolveStructuredLlmConfig();
-  if (runtime.provider.toLowerCase() !== 'ollama') {
-    throw new Error(`utils.llm supports only provider="ollama", received "${runtime.provider}".`);
-  }
-
   const jsonSchema = schemaToJsonSchema(schema);
-  const client = new Ollama({ host: runtime.host });
-  const images = imagePath ? [await loadImageAsBase64(imagePath)] : undefined;
-
   const systemPrompt = [
     'You are a structured-output helper.',
     'Return only valid JSON.',
@@ -667,43 +706,71 @@ export async function structuredLlm(
 
   const messages: Array<{ role: string; content: string; images?: string[] }> = [
     { role: 'system', content: systemPrompt },
-    { role: 'user', content: prompt.trim(), images },
+    { role: 'user', content: prompt.trim() },
   ];
 
   let lastError = 'unknown error';
 
   for (let attempt = 0; attempt < 3; attempt++) {
-    let response;
+    let rawContent = '';
     let transportError: unknown;
 
-    for (let transportAttempt = 0; transportAttempt < 3; transportAttempt++) {
-      try {
-        response = await client.chat({
-          model: runtime.model,
-          stream: false,
-          think: false,
-          format: jsonSchema,
-          messages,
-          options: {
-            temperature: 0,
-          },
-        });
-        transportError = null;
-        break;
-      } catch (error) {
-        transportError = error;
-        if (!isRetryableOllamaError(error) || transportAttempt === 2) {
-          throw error;
+    if (runtime.provider.toLowerCase() === 'ollama') {
+      const client = new Ollama({ host: runtime.host });
+      const images = imagePath ? [await loadImageAsBase64(imagePath)] : undefined;
+      const ollamaMessages = messages.map(message => message.role === 'user' && images
+        ? { ...message, images }
+        : message);
+      let response;
+
+      for (let transportAttempt = 0; transportAttempt < 3; transportAttempt++) {
+        try {
+          response = await client.chat({
+            model: runtime.model,
+            stream: false,
+            think: false,
+            format: jsonSchema,
+            messages: ollamaMessages,
+            options: {
+              temperature: 0,
+            },
+          });
+          transportError = null;
+          break;
+        } catch (error) {
+          transportError = error;
+          if (!isRetryableOllamaError(error) || transportAttempt === 2) {
+            throw error;
+          }
+          await sleep(400 * (transportAttempt + 1));
         }
-        await sleep(400 * (transportAttempt + 1));
       }
-    }
 
-    if (!response) {
-      throw transportError instanceof Error ? transportError : new Error(String(transportError || 'Unknown Ollama transport error'));
-    }
+      if (!response) {
+        throw transportError instanceof Error ? transportError : new Error(String(transportError || 'Unknown Ollama transport error'));
+      }
 
-    const rawContent = response.message?.content || '';
+      rawContent = response.message?.content || '';
+    } else {
+      if (imagePath) {
+        throw new Error(`utils.llm image support is currently available only for provider="ollama", received "${runtime.provider}".`);
+      }
+
+      const provider = createProvider(runtime.provider);
+      const providerMessages: Message[] = messages.map(message => ({
+        role: message.role as Message['role'],
+        content: message.content,
+      }));
+      const providerConfig: ProviderConfig = {
+        model: runtime.model,
+        temperature: 0,
+        maxTokens: 4096,
+        reasoning: 'off',
+        stream: false,
+      };
+      const response = await provider.complete(providerMessages, providerConfig);
+      rawContent = response.content || '';
+    }
 
     try {
       const parsed = parseJsonResponse(rawContent);

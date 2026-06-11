@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ACN1.0 — Автономия и Heartbeat</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg: #000000;
+  --surface: #0a0a0a;
+  --surface-hover: #141414;
+  --border: rgba(255,255,255,0.12);
+  --border-light: rgba(255,255,255,0.3);
+  
+  --text: #ffffff;
+  --text-dim: rgba(255,255,255,0.5);
+  
+  --sleep: #555555;
+  --awake: #ffffff;
+  
+  /* Vibrant Accents */
+  --accent-cyan: #00E5FF;
+  --accent-magenta: #FF00FF;
+  --accent-yellow: #FFE600;
+  --accent-green: #00FF66;
+}
+
+html,body{height:100%;font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);overflow:hidden}
+body{display:flex;flex-direction:column}
+
+/* Header */
+.header{padding:20px 40px;display:flex;align-items:center;gap:16px;border-bottom:1px solid var(--border);z-index:10;background:var(--bg)}
+.header .logo{font-size:14px;font-weight:700;letter-spacing:4px;color:var(--text);text-transform:uppercase}
+.header .sep{width:1px;height:20px;background:var(--border)}
+.header .subtitle{font-size:13px;color:var(--text-dim);font-weight:400;letter-spacing:1px}
+.header .badge{margin-left:auto;border:1px solid var(--border);padding:6px 12px;border-radius:20px;font-size:11px;font-family:'JetBrains Mono',monospace;display:flex;align-items:center;gap:8px;text-transform:uppercase;letter-spacing:1px}
+.badge-dot{width:6px;height:6px;border-radius:50%;background:var(--sleep);transition:background 0.3s, box-shadow 0.3s}
+.badge.is-awake .badge-dot{background:var(--accent-green);box-shadow:0 0 10px var(--accent-green)}
+
+/* Main Layout */
+.main{flex:1;display:flex;position:relative;overflow:hidden}
+
+/* Canvas */
+#connectionCanvas{position:absolute;inset:0;z-index:1;pointer-events:none}
+
+/* Grid Background */
+.grid-bg{
+  position:absolute;inset:0;z-index:0;
+  background-size:40px 40px;
+  background-image:linear-gradient(to right, rgba(255,255,255,0.03) 1px, transparent 1px),
+                   linear-gradient(to bottom, rgba(255,255,255,0.03) 1px, transparent 1px);
+  mask-image: radial-gradient(circle at center, black 40%, transparent 80%);
+  -webkit-mask-image: radial-gradient(circle at center, black 40%, transparent 80%);
+}
+
+.visual-area{flex:1;position:relative;z-index:2;display:flex;align-items:center;justify-content:center}
+
+/* Nodes */
+.node{
+  position:absolute;background:var(--surface);border:1px solid var(--border);
+  border-radius:12px;padding:20px;transition:all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+  display:flex;flex-direction:column;gap:10px;
+}
+
+/* Agent Node (Center) */
+.agent-node{
+  width:300px;
+  border-color:var(--border-light);
+  box-shadow:0 0 0 rgba(255,255,255,0);
+  z-index:10;
+}
+.agent-node.sleeping{
+  opacity:0.7;
+  filter:grayscale(100%);
+}
+.agent-node.awake{
+  border-color:var(--text);
+  box-shadow:0 0 40px rgba(255,255,255,0.1), inset 0 0 20px rgba(255,255,255,0.05);
+  transform:scale(1.05);
+}
+.agent-node.processing{
+  border-color:var(--accent-magenta);
+  box-shadow:0 0 40px rgba(255,0,255,0.2);
+}
+
+.node-header{display:flex;align-items:center;gap:12px}
+.node-icon{font-size:24px;width:48px;height:48px;display:flex;align-items:center;justify-content:center;background:#111;border-radius:12px;border:1px solid var(--border)}
+.agent-node.awake .node-icon{background:var(--text);color:var(--bg)}
+.node-title{font-size:16px;font-weight:600;letter-spacing:1px}
+.node-subtitle{font-size:11px;font-family:'JetBrains Mono',monospace;color:var(--text-dim);margin-top:4px}
+.agent-state-label{
+  align-self:flex-start;font-size:10px;padding:4px 8px;border-radius:4px;
+  font-family:'JetBrains Mono',monospace;text-transform:uppercase;letter-spacing:1px;
+  background:var(--surface-hover);border:1px solid var(--border);
+}
+.agent-node.sleeping .agent-state-label{color:var(--sleep)}
+.agent-node.awake .agent-state-label{color:var(--text);border-color:var(--text)}
+.agent-node.processing .agent-state-label{color:var(--accent-magenta);border-color:var(--accent-magenta)}
+
+/* Sensor Nodes */
+.sensor-node{width:230px;background:transparent;backdrop-filter:blur(10px)}
+.sensor-node .node-icon{width:36px;height:36px;font-size:16px;border-radius:8px}
+.sensor-node.active{border-color:var(--accent-cyan);background:rgba(0,229,255,0.05);box-shadow:0 0 20px rgba(0,229,255,0.1)}
+.sensor-node.active .node-icon{color:var(--accent-cyan);border-color:var(--accent-cyan)}
+
+/* Tool Nodes */
+.tool-node{width:230px;background:transparent;backdrop-filter:blur(10px)}
+.tool-node .node-icon{width:36px;height:36px;font-size:16px;border-radius:8px}
+.tool-node.active{border-color:var(--accent-yellow);background:rgba(255,230,0,0.05);box-shadow:0 0 20px rgba(255,230,0,0.1)}
+.tool-node.active .node-icon{color:var(--accent-yellow);border-color:var(--accent-yellow)}
+
+/* Log Panel */
+.terminal-panel{
+  width:420px;border-left:1px solid var(--border);background:#050505;
+  display:flex;flex-direction:column;z-index:5;
+}
+.term-header{
+  padding:16px 24px;border-bottom:1px solid var(--border);
+  font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text-dim);
+  display:flex;align-items:center;gap:12px;text-transform:uppercase;letter-spacing:1px;
+}
+.term-entries{flex:1;overflow-y:auto;padding:20px 24px;font-family:'JetBrains Mono',monospace;font-size:12px;line-height:1.6}
+.term-entry{margin-bottom:12px;opacity:0;animation:fadeIn 0.3s forwards}
+.term-time{color:var(--text-dim);margin-right:12px}
+.term-src{color:var(--text);font-weight:600;margin-right:8px}
+.term-msg{color:rgba(255,255,255,0.8)}
+
+/* Syntax colors */
+.color-sys{color:var(--text-dim)}
+.color-wake{color:var(--accent-green)}
+.color-trigger{color:var(--accent-cyan)}
+.color-act{color:var(--accent-magenta)}
+.color-mem{color:var(--accent-yellow)}
+
+@keyframes fadeIn{to{opacity:1}}
+
+/* Bottom Bar */
+.bottom-bar{
+  padding:16px 40px;border-top:1px solid var(--border);background:var(--bg);
+  display:flex;align-items:center;gap:32px;
+  font-size:12px;font-family:'JetBrains Mono',monospace;color:var(--text-dim);z-index:10;
+}
+.metric span{color:var(--text);font-weight:600;margin-left:8px}
+
+/* Progress bar for timer */
+.progress-track{width:150px;height:4px;background:var(--surface-hover);border-radius:2px;overflow:hidden;margin-left:12px;display:inline-block;vertical-align:middle}
+.progress-fill{height:100%;background:var(--text);width:0%;transition:width 0.1s linear}
+
+::-webkit-scrollbar{width:4px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:4px}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="logo">ACN 1.0</div>
+  <div class="sep"></div>
+  <div class="subtitle">Движок Автономии / Heartbeat</div>
+  <div class="badge" id="stateBadge">
+    <div class="badge-dot"></div>
+    <span id="stateText">СОН</span>
+  </div>
+</div>
+
+<div class="main">
+  <div class="grid-bg"></div>
+  <canvas id="connectionCanvas"></canvas>
+  
+  <div class="visual-area" id="nodesArea">
+    <!-- Left: Triggers -->
+    <div class="node sensor-node" id="node-timer" style="left:80px; top:120px;">
+      <div class="node-header">
+        <div class="node-icon">⏱️</div>
+        <div>
+          <div class="node-title">Внутренние часы</div>
+          <div class="node-subtitle">heartbeat_interval</div>
+        </div>
+      </div>
+    </div>
+    
+    <div class="node sensor-node" id="node-webhook" style="left:80px; top:280px;">
+      <div class="node-header">
+        <div class="node-icon">🔔</div>
+        <div>
+          <div class="node-title">Вебхук событий</div>
+          <div class="node-subtitle">external_trigger</div>
+        </div>
+      </div>
+    </div>
+    
+    <div class="node sensor-node" id="node-memory" style="left:80px; top:440px;">
+      <div class="node-header">
+        <div class="node-icon">🧠</div>
+        <div>
+          <div class="node-title">Сдвиг памяти</div>
+          <div class="node-subtitle">context_change</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Center: Agent -->
+    <div class="node agent-node sleeping" id="node-agent" style="left:50%; top:50%; transform:translate(-50%, -50%) scale(0.95); margin:0;">
+      <div class="agent-state-label" id="agentStateLabel">ГИБЕРНАЦИЯ</div>
+      <div class="node-header" style="margin-top:10px;">
+        <div class="node-icon">⚡</div>
+        <div>
+          <div class="node-title">TELOS Core</div>
+          <div class="node-subtitle">Автономный режим</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right: Outputs/Tools -->
+    <div class="node tool-node" id="node-action" style="right:80px; top:160px;">
+      <div class="node-header">
+        <div class="node-icon">🛠️</div>
+        <div>
+          <div class="node-title">Движок действий</div>
+          <div class="node-subtitle">background_task</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="node tool-node" id="node-comm" style="right:80px; top:360px;">
+      <div class="node-header">
+        <div class="node-icon">💬</div>
+        <div>
+          <div class="node-title">Брокер сообщений</div>
+          <div class="node-subtitle">telegram_out</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="terminal-panel">
+    <div class="term-header">
+      <span>Лог Автономной Работы</span>
+      <span style="margin-left:auto">TTY1</span>
+    </div>
+    <div class="term-entries" id="termEntries"></div>
+  </div>
+</div>
+
+<div class="bottom-bar">
+  <div class="metric">Время работы <span>14ч 22м</span></div>
+  <div class="metric">Пульсы <span>1 042</span></div>
+  <div class="metric" style="margin-left:auto; display:flex; align-items:center;">
+    Следующее пробуждение:
+    <div class="progress-track"><div class="progress-fill" id="timerFill"></div></div>
+    <span id="timerText" style="width:30px; text-align:right;">5.0s</span>
+  </div>
+</div>
+
+<script>
+// ─── Setup ─────────────────────────────────────────────────────────
+const canvas = document.getElementById('connectionCanvas');
+const ctx = canvas.getContext('2d');
+const termEl = document.getElementById('termEntries');
+const activeConnections = [];
+let time = 0;
+
+function resize() {
+  canvas.width = canvas.parentElement.clientWidth;
+  canvas.height = canvas.parentElement.clientHeight;
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ─── Drawing logic ──────────────────────────────────────────────────
+function getNodeCenter(id) {
+  const el = document.getElementById(id);
+  if (!el) return null;
+  const r = el.getBoundingClientRect();
+  const pr = canvas.getBoundingClientRect();
+  
+  const style = window.getComputedStyle(el);
+  const matrix = new DOMMatrixReadOnly(style.transform);
+  
+  let x = r.left - pr.left + r.width/2;
+  let y = r.top - pr.top + r.height/2;
+  return { x, y };
+}
+
+function drawConnections() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  time += 0.03;
+  
+  for (let i = activeConnections.length - 1; i >= 0; i--) {
+    const conn = activeConnections[i];
+    const from = getNodeCenter(conn.from);
+    const to = getNodeCenter(conn.to);
+    if (!from || !to) continue;
+
+    const elapsed = Date.now() - conn.startTime;
+    const progress = Math.min(1, elapsed / conn.duration);
+    
+    ctx.beginPath();
+    ctx.moveTo(from.x, from.y);
+    ctx.lineTo(from.x + (to.x - from.x) * progress, from.y + (to.y - from.y) * progress);
+    
+    ctx.strokeStyle = conn.color;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 4]);
+    ctx.lineDashOffset = -time * 40;
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    if (progress > 0 && progress < 1) {
+      const px = from.x + (to.x - from.x) * progress;
+      const py = from.y + (to.y - from.y) * progress;
+      
+      ctx.beginPath();
+      ctx.arc(px, py, 3, 0, Math.PI * 2);
+      ctx.fillStyle = '#fff';
+      ctx.fill();
+      
+      ctx.beginPath();
+      ctx.arc(px, py, 12, 0, Math.PI * 2);
+      ctx.fillStyle = conn.color.replace('1)', '0.3)');
+      ctx.fill();
+    }
+
+    if (elapsed > conn.duration + 500) {
+      activeConnections.splice(i, 1);
+    }
+  }
+  requestAnimationFrame(drawConnections);
+}
+requestAnimationFrame(drawConnections);
+
+function addConnection(from, to, color, duration = 600) {
+  activeConnections.push({ from, to, color, startTime: Date.now(), duration });
+}
+
+// ─── Logging Logic ──────────────────────────────────────────────────
+function pad(n) { return n < 10 ? '0'+n : n; }
+function termLog(src, msg, colorClass = '') {
+  const entry = document.createElement('div');
+  entry.className = 'term-entry';
+  const d = new Date();
+  const ts = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${String(d.getMilliseconds()).padStart(3,'0')}`;
+  
+  entry.innerHTML = `
+    <span class="term-time">${ts}</span>
+    <span class="term-src">[${src}]</span>
+    <span class="term-msg ${colorClass}">${msg}</span>
+  `;
+  termEl.appendChild(entry);
+  termEl.scrollTop = termEl.scrollHeight;
+}
+
+// ─── Sequence Orchestrator ─────────────────────────────────────────
+async function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+const agentNode = document.getElementById('node-agent');
+const stateBadge = document.getElementById('stateBadge');
+const stateText = document.getElementById('stateText');
+const agentStateLabel = document.getElementById('agentStateLabel');
+
+function setAgentState(state) {
+  agentNode.className = `node agent-node ${state}`;
+  if (state === 'sleeping') {
+    stateBadge.className = 'badge';
+    stateText.textContent = 'СОН';
+    agentStateLabel.textContent = 'ГИБЕРНАЦИЯ';
+  } else if (state === 'awake') {
+    stateBadge.className = 'badge is-awake';
+    stateText.textContent = 'АКТИВЕН';
+    agentStateLabel.textContent = 'СОЗНАНИЕ';
+  } else if (state === 'processing') {
+    stateBadge.className = 'badge is-awake';
+    stateText.textContent = 'ВЫПОЛНЕНИЕ';
+    agentStateLabel.textContent = 'ОБРАБОТКА';
+  }
+}
+
+function activateNode(id, duration) {
+  const el = document.getElementById(id);
+  el.classList.add('active');
+  setTimeout(() => el.classList.remove('active'), duration);
+}
+
+// ─── Timer UI ───────────────────────────────────────────────────────
+let nextWakeTime = Date.now() + 5000;
+function updateTimer() {
+  const remain = Math.max(0, nextWakeTime - Date.now());
+  document.getElementById('timerText').textContent = (remain/1000).toFixed(1) + 's';
+  document.getElementById('timerFill').style.width = ((5000 - remain) / 5000 * 100) + '%';
+  if (remain > 0) requestAnimationFrame(updateTimer);
+}
+
+// ─── Scenarios ──────────────────────────────────────────────────────
+
+async function scenarioTimeHeartbeat() {
+  termLog('system', 'Ожидание следующего интервала heartbeat...', 'color-sys');
+  nextWakeTime = Date.now() + 5000;
+  updateTimer();
+  await delay(5000);
+  
+  termLog('trigger', 'Достигнут временной интервал. Запуск heartbeat.', 'color-trigger');
+  activateNode('node-timer', 1500);
+  addConnection('node-timer', 'node-agent', 'rgba(0, 229, 255, 1)');
+  await delay(600);
+  
+  setAgentState('awake');
+  termLog('core', 'Агент пробуждается из гибернации.', 'color-wake');
+  await delay(800);
+  
+  setAgentState('processing');
+  termLog('core', 'Проверка автономных целей. Новых событий не обнаружено.', '');
+  await delay(1000);
+  
+  termLog('core', 'Запуск фоновой задачи: Сводка логов за прошлый час.', 'color-act');
+  activateNode('node-action', 2000);
+  addConnection('node-agent', 'node-action', 'rgba(255, 0, 255, 1)');
+  await delay(2000);
+  
+  termLog('action', 'Задача выполнена успешно. Сохранение результатов в память.', 'color-mem');
+  activateNode('node-memory', 1000);
+  addConnection('node-action', 'node-memory', 'rgba(255, 230, 0, 1)');
+  await delay(1500);
+  
+  termLog('core', 'Нет активных задач. Переход в режим гибернации.', 'color-sys');
+  setAgentState('sleeping');
+}
+
+async function scenarioWebhookEvent() {
+  termLog('system', 'Агент в режиме ожидания. Мониторинг входящих портов.', 'color-sys');
+  await delay(3000);
+  
+  termLog('webhook', 'Получено новое сообщение в Telegram!', 'color-trigger');
+  activateNode('node-webhook', 1500);
+  addConnection('node-webhook', 'node-agent', 'rgba(0, 229, 255, 1)');
+  await delay(600);
+  
+  setAgentState('awake');
+  termLog('core', 'Получено системное прерывание. Немедленное пробуждение.', 'color-wake');
+  await delay(800);
+  
+  setAgentState('processing');
+  termLog('core', 'Чтение сообщения: "Пожалуйста, проведи экспресс-анализ логов."', '');
+  await delay(1200);
+  
+  termLog('core', 'Запуск скрипта анализа логов.', 'color-act');
+  activateNode('node-action', 2000);
+  addConnection('node-agent', 'node-action', 'rgba(255, 0, 255, 1)');
+  await delay(2000);
+  
+  termLog('core', 'Анализ логов завершен. Отправка ответа пользователю.', '');
+  activateNode('node-comm', 1500);
+  addConnection('node-agent', 'node-comm', 'rgba(255, 255, 255, 1)');
+  await delay(1500);
+  
+  termLog('core', 'Сессия обработки завершена. Переход в гибернацию.', 'color-sys');
+  setAgentState('sleeping');
+}
+
+async function runLoop() {
+  termLog('system', 'Движок автономии ACN успешно инициализирован.', 'color-sys');
+  await delay(1000);
+  
+  while (true) {
+    await scenarioTimeHeartbeat();
+    await delay(2000);
+    await scenarioWebhookEvent();
+    await delay(2000);
+    
+    if (termEl.children.length > 25) {
+      termEl.innerHTML = '';
+      termLog('system', 'Буфер терминала очищен.', 'color-sys');
+    }
+  }
+}
+
+// Start
+setAgentState('sleeping');
+runLoop();
+
+</script>
+</body>
+</html>

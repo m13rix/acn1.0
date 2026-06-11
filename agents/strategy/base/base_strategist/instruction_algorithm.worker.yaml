@@ -1,0 +1,51 @@
+name: telos_strategy_worker_v2
+description: Active instruction tape for one base_strategist iteration worker call.
+initialStep: read_context
+steps:
+  - id: read_context
+    title: Read Context And Name The Question
+    breadcrumb: Read project context and named the current depth question.
+    instruction: instruction_steps/worker/01_read_context.md
+    model: gpt-5.4-mini
+    next: gather_evidence
+
+  - id: gather_evidence
+    title: Gather Evidence And High-Upside Seeds
+    breadcrumb: Gathered evidence, missing facts, and high-upside candidate seeds for this parent point.
+    instruction: instruction_steps/worker/02_gather_evidence.md
+    model: gpt-5.4-mini
+    next: generate_siblings
+
+  - id: generate_siblings
+    title: Generate Coherent Sibling Set
+    breadcrumb: Generated one same-level sibling set answering the current parent question.
+    instruction: instruction_steps/worker/03_generate_siblings.md
+    model: gpt-5.5
+    next: write_intakes
+
+  - id: write_intakes
+    title: Write Route Intake Artifacts
+    breadcrumb: Wrote route intake artifacts with assumptions, dependencies, unknowns, and next questions.
+    instruction: instruction_steps/worker/04_write_intakes.md
+    model: gpt-5.4-mini
+    next: evaluate_siblings
+
+  - id: evaluate_siblings
+    title: Evaluate Siblings With Evidence
+    breadcrumb: Evaluated sibling routes with facts, calculations, uncertainty, and what-if checks.
+    instruction: instruction_steps/worker/05_evaluate_siblings.md
+    model: gpt-5.5
+    next: apply_decisions
+
+  - id: apply_decisions
+    title: Apply Keep Kill Decisions
+    breadcrumb: Applied depth-appropriate keep/kill decisions and route ranks.
+    instruction: instruction_steps/worker/06_apply_decisions.md
+    model: gpt-5.4-mini
+    next: revise_and_verify
+
+  - id: revise_and_verify
+    title: Revise And Verify Iteration
+    breadcrumb: Revised changed judgments, verified artifacts, and finished the iteration.
+    instruction: instruction_steps/worker/07_revise_and_verify.md
+    model: gpt-5.4-mini

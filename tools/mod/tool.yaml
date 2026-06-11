@@ -1,0 +1,37 @@
+name: mod
+description: |
+  Minecraft runtime mod tool for executing JavaScript inside the custom mod sandbox.
+
+  Available functions:
+
+  - `await mod.execute(() => { ...minecraft mod sandbox JavaScript... }): Promise<string>`
+    Execute the callback body in the live Minecraft.
+    Returns the console output captured by the mod sandbox as a string.
+
+    Example:
+    ```ts
+    const logs = await mod.execute(() => {
+      console.log('time', server.overworld().getDayTime());
+      'ok';
+    });
+    console.log(logs);
+    ```
+
+  - `await mod.execute("console.log('time', server.overworld().getDayTime()); 'ok';"): Promise<string>`
+    Execute a raw JavaScript string directly in the mod sandbox.
+
+  Local texture API:
+
+  - When an agent uses the `mod` tool, a local Minecraft item texture server is started on
+    `http://127.0.0.1:3018` for the lifetime of that agent session.
+  - `POST http://127.0.0.1:3018/generate` with JSON `{ "prompt": "ruby gem item" }`
+    returns a JSON array of 256 ARGB hex colors (`#AARRGGBB`) for a 16x16 item texture.
+  - `POST /generate-texture` is an alias for the same endpoint.
+
+  - `POST http://127.0.0.1:3018/balance` with JSON `{ "concept": "...", "recipe": [...] }`
+    validates whether a custom item concept and shaped 3x3 recipe are balanced for Minecraft survival.
+    The recipe must be a 9-cell array of `{ "id": string, "count": number }` objects.
+    The endpoint uses Inception Labs Mercury 2 with medium reasoning effort and returns the model's structured JSON:
+    `{ "success": true }` for balanced items, or `{ "success": false, "message"?: string, "concept"?: string, "recipe"?: [...] }`.
+  - `POST /validate-balance` is an alias for the same endpoint.
+module: index.ts

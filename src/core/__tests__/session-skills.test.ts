@@ -1,9 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Session, formatLocalDeviceTime } from '../Session.js';
-import { SkillsService } from '../../skills_system/SkillsService.js';
 
-function createSession(tools: any[] = []): Session {
+function createSession(tools: any[] = [], memoryConfig?: any): Session {
   return new Session({
     agent: {
       config: {
@@ -13,6 +12,7 @@ function createSession(tools: any[] = []): Session {
         tools: [],
         loop: 'default',
         syntax: 'xml-tags',
+        ...(memoryConfig !== undefined ? { memory: memoryConfig } : {}),
       },
       systemPromptContent: 'Base instructions.',
       directory: process.cwd(),
@@ -76,89 +76,46 @@ function createSession(tools: any[] = []): Session {
   });
 }
 
-test('refreshSkillsContext appends retrieved skills to the system prompt and avoids duplicates', async () => {
+test('markMemoryFactsAsSurfaced appends memory hints to the last user message and avoids system prompt churn', async () => {
   const session = createSession();
-  session.addUserMessage('Help me fix the build');
-
-  const seenMessages: any[] = [];
-  let retrievedCalls = 0;
-
-  Object.defineProperty(session, 'skillsService', {
-    value: {
-      searchHistory: async (messages: any[]) => {
-        seenMessages.push(messages);
-        return {
-          query: 'mock-history-query',
-          topScore: 0.93,
-          entries: [
-            {
-              content: 'When a build fails after a CLI tool result, inspect the failing command output first.',
-              score: 0.93,
-              entry: { id: 'skill-build-debug' },
-            },
-          ],
-        };
-      },
-      clearPreEmbeddedWords: () => {},
-    } as any,
-    configurable: true,
-  });
-
-  await session.refreshSkillsContext(
-    [{ role: 'tool', content: 'npm ERR! missing dependency', toolName: 'cli' } as any],
-    {
-      onSkillsRetrieved: () => {
-        retrievedCalls += 1;
-      },
-    }
+  session.beginTurn('debug a failed build');
+  session.addUserMessage('debug a failed build');
+  session.markMemoryFactsAsSurfaced(
+    ['fact-build-debug'],
+    'When a build fails after a CLI tool result, inspect the failing command output first.',
   );
+  session.injectVisibleMemoryHintsIntoLastUserMessage();
 
-  assert.match(session.getSystemPrompt(), /SKILLS:\n\nWhen a build fails after a CLI tool result/);
-  assert.match(session.getSystemPrompt(), /SKILLS:[\s\S]*Local device time: [A-Za-z]+, \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
-  assert.equal(retrievedCalls, 1);
-  assert.equal(seenMessages[0]?.[0]?.role, 'user');
-  assert.equal(seenMessages[0]?.[1]?.role, 'tool');
-  assert.equal(seenMessages[0]?.[1]?.toolName, 'cli');
+  const allMessages = session.getAllMessages();
+  const lastUserMessage = [...allMessages].reverse().find(message => message.role === 'user')?.content || '';
 
-  await session.refreshSkillsContext(
-    [{ role: 'tool', content: 'npm ERR! missing dependency', toolName: 'cli' } as any],
-    {
-      onSkillsRetrieved: () => {
-        retrievedCalls += 1;
-      },
-    }
-  );
-
-  assert.equal(retrievedCalls, 1);
-  assert.equal(session.getSystemPrompt().split('skill-build-debug').length - 1, 0);
-  assert.equal(session.getSystemPrompt().split('When a build fails after a CLI tool result').length - 1, 1);
+  assert.doesNotMatch(session.getSystemPrompt(), /MEMORY HINTS:/);
+  assert.match(lastUserMessage, /MEMORY HINTS:\n\nWhen a build fails after a CLI tool result/);
+  assert.equal(lastUserMessage.split('When a build fails after a CLI tool result').length - 1, 1);
 });
 
-test('Session creates a skills service when a loaded tool contributes embedded skills', () => {
-  const session = createSession([
-    {
-      config: {
-        name: 'demo',
-        description: 'Demo tool',
-        module: 'index.ts',
-        skills: { enabled: true, directory: 'skills' },
-      },
-      directory: process.cwd(),
-      absolutePath: process.cwd(),
-      skillEntries: [
-        {
-          id: 'demo:skills:0',
-          toolName: 'demo',
-          content: 'Use demo.lookup when a user needs demo data.',
-          examples: ['Need demo data'],
-          updatedAt: Date.now(),
-          filePath: 'tools/demo/skills/entry.json',
-        },
-      ],
-    },
-  ]);
+test('memory hints are hidden when memory is disabled', async () => {
+  const session = createSession([], { enabled: false });
+  session.beginTurn('debug a failed build');
+  session.markMemoryFactsAsSurfaced(
+    ['fact-disabled-memory'],
+    'This hint should not be visible while memory is disabled.',
+  );
 
-  assert.ok(session.skillsService);
+  assert.doesNotMatch(session.getSystemPrompt(), /MEMORY HINTS:/);
+  assert.doesNotMatch(session.getSystemPrompt(), /This hint should not be visible/);
+});
+
+test('memory hints are hidden when auto hints are disabled', async () => {
+  const session = createSession([], { enabled: true, autoHints: { enabled: false } });
+  session.beginTurn('debug a failed build');
+  session.markMemoryFactsAsSurfaced(
+    ['fact-disabled-auto-hints'],
+    'This hint should not be visible while auto hints are disabled.',
+  );
+
+  assert.doesNotMatch(session.getSystemPrompt(), /MEMORY HINTS:/);
+  assert.doesNotMatch(session.getSystemPrompt(), /This hint should not be visible/);
 });
 
 test('Session appends the local device time context to the system prompt', () => {

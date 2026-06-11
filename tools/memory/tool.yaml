@@ -1,33 +1,38 @@
 name: memory
 description: |
-  Dynamic semantic graph memory (global shared).
-  
-  API:
-  - memory.addFact(input): Promise<AddFactResult>
-    input: {
-      fact: string,
-      confidence: number (0..1),
-      topics: string[],
-      ref?: string
-    }
-  
-  - memory.addFacts(input): Promise<AddFactsResult>
-    input: {
-      facts: [{ text:string, confidence:number (0..1), topics:string[], ref?:string }]
-    }
+  Unified agent memory.
 
-  - memory.addLinks(input): Promise<AddLinksResult>
-    input: {
-      links: [{ from:{id?|ref?}, to:{id?|ref?}, relation:string, confidence?:number }],
-      refMap?: { [ref:string]: factId }
+  Public API:
+  - `memory.add(text, options?)`
+    options:
+    {
+      retrievalHints?: string[],
+      exclusive?: boolean
+    }
+    Returns:
+    {
+      queued: true,
+      id: string,
+      etaSeconds: number
     }
 
-  - memory.addDoc(path: string): Promise<AddDocResult>
-    input:
-      "./relative/path/to/document.md" or "./relative/path/to/document.txt"
-  
-  - memory.search(query: string, options?): Promise<string>
-    Returns text chains like:
-    "Fact A ->CAUSES-> Fact B ->COUNTERARGUMENT-> Fact C"
+  - `memory.search(query, options?)`
+    options:
+    {
+      mode?: "auto" | "top-k",
+      count?: number,
+      phraseWeighting?: "llm" | "embedding"
+    }
+    Returns:
+    string
 
+  - `memory.notes.list(input?)`
+  - `memory.notes.find(query, input?)`
+  - `memory.notes.create(title, text)`
+  - `memory.notes.createList(title, items?)`
+
+  `memory.notes.*` returns note handle objects with methods:
+  - `get()`, `put(text)`, `append(text)`, `patch(search, replace)`, `remove()`
+  - `archive(archived?)`, `pin(pinned?)`, `restore()`
+  - `itemAdd(text, checked?)`, `itemCheck(item, checked?)`, `itemRemove(item)`
 module: index.ts

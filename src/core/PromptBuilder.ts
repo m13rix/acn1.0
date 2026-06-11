@@ -3,8 +3,7 @@
  * 
  * Assembles the final system prompt by combining:
  * 1. Base system prompt from agent config
- * 2. Syntax documentation
- * 3. Loop documentation
+ * 2. Loop documentation
  * 4. Tool documentation
  */
 
@@ -39,16 +38,7 @@ export class PromptBuilder {
     // 2. Separator
     sections.push('---');
 
-    // 3. Syntax documentation (only for syntax-aware loops)
-    const loopUsesSyntax = loop.usesSyntax?.() ?? true;
-    if (loopUsesSyntax) {
-      const syntaxDoc = syntax.getDescription();
-      if (syntaxDoc.trim()) {
-        sections.push(syntaxDoc.trim());
-      }
-    }
-
-    // 4. Loop documentation
+    // 3. Loop documentation
     const loopDoc = loop.getDescription();
     if (loopDoc.trim()) {
       sections.push(loopDoc.trim());

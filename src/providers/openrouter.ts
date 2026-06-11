@@ -22,6 +22,7 @@ import type {
 import { lookup } from 'mime-types';
 
 const EMPTY_CHOICES_RETRY_DELAYS_MS = [250, 750];
+const OPENROUTER_RETRY_DELAYS_MS = [1500, 3000, 6000, 12000];
 
 export class OpenRouterProvider extends BaseProvider {
   name = 'openrouter';
@@ -64,13 +65,13 @@ export class OpenRouterProvider extends BaseProvider {
     const cfg = this.withDefaults(config);
 
     const request = this.buildOpenRouterRequest(messages, cfg);
-    const response = await this.sendWithEmptyChoiceRetry(request);
+    const response = await this.sendWithMissingReasoningFallback(messages, cfg, undefined, request);
     const choice = this.getPrimaryChoiceOrThrow(response);
 
     // Handle content which can be string or array of content items
     const content = this.extractMessageText(choice.message);
 
-    const reasoning = (choice.message as any)?.reasoning_content || (choice.message as any)?.reasoning || '';
+    const reasoningInfo = this.extractReasoning(choice);
     const finishReason = this.mapFinishReason(choice.finishReason);
 
     const usage = response.usage ? {
@@ -81,7 +82,8 @@ export class OpenRouterProvider extends BaseProvider {
 
     return {
       content,
-      reasoning,
+      reasoning: reasoningInfo.text,
+      reasoningDetails: reasoningInfo.details,
       finishReason,
       usage,
     };
@@ -96,13 +98,13 @@ export class OpenRouterProvider extends BaseProvider {
     this.ensureSupportedModel(config.model);
     const cfg = this.withDefaults(config);
     const request = this.buildOpenRouterRequest(messages, cfg, toolRequest);
-    const response = await this.sendWithEmptyChoiceRetry(request);
+    const response = await this.sendWithMissingReasoningFallback(messages, cfg, toolRequest, request);
     const choice = this.getPrimaryChoiceOrThrow(response);
 
     const parsedToolCalls = this.parseToolCalls((choice as any)?.message);
     const content = this.extractMessageText(choice.message);
 
-    const reasoning = (choice.message as any)?.reasoning_content || (choice.message as any)?.reasoning || '';
+    const reasoningInfo = this.extractReasoning(choice);
     const finishReason = this.mapFinishReason(choice.finishReason);
     const usage = response.usage ? {
       promptTokens: response.usage.promptTokens ?? 0,
@@ -112,7 +114,8 @@ export class OpenRouterProvider extends BaseProvider {
 
     return {
       content,
-      reasoning,
+      reasoning: reasoningInfo.text,
+      reasoningDetails: reasoningInfo.details,
       finishReason,
       usage,
       toolCalls: parsedToolCalls,
@@ -148,12 +151,13 @@ export class OpenRouterProvider extends BaseProvider {
     });
 
     // Use chat.send with streaming
-    const streamPromise = this.client.chat.send({
-      ...request,
-      stream: true,
-    }) as unknown as Promise<AsyncIterable<any>>;
-
-    const streamResult = await streamPromise;
+    const streamResult = await this.sendChatRequestWithRetry(
+      {
+        ...request,
+        stream: true,
+      },
+      'stream'
+    ) as AsyncIterable<any>;
 
     let hasEmittedReasoningDone = false;
 
@@ -163,7 +167,10 @@ export class OpenRouterProvider extends BaseProvider {
 
       // Handle reasoning content (if model supports it)
       // OpenRouter models that support reasoning include it in the response
-      const reasoningDelta = choice.delta?.reasoning ?? choice.delta?.reasoning_content ?? '';
+      const reasoningDelta = choice.delta?.reasoning
+        ?? choice.delta?.reasoning_content
+        ?? this.extractReasoningTextFromDetails(choice.delta?.reasoningDetails)
+        ?? '';
       if (reasoningDelta) {
         yield { type: 'reasoning.delta', delta: reasoningDelta };
       }
@@ -203,12 +210,13 @@ export class OpenRouterProvider extends BaseProvider {
     const cfg = this.withDefaults(config);
     const request = this.buildOpenRouterRequest(messages, { ...cfg, stream: true }, toolRequest);
 
-    const streamPromise = this.client.chat.send({
-      ...request,
-      stream: true,
-    }) as unknown as Promise<AsyncIterable<any>>;
-
-    const streamResult = await streamPromise;
+    const streamResult = await this.sendChatRequestWithRetry(
+      {
+        ...request,
+        stream: true,
+      },
+      'stream-with-tools'
+    ) as AsyncIterable<any>;
     const toolCallState = new Map<number, { id: string; name: string; argumentsRaw: string }>();
     let hasEmittedReasoningDone = false;
 
@@ -216,7 +224,10 @@ export class OpenRouterProvider extends BaseProvider {
       const choice = chunk.choices?.[0];
       if (!choice) continue;
 
-      const reasoningDelta = choice.delta?.reasoning ?? choice.delta?.reasoning_content ?? '';
+      const reasoningDelta = choice.delta?.reasoning
+        ?? choice.delta?.reasoning_content
+        ?? this.extractReasoningTextFromDetails(choice.delta?.reasoningDetails)
+        ?? '';
       if (reasoningDelta) {
         yield { type: 'reasoning.delta', delta: reasoningDelta };
       }
@@ -365,6 +376,19 @@ export class OpenRouterProvider extends BaseProvider {
               arguments: JSON.stringify(call.arguments ?? {}),
             },
           }));
+
+          const reasoningText = (m.reasoning || this.extractReasoningTextFromDetails(m.reasoningDetails)).trim();
+          if ((config.reasoning ?? 'medium') !== 'off' && reasoningText) {
+            // OpenRouter preserves reasoning context across tool steps via
+            // message.reasoning. This is required by providers such as Kimi
+            // when thinking is enabled and a prior assistant message made
+            // tool calls.
+            baseMessage.reasoning = reasoningText;
+            if (m.reasoningDetails && m.reasoningDetails.length > 0) {
+              baseMessage.reasoningDetails = m.reasoningDetails;
+              baseMessage.reasoning_details = m.reasoningDetails;
+            }
+          }
         }
         openRouterMessages.push(baseMessage);
       }
@@ -474,9 +498,9 @@ export class OpenRouterProvider extends BaseProvider {
   }
 
   /**
-   * Map ACN's unified reasoning levels to OpenRouter's ReasoningConfig.
+   * Map TELOS's unified reasoning levels to OpenRouter's ReasoningConfig.
    *
-   * ACN: off | low | medium (default) | high
+   * TELOS: off | low | medium (default) | high
    * OpenRouter effort: none | low | medium | high
    */
   private mapReasoning(
@@ -542,6 +566,56 @@ export class OpenRouterProvider extends BaseProvider {
     return out;
   }
 
+  private extractReasoning(choice: any): { text: string; details?: unknown[] } {
+    const message = choice?.message || {};
+    const details = Array.isArray(choice?.reasoningDetails)
+      ? choice.reasoningDetails
+      : Array.isArray(choice?.reasoning_details)
+        ? choice.reasoning_details
+        : Array.isArray(message?.reasoningDetails)
+          ? message.reasoningDetails
+          : Array.isArray(message?.reasoning_details)
+            ? message.reasoning_details
+            : undefined;
+
+    const direct = message?.reasoning_content
+      ?? message?.reasoning
+      ?? choice?.reasoning_content
+      ?? choice?.reasoning;
+    const text = typeof direct === 'string' && direct.trim()
+      ? direct
+      : this.extractReasoningTextFromDetails(details);
+
+    return {
+      text: text || '',
+      details,
+    };
+  }
+
+  private extractReasoningTextFromDetails(details: unknown): string {
+    if (!Array.isArray(details)) {
+      return '';
+    }
+
+    return details
+      .map(detail => {
+        if (!detail || typeof detail !== 'object') {
+          return '';
+        }
+        const item = detail as Record<string, unknown>;
+        const type = String(item.type || '');
+        if (type === 'reasoning.text' && typeof item.text === 'string') {
+          return item.text;
+        }
+        if (type === 'reasoning.summary' && typeof item.summary === 'string') {
+          return item.summary;
+        }
+        return '';
+      })
+      .filter(Boolean)
+      .join('\n');
+  }
+
   private safeParseArguments(rawArgs: unknown): Record<string, unknown> {
     if (rawArgs && typeof rawArgs === 'object' && !Array.isArray(rawArgs)) {
       return rawArgs as Record<string, unknown>;
@@ -564,7 +638,7 @@ export class OpenRouterProvider extends BaseProvider {
     let lastResponse: any;
 
     for (let attempt = 0; attempt <= EMPTY_CHOICES_RETRY_DELAYS_MS.length; attempt++) {
-      const response = await this.client.chat.send(request);
+      const response = await this.sendChatRequestWithRetry(request, 'complete');
       lastResponse = response;
 
       if (this.getPrimaryChoice(response)) {
@@ -580,6 +654,48 @@ export class OpenRouterProvider extends BaseProvider {
     }
 
     throw new Error(`No response choices returned from OpenRouter (${this.summarizeUnexpectedResponse(lastResponse)})`);
+  }
+
+  private async sendWithMissingReasoningFallback(
+    messages: Message[],
+    config: ProviderConfig,
+    toolRequest: ProviderToolRequest | undefined,
+    request: any
+  ): Promise<any> {
+    try {
+      return await this.sendWithEmptyChoiceRetry(request);
+    } catch (error) {
+      if (
+        (config.reasoning ?? 'medium') === 'off'
+        || !this.isMissingReasoningContentError(error)
+        || !this.hasAssistantToolCallMissingReasoning(messages)
+      ) {
+        throw error;
+      }
+
+      console.warn(
+        '[OpenRouter] Provider rejected replay because older assistant tool-call history is missing reasoning_content; retrying once with reasoning disabled for this request.'
+      );
+      const fallbackRequest = this.buildOpenRouterRequest(
+        messages,
+        { ...config, reasoning: 'off' },
+        toolRequest
+      );
+      return this.sendWithEmptyChoiceRetry(fallbackRequest);
+    }
+  }
+
+  private isMissingReasoningContentError(error: unknown): boolean {
+    return /reasoning_content is missing|thinking is enabled/i.test(this.describeError(error));
+  }
+
+  private hasAssistantToolCallMissingReasoning(messages: Message[]): boolean {
+    return messages.some(message => {
+      if (message.role !== 'assistant' || !message.toolCalls || message.toolCalls.length === 0) {
+        return false;
+      }
+      return !message.reasoning?.trim() && !this.extractReasoningTextFromDetails(message.reasoningDetails).trim();
+    });
   }
 
   private getPrimaryChoice(response: any): any | undefined {
@@ -631,6 +747,104 @@ export class OpenRouterProvider extends BaseProvider {
 
   private async sleep(ms: number): Promise<void> {
     await new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  private async sendChatRequestWithRetry<T>(request: any, label: string): Promise<T> {
+    let lastError: unknown;
+
+    for (let attempt = 0; attempt <= OPENROUTER_RETRY_DELAYS_MS.length; attempt++) {
+      try {
+        return await this.client.chat.send(request) as T;
+      } catch (error) {
+        lastError = error;
+        const retryDelayMs = this.getRetryDelayMs(error, attempt);
+        if (retryDelayMs === null) {
+          throw error;
+        }
+
+        console.warn(
+          `[OpenRouter] ${label} transient failure, retrying in ${retryDelayMs}ms: ${this.describeError(error)}`
+        );
+        await this.sleep(retryDelayMs);
+      }
+    }
+
+    throw lastError;
+  }
+
+  private getRetryDelayMs(error: unknown, attempt: number): number | null {
+    const headers = this.getErrorHeaders(error);
+    const retryAfterMs = this.getRetryAfterMs(headers?.get?.('retry-after'));
+    if (retryAfterMs !== null) {
+      return retryAfterMs;
+    }
+
+    const statusCode = this.getErrorStatusCode(error);
+    const message = this.describeError(error);
+    const isRetryableStatus = statusCode === 408
+      || statusCode === 409
+      || statusCode === 425
+      || statusCode === 429
+      || statusCode === 500
+      || statusCode === 502
+      || statusCode === 503
+      || statusCode === 504;
+    const isRetryableMessage = /rate.?limit|retry shortly|temporarily unavailable|temporarily rate-limited|timed out|timeout|fetch failed|network|socket|ECONNRESET|ECONNREFUSED|ETIMEDOUT/i.test(message);
+
+    if ((!isRetryableStatus && !isRetryableMessage) || attempt >= OPENROUTER_RETRY_DELAYS_MS.length) {
+      return null;
+    }
+
+    return OPENROUTER_RETRY_DELAYS_MS[attempt] ?? null;
+  }
+
+  private getErrorStatusCode(error: unknown): number | null {
+    const value = (error as any)?.statusCode
+      ?? (error as any)?.status
+      ?? (error as any)?.error?.code
+      ?? (error as any)?.data$?.error?.code
+      ?? (error as any)?.rawResponse?.status;
+    return typeof value === 'number' && Number.isFinite(value) ? value : null;
+  }
+
+  private getErrorHeaders(error: unknown): Headers | null {
+    const headers = (error as any)?.headers ?? (error as any)?.rawResponse?.headers;
+    return headers instanceof Headers ? headers : null;
+  }
+
+  private getRetryAfterMs(value: string | null | undefined): number | null {
+    if (!value) {
+      return null;
+    }
+
+    const numericSeconds = Number(value);
+    if (Number.isFinite(numericSeconds) && numericSeconds > 0) {
+      return numericSeconds * 1000;
+    }
+
+    const dateMs = Date.parse(value);
+    if (Number.isFinite(dateMs)) {
+      return Math.max(0, dateMs - Date.now());
+    }
+
+    return null;
+  }
+
+  private describeError(error: unknown): string {
+    if (error instanceof Error && error.message.trim()) {
+      return error.message;
+    }
+    if (typeof error === 'string' && error.trim()) {
+      return error.trim();
+    }
+
+    const body = (error as any)?.body ?? (error as any)?.data$?.body$;
+    if (typeof body === 'string' && body.trim()) {
+      return body.trim();
+    }
+
+    const fallback = this.getErrorStatusCode(error);
+    return fallback ? `HTTP ${fallback}` : 'Unknown OpenRouter error';
   }
 }
 

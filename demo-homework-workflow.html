@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ACN1.0 — Воркфлоу: Домашнее Задание</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg: #000000;
+  --surface: #0a0a0a;
+  --surface-hover: #141414;
+  --border: rgba(255,255,255,0.12);
+  --border-light: rgba(255,255,255,0.3);
+  
+  --text: #ffffff;
+  --text-dim: rgba(255,255,255,0.5);
+  
+  --sleep: #555555;
+  --awake: #ffffff;
+  
+  --accent-cyan: #00E5FF;
+  --accent-magenta: #FF00FF;
+  --accent-yellow: #FFE600;
+  --accent-green: #00FF66;
+}
+
+html,body{height:100%;font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);overflow:hidden}
+body{display:flex;flex-direction:column}
+
+/* Header */
+.header{padding:20px 40px;display:flex;align-items:center;gap:16px;border-bottom:1px solid var(--border);z-index:10;background:var(--bg)}
+.header .logo{font-size:14px;font-weight:700;letter-spacing:4px;color:var(--text);text-transform:uppercase}
+.header .sep{width:1px;height:20px;background:var(--border)}
+.header .subtitle{font-size:13px;color:var(--text-dim);font-weight:400;letter-spacing:1px}
+.header .badge{margin-left:auto;border:1px solid var(--border);padding:6px 12px;border-radius:20px;font-size:11px;font-family:'JetBrains Mono',monospace;display:flex;align-items:center;gap:8px;text-transform:uppercase;letter-spacing:1px}
+.badge-dot{width:6px;height:6px;border-radius:50%;background:var(--sleep);transition:background 0.3s, box-shadow 0.3s}
+.badge.is-awake .badge-dot{background:var(--accent-green);box-shadow:0 0 10px var(--accent-green)}
+
+/* Main Layout */
+.main{flex:1;display:flex;position:relative;overflow:hidden}
+
+/* Canvas */
+#connectionCanvas{position:absolute;inset:0;z-index:1;pointer-events:none}
+
+/* Grid Background */
+.grid-bg{
+  position:absolute;inset:0;z-index:0;
+  background-size:40px 40px;
+  background-image:linear-gradient(to right, rgba(255,255,255,0.03) 1px, transparent 1px),
+                   linear-gradient(to bottom, rgba(255,255,255,0.03) 1px, transparent 1px);
+  mask-image: radial-gradient(circle at left center, black 40%, transparent 80%);
+  -webkit-mask-image: radial-gradient(circle at left center, black 40%, transparent 80%);
+}
+
+.visual-area{flex:1;position:relative;z-index:2;display:flex;align-items:center;}
+
+/* Nodes */
+.node{
+  position:absolute;background:var(--surface);border:1px solid var(--border);
+  border-radius:12px;padding:20px;transition:all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+  display:flex;flex-direction:column;gap:10px;backdrop-filter:blur(10px);
+}
+
+.node-header{display:flex;align-items:center;gap:12px}
+.node-icon{font-size:24px;width:48px;height:48px;display:flex;align-items:center;justify-content:center;background:#111;border-radius:12px;border:1px solid var(--border);transition:all 0.3s;}
+.node-title{font-size:16px;font-weight:600;letter-spacing:1px}
+.node-subtitle{font-size:11px;font-family:'JetBrains Mono',monospace;color:var(--text-dim);margin-top:4px}
+
+/* Agent Node */
+.agent-node{
+  width:280px;
+  z-index:10;
+}
+.agent-node.sleeping{
+  opacity:0.7;
+  filter:grayscale(100%);
+}
+.agent-node.awake{
+  border-color:var(--text);
+  box-shadow:0 0 40px rgba(255,255,255,0.1), inset 0 0 20px rgba(255,255,255,0.05);
+  transform:scale(1.05);
+}
+.agent-node.awake .node-icon{background:var(--text);color:var(--bg)}
+.agent-state-label{
+  align-self:flex-start;font-size:10px;padding:4px 8px;border-radius:4px;
+  font-family:'JetBrains Mono',monospace;text-transform:uppercase;letter-spacing:1px;
+  background:var(--surface-hover);border:1px solid var(--border);
+}
+.agent-node.sleeping .agent-state-label{color:var(--sleep)}
+.agent-node.awake .agent-state-label{color:var(--text);border-color:var(--text)}
+
+/* Tool Nodes */
+.tool-node{width:240px;}
+.tool-node .node-icon{width:36px;height:36px;font-size:16px;border-radius:8px}
+
+.tool-node.active-cyan{border-color:var(--accent-cyan);background:rgba(0,229,255,0.05);box-shadow:0 0 20px rgba(0,229,255,0.1)}
+.tool-node.active-cyan .node-icon{color:var(--accent-cyan);border-color:var(--accent-cyan)}
+
+.tool-node.active-yellow{border-color:var(--accent-yellow);background:rgba(255,230,0,0.05);box-shadow:0 0 20px rgba(255,230,0,0.1)}
+.tool-node.active-yellow .node-icon{color:var(--accent-yellow);border-color:var(--accent-yellow)}
+
+.tool-node.active-magenta{border-color:var(--accent-magenta);background:rgba(255,0,255,0.05);box-shadow:0 0 20px rgba(255,0,255,0.1)}
+.tool-node.active-magenta .node-icon{color:var(--accent-magenta);border-color:var(--accent-magenta)}
+
+.tool-node.active-green{border-color:var(--accent-green);background:rgba(0,255,102,0.05);box-shadow:0 0 20px rgba(0,255,102,0.1)}
+.tool-node.active-green .node-icon{color:var(--accent-green);border-color:var(--accent-green)}
+
+/* Preview Panel */
+.preview-panel{
+  position:absolute;
+  right:60px;
+  top:60px;
+  bottom:60px;
+  width:550px;
+  background:rgba(5,5,5,0.85);
+  backdrop-filter:blur(20px);
+  border:1px solid var(--border);
+  border-radius:16px;
+  display:flex;
+  flex-direction:column;
+  box-shadow:0 20px 60px rgba(0,0,0,0.8);
+  z-index:20;
+  overflow:hidden;
+}
+.preview-header{
+  padding:16px 24px;
+  border-bottom:1px solid var(--border);
+  font-family:'JetBrains Mono',monospace;
+  font-size:11px;
+  color:var(--text-dim);
+  text-transform:uppercase;
+  letter-spacing:1px;
+  display:flex;
+  align-items:center;
+  background:rgba(0,0,0,0.5);
+}
+.preview-header span.glow {
+  width: 6px; height: 6px; border-radius: 50%; background: var(--text); margin-right: 12px;
+  box-shadow: 0 0 10px var(--text);
+  animation: pulse 2s infinite;
+}
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+.preview-content{
+  flex:1;
+  position:relative;
+  padding:24px;
+}
+
+/* States */
+.preview-state{
+  position:absolute;
+  inset:24px;
+  opacity:0;
+  pointer-events:none;
+  transition:opacity 0.5s;
+  display:flex;
+  flex-direction:column;
+}
+.preview-state.active{
+  opacity:1;
+}
+
+/* State: Empty */
+.state-empty .cursor{
+  width:10px; height:20px; background:var(--text-dim); animation:blink 1s infinite;
+}
+@keyframes blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
+
+/* State: Input */
+.chat-bubble{
+  background:rgba(0,229,255,0.1);
+  border:1px solid rgba(0,229,255,0.3);
+  padding:20px;
+  border-radius:12px 12px 12px 0;
+  max-width:80%;
+  box-shadow:0 10px 20px rgba(0,0,0,0.2);
+  transform:translateY(20px);
+  opacity:0;
+  transition:all 0.5s;
+}
+.preview-state.active .chat-bubble{
+  transform:translateY(0);
+  opacity:1;
+}
+.chat-title{font-size:11px; font-family:'JetBrains Mono',monospace; color:var(--accent-cyan); margin-bottom:8px; text-transform:uppercase;}
+.chat-text{font-size:14px; line-height:1.6; color:var(--text);}
+
+/* State: Book */
+.search-ui{font-family:'JetBrains Mono',monospace; font-size:12px; display:flex; flex-direction:column; gap:12px;}
+.search-path{color:var(--text-dim); border-bottom:1px solid var(--border); padding-bottom:12px; margin-bottom:8px;}
+.search-progress-bar{height:2px; background:var(--surface-hover); border-radius:1px; overflow:hidden;}
+.search-fill{height:100%; width:0%; background:var(--accent-yellow); transition:width 0.1s linear; box-shadow:0 0 10px var(--accent-yellow);}
+.s-line{opacity:0; transition:opacity 0.2s;}
+.s-line.visible{opacity:1;}
+
+/* State: Summary */
+.md-preview{font-size:14px; line-height:1.6; color:var(--text); background:rgba(255,0,255,0.03); padding:24px; border-radius:12px; border:1px solid rgba(255,0,255,0.1); height:100%;}
+.md-line{opacity:0; transform:translateY(10px); transition:all 0.4s ease-out;}
+.md-line.visible{opacity:1; transform:translateY(0);}
+
+/* State: Video */
+.video-ui{display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%; gap:20px;}
+.spinner-container{display:flex; flex-direction:column; align-items:center; gap:16px;}
+.spinner{width:40px; height:40px; border:3px solid var(--surface-hover); border-top-color:var(--accent-green); border-radius:50%; animation:spin 1s linear infinite; box-shadow:0 0 20px rgba(0,255,102,0.2);}
+@keyframes spin { to { transform: rotate(360deg); } }
+.spinner-text{font-family:'JetBrains Mono',monospace; font-size:12px; color:var(--text-dim);}
+.video-thumbnail{
+  width:100%; height:200px; background:linear-gradient(135deg, #050505, #1a1a1a);
+  border:1px solid rgba(0,255,102,0.3); border-radius:12px;
+  display:flex; align-items:center; justify-content:center;
+  position:relative; overflow:hidden; opacity:0; transform:scale(0.95); transition:all 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.video-thumbnail::before{
+  content:''; position:absolute; inset:0;
+  background-image:radial-gradient(circle at center, rgba(0,255,102,0.1) 0%, transparent 70%);
+}
+.video-thumbnail.visible{opacity:1; transform:scale(1); box-shadow:0 10px 30px rgba(0,255,102,0.15);}
+.play-btn{
+  width:48px; height:48px; background:var(--accent-green); border-radius:50%;
+  display:flex; align-items:center; justify-content:center; color:#000; font-size:20px; padding-left:4px; z-index:2;
+  box-shadow:0 0 20px rgba(0,255,102,0.4); cursor:pointer;
+}
+
+/* State: Done */
+.done-ui{display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%; gap:16px; text-align:center;}
+.done-icon{width:64px; height:64px; background:var(--text); color:#000; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:32px; font-weight:700; box-shadow:0 0 40px rgba(255,255,255,0.3);}
+.done-text{font-size:16px; font-weight:600;}
+.done-sub{font-size:12px; font-family:'JetBrains Mono',monospace; color:var(--text-dim);}
+
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="logo">ACN 1.0</div>
+  <div class="sep"></div>
+  <div class="subtitle">Воркфлоу: Автоматизация домашнего задания</div>
+  <div class="badge" id="stateBadge">
+    <div class="badge-dot"></div>
+    <span id="stateText">СОН</span>
+  </div>
+</div>
+
+<div class="main">
+  <div class="grid-bg"></div>
+  <canvas id="connectionCanvas"></canvas>
+  
+  <div class="visual-area" id="nodesArea">
+    
+    <!-- Nodes positioned absolutely relative to left half -->
+    
+    <!-- Input Trigger -->
+    <div class="node tool-node" id="node-input" style="left:60px; top:350px;">
+      <div class="node-header">
+        <div class="node-icon">📱</div>
+        <div>
+          <div class="node-title">Telegram Вход</div>
+          <div class="node-subtitle">user_message</div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- TELOS Core -->
+    <div class="node agent-node sleeping" id="node-agent" style="left:360px; top:330px;">
+      <div class="agent-state-label" id="agentStateLabel">ГИБЕРНАЦИЯ</div>
+      <div class="node-header" style="margin-top:10px;">
+        <div class="node-icon">⚡</div>
+        <div>
+          <div class="node-title">TELOS Ядро</div>
+          <div class="node-subtitle">Оркестрация задач</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tools -->
+    <div class="node tool-node" id="node-book" style="left:660px; top:120px;">
+      <div class="node-header">
+        <div class="node-icon">📚</div>
+        <div>
+          <div class="node-title">Библиотека</div>
+          <div class="node-subtitle">homework_tool.search</div>
+        </div>
+      </div>
+    </div>
+    
+    <div class="node tool-node" id="node-summary" style="left:740px; top:350px;">
+      <div class="node-header">
+        <div class="node-icon">📝</div>
+        <div>
+          <div class="node-title">Генератор</div>
+          <div class="node-subtitle">text_summary_agent</div>
+        </div>
+      </div>
+    </div>
+    
+    <div class="node tool-node" id="node-video" style="left:660px; top:580px;">
+      <div class="node-header">
+        <div class="node-icon">🎬</div>
+        <div>
+          <div class="node-title">Рендер Видео</div>
+          <div class="node-subtitle">notebooklm.video</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Preview Panel on the Right -->
+  <div class="preview-panel">
+    <div class="preview-header">
+      <span class="glow"></span>
+      Рабочая Область | TELOS
+    </div>
+    
+    <div class="preview-content">
+      
+      <!-- Empty -->
+      <div class="preview-state active" id="state-empty">
+        <div class="cursor"></div>
+      </div>
+      
+      <!-- Input -->
+      <div class="preview-state" id="state-input">
+        <div style="height:100%; display:flex; flex-direction:column; justify-content:flex-end;">
+          <div class="chat-bubble">
+            <div class="chat-title">Новая Заметка от Максима</div>
+            <div class="chat-text">Сделай подробный конспект по истории, 9 класс, параграф 12. И сгенерируй короткое видео-объяснение по нему.</div>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Book Search -->
+      <div class="preview-state" id="state-book">
+        <div class="search-ui">
+          <div class="search-path">/data/homework-library/</div>
+          <div class="search-progress-bar"><div class="search-fill" id="search-fill"></div></div>
+          <div style="height:20px;"></div>
+          <div class="s-line">Инициализация файлового агента...</div>
+          <div class="s-line">Открытие: <span style="color:var(--text)">istorija-rossii-9kl-v-2ch-ch-2.pdf</span></div>
+          <div class="s-line">Семантический поиск: "Параграф 12" ...</div>
+          <div class="s-line" style="color:var(--accent-yellow)">Найдено точное совпадение: стр. 114-118</div>
+          <div class="s-line">Извлечение текста (OCR + Layout parsing)...</div>
+          <div class="s-line" style="color:var(--accent-green); margin-top:10px;">[УСПЕХ] Контекст загружен (4105 символов). Передача в генератор.</div>
+        </div>
+      </div>
+      
+      <!-- Summary -->
+      <div class="preview-state" id="state-summary">
+        <div class="md-preview">
+          <div class="md-line" style="font-size:18px; font-weight:700; color:#fff; margin-bottom:16px;"># 📖 Внешняя политика Александра III</div>
+          <div class="md-line" style="margin-bottom:12px;">- <b style="color:var(--accent-magenta)">Главная цель:</b> Сохранение мира на континенте (император-миротворец).</div>
+          <div class="md-line" style="margin-bottom:8px;">- <b style="color:var(--accent-magenta)">Европейское направление:</b></div>
+          <div class="md-line" style="margin-left:20px; margin-bottom:4px; color:var(--text-dim)">• Охлаждение отношений с Германской империей.</div>
+          <div class="md-line" style="margin-left:20px; margin-bottom:16px; color:var(--text-dim)">• Сближение с Францией (Союз 1891-1894 гг).</div>
+          <div class="md-line" style="margin-bottom:8px;">- <b style="color:var(--accent-magenta)">Азиатское направление:</b></div>
+          <div class="md-line" style="margin-left:20px; margin-bottom:4px; color:var(--text-dim)">• Завершение присоединения Средней Азии.</div>
+          <div class="md-line" style="margin-left:20px; margin-bottom:4px; color:var(--text-dim)">• Разграничение сфер влияния с Англией.</div>
+        </div>
+      </div>
+      
+      <!-- Video -->
+      <div class="preview-state" id="state-video">
+        <div class="video-ui">
+          <div class="spinner-container">
+            <div class="spinner" id="video-spinner"></div>
+            <div class="spinner-text">NotebookLM Рендеринг... <span id="render-pct" style="color:var(--text); font-weight:700;">0%</span></div>
+          </div>
+          <div class="video-thumbnail" id="video-thumb">
+            <div class="play-btn">▶</div>
+            <div style="position:absolute; bottom:12px; right:12px; background:rgba(0,0,0,0.8); padding:4px 8px; border-radius:4px; font-family:'JetBrains Mono',monospace; font-size:10px;">03:12</div>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Done -->
+      <div class="preview-state" id="state-done">
+        <div class="done-ui">
+          <div class="done-icon">✓</div>
+          <div class="done-text">Материалы готовы и отправлены</div>
+          <div class="done-sub">Конспект и видео доставлены пользователю в Telegram</div>
+        </div>
+      </div>
+      
+    </div>
+  </div>
+</div>
+
+<script>
+// ─── Setup ─────────────────────────────────────────────────────────
+const canvas = document.getElementById('connectionCanvas');
+const ctx = canvas.getContext('2d');
+const activeConnections = [];
+let time = 0;
+
+function resize() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ─── Drawing logic ──────────────────────────────────────────────────
+function getNodeCenter(id) {
+  const el = document.getElementById(id);
+  if (!el) return null;
+  const r = el.getBoundingClientRect();
+  const pr = canvas.getBoundingClientRect();
+  
+  let x = r.left - pr.left + r.width/2;
+  let y = r.top - pr.top + r.height/2;
+  return { x, y };
+}
+
+function drawConnections() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  time += 0.03;
+  
+  for (let i = activeConnections.length - 1; i >= 0; i--) {
+    const conn = activeConnections[i];
+    const from = getNodeCenter(conn.from);
+    const to = getNodeCenter(conn.to);
+    if (!from || !to) continue;
+
+    const elapsed = Date.now() - conn.startTime;
+    const progress = Math.min(1, elapsed / conn.duration);
+    
+    ctx.beginPath();
+    ctx.moveTo(from.x, from.y);
+    ctx.lineTo(from.x + (to.x - from.x) * progress, from.y + (to.y - from.y) * progress);
+    
+    ctx.strokeStyle = conn.color;
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([4, 4]);
+    ctx.lineDashOffset = -time * 40;
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    if (progress > 0 && progress < 1) {
+      const px = from.x + (to.x - from.x) * progress;
+      const py = from.y + (to.y - from.y) * progress;
+      
+      ctx.beginPath();
+      ctx.arc(px, py, 4, 0, Math.PI * 2);
+      ctx.fillStyle = '#fff';
+      ctx.fill();
+      
+      ctx.beginPath();
+      ctx.arc(px, py, 14, 0, Math.PI * 2);
+      ctx.fillStyle = conn.color.replace('1)', '0.3)');
+      ctx.fill();
+    }
+
+    // Keep line active for a while after reaching destination
+    if (elapsed > conn.duration + conn.hold) {
+      activeConnections.splice(i, 1);
+    }
+  }
+  requestAnimationFrame(drawConnections);
+}
+requestAnimationFrame(drawConnections);
+
+function addConnection(from, to, color, duration, hold = 3000) {
+  activeConnections.push({ from, to, color, startTime: Date.now(), duration, hold });
+}
+
+// ─── Sequence Orchestrator ─────────────────────────────────────────
+async function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+function setAgentState(state) {
+  const agentNode = document.getElementById('node-agent');
+  const badge = document.getElementById('stateBadge');
+  const label = document.getElementById('agentStateLabel');
+  
+  agentNode.className = `node agent-node ${state}`;
+  if (state === 'sleeping') {
+    badge.className = 'badge';
+    document.getElementById('stateText').textContent = 'СОН';
+    label.textContent = 'ГИБЕРНАЦИЯ';
+  } else if (state === 'awake') {
+    badge.className = 'badge is-awake';
+    document.getElementById('stateText').textContent = 'АКТИВЕН';
+    label.textContent = 'ОРКЕСТРАЦИЯ';
+  }
+}
+
+function activateNode(id, className, duration) {
+  const el = document.getElementById(id);
+  el.classList.add(className);
+  if (duration) {
+    setTimeout(() => el.classList.remove(className), duration);
+  }
+}
+function deactivateNode(id, className) {
+  document.getElementById(id).classList.remove(className);
+}
+
+function setPreviewState(id) {
+  document.querySelectorAll('.preview-state').forEach(el => el.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  
+  // Resets
+  if (id !== 'state-summary') {
+    document.querySelectorAll('#state-summary .md-line').forEach(el => el.classList.remove('visible'));
+  }
+  if (id !== 'state-book') {
+    document.querySelectorAll('#state-book .s-line').forEach(el => el.classList.remove('visible'));
+    document.getElementById('search-fill').style.width = '0%';
+  }
+  if (id !== 'state-video') {
+    document.getElementById('render-pct').textContent = '0%';
+    document.getElementById('video-thumb').classList.remove('visible');
+    document.getElementById('video-spinner').style.display = 'block';
+  }
+}
+
+async function runSearchAnimation() {
+  const fill = document.getElementById('search-fill');
+  const lines = document.querySelectorAll('#state-book .s-line');
+  
+  fill.style.width = '30%';
+  lines[0].classList.add('visible');
+  await delay(600);
+  lines[1].classList.add('visible');
+  fill.style.width = '60%';
+  await delay(800);
+  lines[2].classList.add('visible');
+  fill.style.width = '85%';
+  await delay(1200);
+  lines[3].classList.add('visible');
+  await delay(600);
+  lines[4].classList.add('visible');
+  lines[5].classList.add('visible');
+  fill.style.width = '100%';
+  await delay(1500);
+}
+
+async function runSummaryAnimation() {
+  const lines = document.querySelectorAll('#state-summary .md-line');
+  for (const l of lines) {
+    l.classList.add('visible');
+    await delay(600);
+  }
+  await delay(1000);
+}
+
+async function runVideoAnimation() {
+  const pct = document.getElementById('render-pct');
+  const spinner = document.getElementById('video-spinner');
+  const thumb = document.getElementById('video-thumb');
+  
+  for(let i=0; i<=100; i+=2) {
+    pct.textContent = i + '%';
+    await delay(60);
+  }
+  
+  await delay(400);
+  spinner.style.display = 'none';
+  pct.textContent = 'ЗАВЕРШЕНО';
+  pct.style.color = 'var(--accent-green)';
+  
+  thumb.classList.add('visible');
+  await delay(2000);
+  pct.style.color = 'var(--text)';
+}
+
+async function runDemo() {
+  setPreviewState('state-empty');
+  await delay(1000);
+  
+  // Step 1: Input
+  activateNode('node-input', 'active-cyan', 2000);
+  setPreviewState('state-input');
+  await delay(1500);
+  addConnection('node-input', 'node-agent', 'rgba(0, 229, 255, 1)', 600, 1000);
+  await delay(600);
+  
+  // Step 2: Wake up
+  setAgentState('awake');
+  await delay(1000);
+  
+  // Step 3: Book
+  addConnection('node-agent', 'node-book', 'rgba(255, 230, 0, 1)', 600, 5000);
+  activateNode('node-book', 'active-yellow', 5600);
+  await delay(600);
+  setPreviewState('state-book');
+  await runSearchAnimation();
+  
+  // Step 4: Summary
+  addConnection('node-agent', 'node-summary', 'rgba(255, 0, 255, 1)', 600, 6000);
+  activateNode('node-summary', 'active-magenta', 6600);
+  await delay(600);
+  setPreviewState('state-summary');
+  await runSummaryAnimation();
+  
+  // Step 5: Video
+  addConnection('node-agent', 'node-video', 'rgba(0, 255, 102, 1)', 600, 5000);
+  activateNode('node-video', 'active-green', 5600);
+  await delay(600);
+  setPreviewState('state-video');
+  await runVideoAnimation();
+  
+  // Step 6: Delivery
+  addConnection('node-agent', 'node-input', 'rgba(255, 255, 255, 1)', 600, 2000);
+  activateNode('node-input', 'active-cyan', 2000);
+  await delay(600);
+  setPreviewState('state-done');
+  
+  await delay(3000);
+  setAgentState('sleeping');
+  
+  // Loop
+  await delay(6000);
+  runDemo();
+}
+
+// Start
+setAgentState('sleeping');
+runDemo();
+
+</script>
+</body>
+</html>

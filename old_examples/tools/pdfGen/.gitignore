@@ -1,9 +1,0 @@
-# Ignore generated files
-data/images/*.png
-data/page*.html
-data/styles.css
-data/*.pdf
-
-# Keep directory structure
-!data/images/.gitkeep
-

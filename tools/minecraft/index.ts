@@ -6,9 +6,11 @@ import { createProvider } from '../../src/providers/factory.js';
 import type { Message } from '../../src/types/index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const PROJECT_ROOT = process.env.PROJECT_ROOT
-  ? resolve(process.env.PROJECT_ROOT)
-  : resolve(__dirname, '..', '..');
+const PROJECT_ROOT = process.env.TELOS_PROJECT_ROOT
+  ? resolve(process.env.TELOS_PROJECT_ROOT)
+  : process.env.PROJECT_ROOT
+    ? resolve(process.env.PROJECT_ROOT)
+    : resolve(__dirname, '..', '..');
 const SYSTEM_PROMPT_PATH = join(__dirname, 'system.md');
 const RUNS_ROOT = join(__dirname, '.runs');
 
