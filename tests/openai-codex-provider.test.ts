@@ -25,7 +25,7 @@ test('OpenRouterProvider rejects oauth-only codex models', async () => {
   );
 });
 
-test('OpenRouterProvider includes reasoning_content on replayed assistant tool calls when reasoning is enabled', () => {
+test('OpenRouterProvider includes reasoning on replayed assistant tool calls when reasoning is enabled', () => {
   const provider = new OpenRouterProvider('test-key');
   const request = provider.buildRequestWithTools(
     [
@@ -35,16 +35,16 @@ test('OpenRouterProvider includes reasoning_content on replayed assistant tool c
         content: '',
         reasoning: 'Need to inspect the directory.',
         toolCalls: [
-          { id: 'tool_1', name: 'cli', arguments: { content: 'dir /s /b' } },
+          { id: 'tool_1', name: 'action', arguments: { content: 'console.log(await files.list("."));' } },
         ],
       },
-      { role: 'tool', content: 'file.txt', toolCallId: 'tool_1', toolName: 'cli' },
+      { role: 'tool', content: 'file.txt', toolCallId: 'tool_1', toolName: 'action' },
     ],
     { model: 'moonshotai/kimi-k2.6', reasoning: 'medium' },
     { tools: [], toolChoice: 'auto' }
   );
 
-  assert.equal(request.messages[1]?.reasoning_content, 'Need to inspect the directory.');
+  assert.equal(request.messages[1]?.reasoning, 'Need to inspect the directory.');
 });
 
 test('OpenRouterProvider omits reasoning_content on assistant tool calls when reasoning is disabled', () => {
@@ -57,7 +57,7 @@ test('OpenRouterProvider omits reasoning_content on assistant tool calls when re
         content: '',
         reasoning: 'Hidden reasoning',
         toolCalls: [
-          { id: 'tool_1', name: 'cli', arguments: { content: 'dir /s /b' } },
+          { id: 'tool_1', name: 'action', arguments: { content: 'console.log(await files.list("."));' } },
         ],
       },
     ],

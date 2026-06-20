@@ -938,6 +938,59 @@ async function ingestText() {
     await loadGraph();
 }
 
+async function deleteCategory() {
+    const category = readTrimmedInput("delete-category-name")?.toLowerCase();
+    const confirmation = readTrimmedInput("delete-category-confirm")?.toLowerCase();
+
+    if (!category) {
+        setStatus("delete-category-status", "Enter a category first.", true);
+        return;
+    }
+    if (confirmation !== category) {
+        setStatus("delete-category-status", "Confirmation must match the category exactly.", true);
+        return;
+    }
+
+    const confirmed = window.confirm(`Delete category "${category}" and all facts, hints, and links connected to it? This cannot be undone.`);
+    if (!confirmed) {
+        setStatus("delete-category-status", "Deletion cancelled.");
+        return;
+    }
+
+    setStatus("delete-category-status", `Deleting category "${category}"...`);
+    let response;
+    let payload;
+    try {
+        response = await fetch(`/api/category/${encodeURIComponent(category)}`, {
+            method: "DELETE",
+        });
+        payload = await response.json();
+    } catch (error) {
+        setStatus("delete-category-status", error instanceof Error ? error.message : "Category deletion failed.", true);
+        return;
+    }
+
+    if (!response.ok) {
+        setStatus("delete-category-status", payload?.error || "Category deletion failed.", true);
+        return;
+    }
+
+    const result = payload?.result || {};
+    removeSearchCategory(category);
+    const activeAgentName = getActiveAgentName()?.toLowerCase();
+    if (activeAgentName === category) {
+        const agentInput = document.getElementById("search-agent-name");
+        if (agentInput) agentInput.value = "";
+    }
+    document.getElementById("delete-category-name").value = "";
+    document.getElementById("delete-category-confirm").value = "";
+    setStatus(
+        "delete-category-status",
+        `Deleted ${result.factCount || 0} fact(s), ${result.hintCount || 0} hint(s), and ${result.linkCount || 0} link(s) from "${result.category || category}".`
+    );
+    await loadGraph();
+}
+
 async function migrateLegacyNamespace() {
     const sourceNamespace = document.getElementById("migration-source")?.value?.trim() || "global_memory";
     setStatus("migration-status", `Migrating "${sourceNamespace}" into the current V2 namespace...`);
@@ -1055,6 +1108,13 @@ async function main() {
         migrateLegacyNamespace().catch((error) => {
             console.error("Migration failed", error);
             setStatus("migration-status", error?.message || "Migration failed.", true);
+        });
+    });
+
+    document.getElementById("delete-category-btn")?.addEventListener("click", () => {
+        deleteCategory().catch((error) => {
+            console.error("Category deletion failed", error);
+            setStatus("delete-category-status", error?.message || "Category deletion failed.", true);
         });
     });
 

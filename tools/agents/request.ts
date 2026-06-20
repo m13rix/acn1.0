@@ -4,7 +4,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
-export function normalizeAgentRequest(input: unknown, methodName: 'call' | 'callSelf' | 'resume'): string {
+export function normalizeAgentRequest(input: unknown, methodName: 'call' | 'callSelf' | 'resume' | 'run' | 'start' | 'send'): string {
   if (typeof input === 'string') {
     return input;
   }

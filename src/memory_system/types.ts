@@ -17,6 +17,14 @@ export interface IngestTextResult {
   warnings?: string[];
 }
 
+export interface DeleteCategoryResult {
+  category: string;
+  factIds: string[];
+  factCount: number;
+  hintCount: number;
+  linkCount: number;
+}
+
 export type PhraseAggregationMode = 'max' | 'sum';
 export type CandidateSelectionMode = 'top-k' | 'threshold' | 'range' | 'auto';
 export type QueryPhraseWeightingMode = 'llm' | 'embedding';

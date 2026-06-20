@@ -391,6 +391,23 @@ async function startServer() {
     }
   });
 
+  app.delete('/api/category/:category', async (req, res) => {
+    try {
+      const category = normalizeAgentName(req.params.category);
+      if (!category) {
+        res.status(400).json({ error: 'category is required' });
+        return;
+      }
+
+      const result = await memory.deleteCategory(category);
+      res.json({ ok: true, result });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Category deletion failed';
+      console.error('Error in DELETE /api/category/:category:', error);
+      res.status(500).json({ error: message });
+    }
+  });
+
   app.post('/api/migrate-v1', async (req, res) => {
     const { debugEnabled, trace } = resolveDebugTraceFromRequest(req, 'memory-viz.migrate');
     const localTrace = trace ?? createMemoryDebugTrace('memory-viz.migrate').trace;

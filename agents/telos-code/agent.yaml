@@ -1,0 +1,59 @@
+name: Telos-Code
+description: A coding-focused agent for this workspace.
+
+model: gpt-5.5
+provider: openai-codex
+systemPrompt: prompts/system.md
+runPath: ./
+
+reasoning: low
+
+modelSwitching:
+  mode: whitelist
+  whitelist:
+    - gpt-5.4-mini
+    - gpt-5.5
+  selector:
+    model: openai/gpt-oss-20b
+    provider: openrouter
+
+tools:
+  - search
+  - message
+  - memory
+  - agents
+  - utils
+
+memoryToolDocs: true
+
+memory:
+  enabled: true
+
+  memoryToolDocs: true
+
+  autoHints:
+    enabled: true
+    toolResponses:
+      enabled: false
+    userPhraseWeighting: "llm"
+
+  categories:
+    - name: telos_code_prompt
+
+  includeUncategorized: false
+  fallbackCategory: core
+
+  searchMaxChains: 8
+
+adaptiveStepContext:
+  enabled: true
+  pruning:
+    enabled: true
+    heatThreshold: 0.6
+  debug:
+    enabled: true
+    port: 3067
+    openBrowser: true
+
+injectAgentsList: false
+requireFinish: false

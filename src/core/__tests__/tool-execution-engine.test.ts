@@ -9,24 +9,16 @@ import type { ExecutionResult } from '../../types/index.js';
 class MockSandbox {
   constructor(
     public readonly directory: string,
-    private readonly parseFn: (content: string) => Array<{ search: string; replace: string }>,
-    private readonly applyFn: (
-      filename: string,
-      edits: Array<{ search: string; replace: string }>
-    ) => Promise<ExecutionResult>,
     private readonly actionFn: (code: string) => Promise<ExecutionResult> = async () => ({ success: true, output: 'ok' }),
     private readonly cliFn: (command: string) => Promise<ExecutionResult> = async (command: string) => ({ success: true, output: command })
   ) { }
 
-  parseSearchReplace(content: string): Array<{ search: string; replace: string }> {
-    return this.parseFn(content);
+  parseSearchReplace(): Array<{ search: string; replace: string }> {
+    return [];
   }
 
-  async applySearchReplace(
-    filename: string,
-    edits: Array<{ search: string; replace: string }>
-  ): Promise<ExecutionResult> {
-    return this.applyFn(filename, edits);
+  async applySearchReplace(): Promise<ExecutionResult> {
+    return { success: true, output: '' };
   }
 
   async execute(code: string): Promise<ExecutionResult> {
@@ -40,17 +32,12 @@ class MockSandbox {
 
 async function withTempSandbox(
   run: (engine: ToolExecutionEngine, sandboxDir: string) => Promise<void>,
-  parseFn: (content: string) => Array<{ search: string; replace: string }> = () => [],
-  applyFn: (
-    filename: string,
-    edits: Array<{ search: string; replace: string }>
-  ) => Promise<ExecutionResult> = async () => ({ success: true, output: '', filename: '' }),
-  actionFn?: (code: string) => Promise<ExecutionResult>
+  actionFn?: (code: string) => Promise<ExecutionResult>,
 ): Promise<void> {
   const sandboxDir = await mkdtemp(join(tmpdir(), 'telos-tool-engine-'));
   try {
-    const sandbox = new MockSandbox(sandboxDir, parseFn, applyFn, actionFn);
-    const session = { sandbox } as any;
+    const sandbox = new MockSandbox(sandboxDir, actionFn);
+    const session = { id: 'test-session', sandbox } as any;
     const engine = new ToolExecutionEngine(session);
     await run(engine, sandboxDir);
   } finally {
@@ -58,127 +45,11 @@ async function withTempSandbox(
   }
 }
 
-test('recovers filename/content from embedded JSON payload', async () => {
-  await withTempSandbox(async (engine, sandboxDir) => {
-    const result = await engine.executeProviderToolCall({
-      id: 'tool_1',
-      name: 'edit_file',
-      arguments: {
-        content: '{"filename":"./documentation/x.md","content":"hello from json"}',
-      },
-    });
-
-    assert.match(result.observation, /created\/updated/i);
-    const filePath = join(sandboxDir, 'documentation', 'x.md');
-    const fileBody = await readFile(filePath, 'utf-8');
-    assert.equal(fileBody, 'hello from json');
-  });
-});
-
-test('backward compat: old "file" tool name still works', async () => {
-  await withTempSandbox(async (engine, sandboxDir) => {
-    const result = await engine.executeProviderToolCall({
-      id: 'tool_compat',
-      name: 'file',
-      arguments: { filename: './compat.md', content: 'legacy name works' },
-    });
-    assert.match(result.observation, /created\/updated/i);
-    const fileBody = await readFile(join(sandboxDir, 'compat.md'), 'utf-8');
-    assert.equal(fileBody, 'legacy name works');
-  });
-});
-
-test('view_file reads file contents', async () => {
-  await withTempSandbox(async (engine, sandboxDir) => {
-    const { writeFileSync, mkdirSync } = await import('fs');
-    mkdirSync(join(sandboxDir, 'sub'), { recursive: true });
-    writeFileSync(join(sandboxDir, 'sub', 'test.txt'), 'hello world', 'utf-8');
-    const result = await engine.executeProviderToolCall({
-      id: 'tool_view',
-      name: 'view_file',
-      arguments: { filename: './sub/test.txt' },
-    });
-    assert.equal(result.observation, 'hello world');
-  });
-});
-
-test('normalizes typo path .documentation to ./documentation', async () => {
-  await withTempSandbox(async (engine, sandboxDir) => {
-    const result = await engine.executeProviderToolCall({
-      id: 'tool_2',
-      name: 'edit_file',
-      arguments: {
-        filename: '.documentation/06_sandbox_environment.md',
-        content: 'chapter body',
-      },
-    });
-
-    assert.match(result.observation, /created\/updated/i);
-    const filePath = join(sandboxDir, 'documentation', '06_sandbox_environment.md');
-    const fileBody = await readFile(filePath, 'utf-8');
-    assert.equal(fileBody, 'chapter body');
-  });
-});
-
-test('accepts filename/content aliases for file tool payload', async () => {
-  await withTempSandbox(async (engine, sandboxDir) => {
-    const result = await engine.executeProviderToolCall({
-      id: 'tool_alias',
-      name: 'EDIT_FILE',
-      arguments: {
-        path: './documentation/alias.md',
-        body: 'alias content',
-      },
-    });
-
-    assert.match(result.observation, /created\/updated/i);
-    const filePath = join(sandboxDir, 'documentation', 'alias.md');
-    const fileBody = await readFile(filePath, 'utf-8');
-    assert.equal(fileBody, 'alias content');
-  });
-});
-
-test('recovers missing file edit by creating file from REPLACE payload', async () => {
-  await withTempSandbox(
-    async (engine, sandboxDir) => {
-      const editPayload = [
-        '<<<< SEARCH',
-        'old',
-        '>>>>',
-        '<<<< REPLACE',
-        'new content from edit',
-        '>>>>',
-      ].join('\n');
-
-      const result = await engine.executeProviderToolCall({
-        id: 'tool_3',
-        name: 'edit_file',
-        arguments: {
-          filename: './documentation/generated.md',
-          content: editPayload,
-        },
-      });
-
-      assert.match(result.observation, /Recovered by creating/i);
-      const filePath = join(sandboxDir, 'documentation', 'generated.md');
-      const fileBody = await readFile(filePath, 'utf-8');
-      assert.equal(fileBody, 'new content from edit');
-    },
-    () => [{ search: 'old', replace: 'new content from edit' }],
-    async (filename) => ({
-      success: false,
-      output: '',
-      error: `File not found: "${filename}"`,
-      filename,
-    })
-  );
-});
-
 test('normalizes whitespace tool name for action', async () => {
   await withTempSandbox(
     async (engine) => {
       const result = await engine.executeProviderToolCall({
-        id: 'tool_4',
+        id: 'tool_1',
         name: ' action',
         arguments: {
           text: 'console.log("hello")',
@@ -186,16 +57,29 @@ test('normalizes whitespace tool name for action', async () => {
       });
       assert.equal(result.observation, 'ran');
     },
-    () => [],
-    async () => ({ success: true, output: '' }),
     async () => ({ success: true, output: 'ran' })
   );
 });
 
-test('handles TASK_DONE pseudo-tool directly and keeps FINISH as alias', async () => {
+test('legacy provider-native file and cli tools are rejected', async () => {
+  await withTempSandbox(async (engine) => {
+    for (const name of ['cli', 'edit_file', 'file', 'view_file', 'read_file']) {
+      const result = await engine.executeProviderToolCall({
+        id: `tool_${name}`,
+        name,
+        arguments: { content: 'echo nope', filename: 'x.txt' },
+      });
+
+      assert.match(result.observation, /Unsupported provider tool/);
+      assert.match(result.observation, /terminal, files, and code inside action/);
+    }
+  });
+});
+
+test('handles TASK_DONE pseudo-tool directly and keeps FINISH as alias for old continuations', async () => {
   await withTempSandbox(async (engine) => {
     const result = await engine.executeProviderToolCall({
-      id: 'tool_5',
+      id: 'tool_2',
       name: 'TASK_DONE',
       arguments: { message: 'done successfully' },
     });
@@ -204,11 +88,89 @@ test('handles TASK_DONE pseudo-tool directly and keeps FINISH as alias', async (
     assert.match(result.observation, /TASK_DONE accepted/i);
 
     const legacy = await engine.executeProviderToolCall({
-      id: 'tool_6',
+      id: 'tool_3',
       name: 'FINISH',
       arguments: { message: 'legacy still works' },
     });
 
     assert.equal(legacy.finishMessage, 'legacy still works');
   });
+});
+
+test('serializes parallel provider tool calls and returns each observation', async () => {
+  const order: string[] = [];
+  let releaseFirst: (() => void) | undefined;
+  const firstGate = new Promise<void>(resolve => {
+    releaseFirst = () => resolve();
+  });
+
+  await withTempSandbox(
+    async (engine) => {
+      const first = engine.executeProviderToolCall({
+        id: 'tool_first',
+        name: 'action',
+        arguments: { content: 'first' },
+      });
+
+      const second = engine.executeProviderToolCall({
+        id: 'tool_second',
+        name: 'action',
+        arguments: { content: 'second' },
+      });
+
+      await new Promise(resolve => setTimeout(resolve, 20));
+      assert.deepEqual(order, ['first-start']);
+
+      releaseFirst?.();
+
+      const [firstResult, secondResult] = await Promise.all([first, second]);
+      assert.equal(firstResult.observation, 'first-result');
+      assert.equal(secondResult.observation, 'second-result');
+    },
+    async (code) => {
+      order.push(`${code}-start`);
+      if (code === 'first') {
+        await firstGate;
+      }
+      order.push(`${code}-end`);
+      return { success: true, output: `${code}-result` };
+    }
+  );
+
+  assert.deepEqual(order, ['first-start', 'first-end', 'second-start', 'second-end']);
+});
+
+test('compacts oversized action observations while saving the full output', async () => {
+  const previousLimit = process.env.TELOS_MAX_TOOL_OBSERVATION_CHARS;
+  process.env.TELOS_MAX_TOOL_OBSERVATION_CHARS = '2000';
+  const fullOutput = `HEAD\n${'x'.repeat(5000)}\nTAIL`;
+
+  try {
+    await withTempSandbox(
+      async (engine, sandboxDir) => {
+        const result = await engine.executeProviderToolCall({
+          id: 'tool_large',
+          name: 'action',
+          arguments: { content: 'large-output' },
+        });
+
+        assert.ok(result.observation.length < fullOutput.length);
+        assert.match(result.observation, /action observation truncated/);
+        assert.match(result.observation, /HEAD/);
+        assert.match(result.observation, /TAIL/);
+
+        const savedPath = result.observation.match(/full output saved to ([^\]]+)/)?.[1];
+        assert.ok(savedPath);
+        const saved = await readFile(join(sandboxDir, savedPath), 'utf-8');
+        assert.equal(saved, fullOutput);
+      },
+      async () => ({ success: true, output: fullOutput }),
+    );
+  } finally {
+    if (previousLimit === undefined) {
+      delete process.env.TELOS_MAX_TOOL_OBSERVATION_CHARS;
+    } else {
+      process.env.TELOS_MAX_TOOL_OBSERVATION_CHARS = previousLimit;
+    }
+  }
 });

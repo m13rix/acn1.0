@@ -1,4 +1,0 @@
-{"source":"assistant_text","text":"Good. I now have full context. Let me execute Step 1 of the instruction algorithm."}
-{"source":"assistant_text","text":"## Step 2: Gather Evidence\n\nLet me start with memory, then web, then user if needed."}
-{"source":"assistant_text","text":"Good, I have strong evidence from memory and web. Let me check if there's any remaining memory about format preferences, then ask the user a few targeted questions."}
-{"source":"assistant_text","text":"Let me ask a few targeted questions to critical unknowns that memory can't fully resolve."}

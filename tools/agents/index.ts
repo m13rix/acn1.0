@@ -6,7 +6,7 @@
  */
 
 import * as fs from 'fs';
-import { join } from 'path';
+import { join, relative, resolve, isAbsolute } from 'path';
 
 import { listAgents, loadAgent } from '../../src/core/AgentRunner.js';
 import { getAgentInvocationService } from '../../src/core/AgentInvocationService.js';
@@ -148,7 +148,40 @@ interface SubAgentConfig {
 
 const SUBAGENTS_FILE = '.telos-subagents.json';
 const LAST_AGENT_SESSION_FILE = '.telos-last-agent-session.json';
+const AGENT_TRACE_LIMIT = 200_000;
 let subAgentsCache: Map<string, SubAgentConfig> | null = null;
+
+export interface AgentRunResult {
+    finalMessage: string;
+    changedFiles?: string[];
+}
+
+interface AgentRunOptions {
+    interface?: string;
+    dir?: string;
+}
+
+type AgentJobStatus = 'running' | 'completed' | 'failed' | 'stopping' | 'stopped';
+
+interface AgentJob {
+    name: string;
+    agentName: string;
+    input: string;
+    options: AgentRunOptions;
+    status: AgentJobStatus;
+    startedAt: string;
+    updatedAt: string;
+    trace: string[];
+    pendingInputs: string[];
+    abortController: AbortController;
+    result?: AgentRunResult;
+    error?: string;
+    snapshot?: SessionSnapshot;
+    descriptor?: AgentResumeDescriptor;
+    promise: Promise<void>;
+}
+
+const agentJobs = new Map<string, AgentJob>();
 
 async function resolveActiveSandbox(): Promise<LocalSandbox | undefined> {
     let sandbox = getAgentSandbox();
@@ -159,6 +192,101 @@ async function resolveActiveSandbox(): Promise<LocalSandbox | undefined> {
     }
 
     return sandbox as LocalSandbox | undefined;
+}
+
+function resolveSandboxRelativeDir(dir: string): string {
+    const base = process.env.SANDBOX_DIR || process.cwd();
+    const target = resolve(base, dir);
+    const rel = relative(resolve(base), target);
+    if (rel.startsWith('..') || isAbsolute(rel)) {
+        throw new Error(`dir resolves outside the active sandbox: ${dir}`);
+    }
+    return target;
+}
+
+async function resolveSandboxForOptions(options?: AgentRunOptions): Promise<LocalSandbox | undefined> {
+    if (!options?.dir) {
+        return resolveActiveSandbox();
+    }
+
+    const targetDir = resolveSandboxRelativeDir(options.dir);
+    fs.mkdirSync(targetDir, { recursive: true });
+    const sandbox = new LocalSandbox({ existingPath: targetDir });
+    await sandbox.initialize([], undefined);
+    return sandbox;
+}
+
+function shouldIgnoreChangedFile(relativePath: string): boolean {
+    const normalized = relativePath.replace(/\\/g, '/');
+    return normalized.startsWith('.git/')
+        || normalized.startsWith('node_modules/')
+        || normalized === '.telos-last-agent-session.json'
+        || normalized.startsWith('.telos-agent-call-text-')
+        || normalized.startsWith('.telos-memory')
+        || normalized.startsWith('.telos-files')
+        || normalized.startsWith('.telos-subagents');
+}
+
+async function collectFileSnapshot(root: string): Promise<Map<string, number>> {
+    const out = new Map<string, number>();
+
+    async function visit(dir: string): Promise<void> {
+        const entries = await fs.promises.readdir(dir, { withFileTypes: true }).catch(() => []);
+        for (const entry of entries) {
+            const absolute = join(dir, entry.name);
+            const rel = relative(root, absolute).replace(/\\/g, '/');
+            if (shouldIgnoreChangedFile(rel)) {
+                continue;
+            }
+            if (entry.isDirectory()) {
+                await visit(absolute);
+                continue;
+            }
+            if (!entry.isFile()) {
+                continue;
+            }
+            const stat = await fs.promises.stat(absolute).catch(() => null);
+            if (stat) {
+                out.set(rel, stat.mtimeMs);
+            }
+        }
+    }
+
+    await visit(root);
+    return out;
+}
+
+function diffFileSnapshots(before: Map<string, number>, after: Map<string, number>): string[] {
+    const changed: string[] = [];
+    for (const [file, mtime] of after) {
+        if (!before.has(file) || before.get(file) !== mtime) {
+            changed.push(file);
+        }
+    }
+    return changed.sort();
+}
+
+function appendJobTrace(job: AgentJob, text: string): void {
+    job.trace.push(text);
+    let size = job.trace.reduce((sum, part) => sum + part.length, 0);
+    while (size > AGENT_TRACE_LIMIT && job.trace.length > 1) {
+        const removed = job.trace.shift() || '';
+        size -= removed.length;
+    }
+}
+
+function formatAgentRunResult(finalMessage: string, changedFiles: string[]): AgentRunResult {
+    const result: AgentRunResult = { finalMessage };
+    if (changedFiles.length > 0) {
+        result.changedFiles = changedFiles;
+    }
+    return result;
+}
+
+function assertPersistentActionRuntime(methodName: string): void {
+    if (!(globalThis as any).__TELOS_ACTION_WORKER_RUNTIME__) {
+        throw new Error(`agents.${methodName} requires the persistent LocalSandbox action worker.`);
+    }
 }
 
 async function runNamedAgentInCurrentSandbox(options: {
@@ -176,9 +304,14 @@ async function runNamedAgentInCurrentSandbox(options: {
     queueNotice?: string;
     resumeSnapshot?: SessionSnapshot;
     resumeDescriptor?: AgentResumeDescriptor;
+    sandboxOverride?: LocalSandbox;
+    signal?: AbortSignal;
+    trace?: (text: string) => void;
+    useQueue?: boolean;
+    onSessionSnapshot?: (snapshot: SessionSnapshot, descriptor?: AgentResumeDescriptor) => void | Promise<void>;
     onModelRouted?: (result: NotDiamondRoutingResult) => void | Promise<void>;
 }): Promise<string> {
-    const sandbox = await resolveActiveSandbox();
+    const sandbox = options.sandboxOverride || await resolveActiveSandbox();
     if (!sandbox) {
         const label = typeof options.agent === 'string' ? options.agent : options.agent.config.name;
         return `Error: No sandbox available. Cannot call agent "${label}" outside of an active session.`;
@@ -196,7 +329,7 @@ async function runNamedAgentInCurrentSandbox(options: {
     };
     const resumeStatePath = join(sandbox.directory, LAST_AGENT_SESSION_FILE);
 
-    const queued = await runInSandboxCallQueue(sandboxKey, async () => {
+    const execute = async () => {
         const invoke = () => getAgentInvocationService().callAgent({
             agent: options.agent,
             message: options.request,
@@ -213,6 +346,7 @@ async function runNamedAgentInCurrentSandbox(options: {
             routeEnv,
             restoreSnapshot: options.resumeSnapshot,
             onSessionSnapshot: async (snapshot) => {
+                await options.onSessionSnapshot?.(snapshot, options.resumeDescriptor);
                 if (!options.resumeDescriptor) {
                     return;
                 }
@@ -226,15 +360,21 @@ async function runNamedAgentInCurrentSandbox(options: {
             onModelRouted: async (result) => {
                 await options.onModelRouted?.(result);
             },
+            signal: options.signal,
         });
 
         return parentActionStore
             ? actionContext.run({ ...parentActionStore, env: routeEnv }, invoke)
             : actionContext.run({ env: routeEnv }, invoke);
-    });
+    };
+
+    const queued = options.useQueue === true
+        ? await runInSandboxCallQueue(sandboxKey, execute)
+        : { value: await execute(), waited: false };
 
     const textEntries = await readAgentTextLog(textLogPath);
     const aggregatedResult = buildAgentCallTextResult(textEntries, queued.value);
+    options.trace?.(aggregatedResult);
 
     return queued.waited
         ? `${options.queueNotice || AGENT_CALL_QUEUE_NOTICE}\n\n${aggregatedResult}`
@@ -400,6 +540,8 @@ export async function subAgent(name: string, config: {
     return `Created sub-agent: ${name} - ${config.description}`;
 }
 
+export const newSubAgent = subAgent;
+
 /**
  * Create a new permanent agent via Gemini CLI (srcAgent).
  *
@@ -435,11 +577,18 @@ export async function newAgent(prompt: string): Promise<string> {
  * @param request - Message to send to the agent
  * @returns Agent's response
  */
-export async function call(name: string, request: unknown, options?: { interface?: string }): Promise<string> {
+async function runAgentFinalMessage(name: string, request: unknown, options?: AgentRunOptions & {
+    sandboxOverride?: LocalSandbox;
+    signal?: AbortSignal;
+    trace?: (text: string) => void;
+    resumeSnapshot?: SessionSnapshot;
+    resumeDescriptor?: AgentResumeDescriptor;
+    onSessionSnapshot?: (snapshot: SessionSnapshot, descriptor?: AgentResumeDescriptor) => void | Promise<void>;
+}): Promise<string> {
     const parentDepth = getAgentDepth(); // Will be 0 in child process
     const stream = isStreamingEnabled();
     const currentAgent = await getCallingAgent();
-    const normalizedRequest = normalizeAgentRequest(request, 'call');
+    const normalizedRequest = normalizeAgentRequest(request, 'run');
 
     try {
         const currentSubAgents = loadSubAgents();
@@ -502,6 +651,7 @@ export async function call(name: string, request: unknown, options?: { interface
             }
             const modelOverride = subConfig.selectedModel || subConfig.model || 'auto';
 
+            const descriptor = options?.resumeDescriptor || buildSubagentResumeDescriptor(name, subConfig, options?.interface);
             const result = await runNamedAgentInCurrentSandbox({
                 agent: baseAgent,
                 request: normalizedRequest,
@@ -514,7 +664,12 @@ export async function call(name: string, request: unknown, options?: { interface
                 systemPromptOverride: subConfig.baseSystemPrompt,
                 instructionAlgorithmOverride: subConfig.instructionAlgorithm,
                 isSubagent: true,
-                resumeDescriptor: buildSubagentResumeDescriptor(name, subConfig, options?.interface),
+                resumeDescriptor: descriptor,
+                resumeSnapshot: options?.resumeSnapshot,
+                sandboxOverride: options?.sandboxOverride,
+                signal: options?.signal,
+                trace: options?.trace,
+                onSessionSnapshot: options?.onSessionSnapshot,
                 onModelRouted: async (routingResult) => {
                     subConfig.selectedModel = routingResult.executionModel;
                     subConfig.selectedProvider = routingResult.executionProvider;
@@ -528,6 +683,7 @@ export async function call(name: string, request: unknown, options?: { interface
             return result;
         }
 
+        const descriptor = options?.resumeDescriptor || buildStandardResumeDescriptor(name, options?.interface);
         const result = await runNamedAgentInCurrentSandbox({
             agent: name,
             request: normalizedRequest,
@@ -535,7 +691,12 @@ export async function call(name: string, request: unknown, options?: { interface
             stream,
             interfaceOverride: options?.interface,
             isSubagent: true,
-            resumeDescriptor: buildStandardResumeDescriptor(name, options?.interface),
+            resumeDescriptor: descriptor,
+            resumeSnapshot: options?.resumeSnapshot,
+            sandboxOverride: options?.sandboxOverride,
+            signal: options?.signal,
+            trace: options?.trace,
+            onSessionSnapshot: options?.onSessionSnapshot,
         });
         console.error(`[agents] call("${name}") completed: ${summarizeAgentResult(result)}`);
         return result;
@@ -544,6 +705,190 @@ export async function call(name: string, request: unknown, options?: { interface
         const errorMsg = error instanceof Error ? error.message : 'Unknown error';
         return `Error calling agent "${name}": ${errorMsg}`;
     }
+}
+
+export async function run(agentName: string, input: unknown, options?: AgentRunOptions): Promise<AgentRunResult> {
+    const sandbox = await resolveSandboxForOptions(options);
+    if (!sandbox) {
+        return { finalMessage: `Error: No sandbox available. Cannot run agent "${agentName}" outside of an active session.` };
+    }
+
+    const before = await collectFileSnapshot(sandbox.directory);
+    const finalMessage = await runAgentFinalMessage(agentName, input, {
+        ...options,
+        sandboxOverride: sandbox,
+    });
+    const after = await collectFileSnapshot(sandbox.directory);
+    return formatAgentRunResult(finalMessage, diffFileSnapshots(before, after));
+}
+
+/**
+ * Backward-compatible alias. Prefer agents.run(...).
+ */
+export async function call(name: string, request: unknown, options?: AgentRunOptions): Promise<string> {
+    return (await run(name, request, options)).finalMessage;
+}
+
+async function runAgentJob(job: AgentJob): Promise<void> {
+    const sandbox = await resolveSandboxForOptions(job.options);
+    if (!sandbox) {
+        job.status = 'failed';
+        job.error = `No sandbox available. Cannot start agent "${job.agentName}" outside of an active session.`;
+        return;
+    }
+
+    const before = await collectFileSnapshot(sandbox.directory);
+    let nextInput: string | undefined = job.input;
+    let lastMessage = '';
+
+    try {
+        while (nextInput !== undefined) {
+            if (job.abortController.signal.aborted) {
+                job.status = 'stopped';
+                return;
+            }
+
+            job.updatedAt = new Date().toISOString();
+            appendJobTrace(job, `\n[user]\n${nextInput}\n`);
+            lastMessage = await runAgentFinalMessage(job.agentName, nextInput, {
+                ...job.options,
+                sandboxOverride: sandbox,
+                signal: job.abortController.signal,
+                trace: (text) => appendJobTrace(job, `\n[assistant]\n${text}\n`),
+                resumeSnapshot: job.snapshot,
+                resumeDescriptor: job.descriptor,
+                onSessionSnapshot: async (snapshot, descriptor) => {
+                    job.snapshot = snapshot;
+                    if (descriptor) {
+                        job.descriptor = descriptor;
+                    }
+                },
+            });
+
+            nextInput = job.pendingInputs.shift();
+        }
+
+        const after = await collectFileSnapshot(sandbox.directory);
+        job.result = formatAgentRunResult(lastMessage, diffFileSnapshots(before, after));
+        job.status = job.abortController.signal.aborted ? 'stopped' : 'completed';
+    } catch (error) {
+        job.error = error instanceof Error ? error.message : String(error);
+        job.status = job.abortController.signal.aborted ? 'stopped' : 'failed';
+        appendJobTrace(job, `\n[error]\n${job.error}\n`);
+    } finally {
+        job.updatedAt = new Date().toISOString();
+    }
+}
+
+export async function start(jobName: string, agentName: string, input: unknown, options?: AgentRunOptions): Promise<string> {
+    assertPersistentActionRuntime('start');
+    if (typeof jobName !== 'string' || !/^[A-Za-z0-9_.-]+$/.test(jobName)) {
+        throw new Error('agents.start(jobName, agentName, input): jobName must contain only letters, numbers, dots, underscores, or hyphens');
+    }
+    if (agentJobs.has(jobName)) {
+        throw new Error(`agents job "${jobName}" already exists`);
+    }
+
+    const normalizedInput = normalizeAgentRequest(input, 'start');
+    const abortController = new AbortController();
+    const job: AgentJob = {
+        name: jobName,
+        agentName,
+        input: normalizedInput,
+        options: options || {},
+        status: 'running',
+        startedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        trace: [],
+        pendingInputs: [],
+        abortController,
+        promise: Promise.resolve(),
+    };
+
+    job.promise = runAgentJob(job);
+    agentJobs.set(jobName, job);
+    job.promise.catch(() => undefined);
+    return `Started agent job "${jobName}" running "${agentName}".`;
+}
+
+export async function status(jobName: string): Promise<{
+    jobName: string;
+    agentName: string;
+    status: AgentJobStatus;
+    startedAt: string;
+    updatedAt: string;
+    pendingMessages: number;
+    error?: string;
+}> {
+    const job = getAgentJob(jobName);
+    return {
+        jobName: job.name,
+        agentName: job.agentName,
+        status: job.status,
+        startedAt: job.startedAt,
+        updatedAt: job.updatedAt,
+        pendingMessages: job.pendingInputs.length,
+        error: job.error,
+    };
+}
+
+export async function result(jobName: string): Promise<AgentRunResult> {
+    const job = getAgentJob(jobName);
+    if (job.status === 'running' || job.status === 'stopping') {
+        throw new Error(`agents job "${jobName}" is still ${job.status}`);
+    }
+    if (job.status === 'failed') {
+        throw new Error(job.error || `agents job "${jobName}" failed`);
+    }
+    return job.result || { finalMessage: job.error || `agents job "${jobName}" stopped before producing a result.` };
+}
+
+export async function trace(jobName: string, options?: { tail?: number }): Promise<string> {
+    const job = getAgentJob(jobName);
+    const text = job.trace.join('');
+    const tail = options?.tail === undefined ? undefined : Math.max(1, Math.floor(options.tail));
+    if (!tail) {
+        return text || '(no trace yet)';
+    }
+    return text.split(/\r?\n/).slice(-tail).join('\n') || '(no trace yet)';
+}
+
+export async function send(jobName: string, input: unknown): Promise<string> {
+    const job = getAgentJob(jobName);
+    if (job.status === 'failed' || job.status === 'stopped' || job.status === 'stopping') {
+        throw new Error(`agents job "${jobName}" is ${job.status} and cannot receive messages`);
+    }
+    const normalizedInput = normalizeAgentRequest(input, 'send');
+    if (job.status === 'completed') {
+        job.status = 'running';
+        job.input = normalizedInput;
+        job.pendingInputs = [];
+        job.promise = runAgentJob(job);
+        job.promise.catch(() => undefined);
+    } else {
+        job.pendingInputs.push(normalizedInput);
+    }
+    job.updatedAt = new Date().toISOString();
+    return `Queued message for agent job "${jobName}".`;
+}
+
+export async function stop(jobName: string): Promise<string> {
+    const job = getAgentJob(jobName);
+    if (job.status !== 'running') {
+        return `Agent job "${jobName}" is ${job.status}.`;
+    }
+    job.status = 'stopping';
+    job.updatedAt = new Date().toISOString();
+    job.abortController.abort();
+    return `Stopping agent job "${jobName}".`;
+}
+
+function getAgentJob(jobName: string): AgentJob {
+    const job = agentJobs.get(jobName);
+    if (!job) {
+        throw new Error(`agents job "${jobName}" does not exist`);
+    }
+    return job;
 }
 
 /**
@@ -625,6 +970,8 @@ export async function callSelf(request: unknown): Promise<string> {
  */
 export async function list(): Promise<string> {
     const lines: string[] = [];
+    const currentAgent = await getCallingAgent();
+    const currentName = (currentAgent?.config.name || process.env.TELOS_AGENT_NAME || '').trim().toLowerCase();
 
     // List agents from agents/ directory
     try {
@@ -633,7 +980,8 @@ export async function list(): Promise<string> {
             const agent = await loadAgent(agentName);
             if (agent) {
                 const desc = agent.config.description || 'No description';
-                lines.push(`- ${agentName}: ${desc}`);
+                const marker = currentName && agentName.toLowerCase() === currentName ? ' -> You' : '';
+                lines.push(`- ${agentName}${marker}: ${desc}`);
             }
         }
     } catch (error) {

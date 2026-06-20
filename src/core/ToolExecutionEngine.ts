@@ -14,7 +14,6 @@ import { ActionAutoFixEngine } from './ActionAutoFixEngine.js';
 import {
   COMPLETION_SIGNAL_REGEX,
   isCompletionToolName,
-  LEGACY_COMPLETION_FUNCTION,
   PRIMARY_COMPLETION_FUNCTION,
 } from './completion.js';
 import type { Session } from './Session.js';
@@ -35,11 +34,14 @@ export interface ToolExecutionResult {
 const CONTENT_ARG_KEYS = ['content', 'text', 'body', 'data', 'value'] as const;
 const FILE_ARG_KEYS = ['filename', 'fileName', 'path', 'filepath', 'target', 'file'] as const;
 const FINISH_ARG_KEYS = ['message', ...CONTENT_ARG_KEYS] as const;
-const SUPPORTED_TOOLS = `action, cli, edit_file, view_file, ${PRIMARY_COMPLETION_FUNCTION}`;
+const SUPPORTED_TOOLS = `action`;
+const DEFAULT_MAX_OBSERVATION_CHARS = 24_000;
 
 type ToolArguments = Record<string, unknown>;
 
 export class ToolExecutionEngine {
+  private providerToolExecutionTail: Promise<void> = Promise.resolve();
+
   constructor(
     private readonly session: Session,
     private readonly callbacks: ToolExecutionCallbacks = {}
@@ -106,14 +108,16 @@ export class ToolExecutionEngine {
       ? result.output
       : (`Error: ${result.error}\n${result.output}`).trim();
 
-    const observation = autoFixSummary.length > 0
+    const fullObservation = autoFixSummary.length > 0
       ? `${autoFixSummary.join('\n')}\n${baseObservation}`.trim()
       : baseObservation;
+    const finish = this.parseFinishSignal(fullObservation);
+    const observation = await this.compactObservationForModel(fullObservation, 'action');
 
     return {
       observation,
       filename: result.filename,
-      ...this.parseFinishSignal(observation),
+      ...finish,
     };
   }
 
@@ -123,13 +127,15 @@ export class ToolExecutionEngine {
     const onStdout = (chunk: string) => process.stdout.write(chunk);
     const onStderr = (chunk: string) => process.stderr.write(chunk);
     const result = await this.session.sandbox.executeCli(command, onStdout, onStderr);
-    const observation = result.success
+    const fullObservation = result.success
       ? result.output
       : (`Error: ${result.error}\n${result.output}`).trim();
+    const finish = this.parseFinishSignal(fullObservation);
+    const observation = await this.compactObservationForModel(fullObservation, 'cli');
 
     return {
       observation,
-      ...this.parseFinishSignal(observation),
+      ...finish,
     };
   }
 
@@ -223,9 +229,16 @@ export class ToolExecutionEngine {
   }
 
   /**
-   * Execute provider-native tool call (`action`, `cli`, `file`).
+   * Execute provider-native tool calls. The public provider surface is `action`;
+   * all other tools live as injected TypeScript packages inside action.
    */
   async executeProviderToolCall(toolCall: ProviderToolCall): Promise<ToolExecutionResult> {
+    const run = this.providerToolExecutionTail.then(() => this.executeProviderToolCallNow(toolCall));
+    this.providerToolExecutionTail = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
+  private async executeProviderToolCallNow(toolCall: ProviderToolCall): Promise<ToolExecutionResult> {
     const toolName = this.normalizeToolName(toolCall.name);
     const args = this.toRecord(toolCall.arguments);
 
@@ -248,45 +261,8 @@ export class ToolExecutionEngine {
       return this.executeAction(content);
     }
 
-    if (toolName === 'cli') {
-      const content = this.extractFirstString(args, CONTENT_ARG_KEYS);
-      if (!content.trim()) {
-        return { observation: 'Error: cli requires a non-empty "content" argument.' };
-      }
-      return this.executeCli(content);
-    }
-
-    if (toolName === 'edit_file' || toolName === 'file') {
-      const payload = this.extractFilePayload(args);
-      const filename = this.normalizeFilename(payload.filename);
-      const content = payload.content;
-
-      if (!filename.trim()) {
-        return { observation: `Error: ${toolName} requires a non-empty "filename" argument.` };
-      }
-
-      // Single-file mode: content is either full file body or SEARCH/REPLACE edit payload.
-      const parsedEdits = this.session.sandbox.parseSearchReplace(content);
-      if (parsedEdits.length > 0) {
-        return this.applySearchReplaceEdit(filename, content);
-      }
-
-      return this.writeFileToSandbox(filename, content);
-    }
-
-    if (toolName === 'view_file' || toolName === 'read_file') {
-      const payload = this.extractFilePayload(args);
-      const filename = this.normalizeFilename(payload.filename);
-
-      if (!filename.trim()) {
-        return { observation: `Error: ${toolName} requires a non-empty "filename" argument.` };
-      }
-
-      return this.readFileFromSandbox(filename);
-    }
-
     return {
-      observation: `Error: Unsupported tool "${toolCall.name}". Supported tools: ${SUPPORTED_TOOLS}. Legacy alias: ${LEGACY_COMPLETION_FUNCTION}.`,
+      observation: `Error: Unsupported provider tool "${toolCall.name}". Supported provider tool: ${SUPPORTED_TOOLS}. Use injected TypeScript packages such as terminal, files, and code inside action.`,
     };
   }
 
@@ -452,6 +428,43 @@ export class ToolExecutionEngine {
     } catch (error: any) {
       return { finishParseError: `Failed to parse ${PRIMARY_COMPLETION_FUNCTION} payload: ${error.message}` };
     }
+  }
+
+  private async compactObservationForModel(observation: string, source: string): Promise<string> {
+    const maxChars = this.maxObservationChars();
+    if (observation.length <= maxChars) {
+      return observation;
+    }
+
+    const fullPath = await this.persistFullObservation(observation, source);
+    const head = Math.floor(maxChars * 0.72);
+    const tail = Math.max(0, maxChars - head - 220);
+    const omitted = observation.length - head - tail;
+    const notice = [
+      '',
+      `[${source} observation truncated: omitted ${omitted} chars; full output saved to ${fullPath}]`,
+      '',
+    ].join('\n');
+    return `${observation.slice(0, head)}${notice}${observation.slice(observation.length - tail)}`;
+  }
+
+  private maxObservationChars(): number {
+    const raw = Number(process.env.TELOS_MAX_TOOL_OBSERVATION_CHARS);
+    if (Number.isFinite(raw) && raw > 1000) {
+      return Math.floor(raw);
+    }
+    return DEFAULT_MAX_OBSERVATION_CHARS;
+  }
+
+  private async persistFullObservation(observation: string, source: string): Promise<string> {
+    const root = resolve(this.session.sandbox.directory);
+    const dir = join(root, 'data', 'tool-output');
+    await mkdir(dir, { recursive: true });
+    const safeSource = source.replace(/[^a-z0-9_.-]/gi, '-').toLowerCase() || 'tool';
+    const fileName = `${safeSource}-observation-${this.session.id}-${Date.now().toString(36)}.txt`;
+    const filePath = join(dir, fileName);
+    await writeFile(filePath, observation, 'utf-8');
+    return relative(root, filePath).split(/[\\/]/).join('/');
   }
 }
 

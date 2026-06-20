@@ -1,7 +1,14 @@
 name: files
 description: |
-  - `files.View(filePaths: string[]): Promise<{ success: boolean; filesRead: number; errors?: string[] }>`
-    ALWAYS USE THIS TYPESCRIPT FUNCTION to view files from the sandbox directory. Supports images, PDFs, videos, and other file types.
-    Example: `const result = await files.View(["./document.pdf", "./image.jpg"]);`
+  Built-in files system package, automatically available inside every `action`.
+
+  Main API:
+  - `await files.read(path, { raw?, lineNumbers?, startLine?, endLine?, aroundLine?, context?, allowExternal? }?)`
+  - `await files.search(query, { path?, dir?, glob?, maxResults?, includeIgnored?, previewChars?, recursive?, caseSensitive?, allowExternal? }?)`
+  - `await files.list(path, { depth?, includeSizes?, maxEntries?, includeIgnored?, allowExternal? }?)`
+  - `await files.write(path, fullContents, { allowExternal? }?)`
+  - `await files.edit(path, [{ old, new, replaceAll?, occurrence? }], { allowExternal? }?)`
+
+  Paths are project-scoped by default. To intentionally access an absolute path outside the project, pass `allowExternal: true`, for example `await files.list('G:/telos/browser-control', { allowExternal: true })`. Search returns an array of `{ path, line, preview }` matches with compact previews. By default it skips generated/runtime directories and logs such as `data/`, `sandboxes/`, `browser-profile/`, `.git/`, `node_modules/`, `dist/`, `*.log`, and `log.txt`; set `includeIgnored: true` or search a specific ignored path when that data is intentionally needed. Full text reads return raw contents by default; ranged reads return line-numbered snippets. Non-text reads attach the file as a multimodal observation for the next model step when supported by the provider.
 
 module: index.ts

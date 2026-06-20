@@ -282,6 +282,30 @@
                 </div>
             </div>
 
+            <!-- DELETE CATEGORY ACCORDION -->
+            <div class="accordion-section collapsed danger-section">
+                <div class="accordion-header">
+                    <svg class="accordion-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="9 18 15 12 9 6"></polyline>
+                    </svg>
+                    <span>DELETE CATEGORY</span>
+                </div>
+                <div class="accordion-body">
+                    <div class="accordion-inner">
+                        <label class="field-block">
+                            <span>Category</span>
+                            <input type="text" id="delete-category-name" class="modern-input compact-input" placeholder="Category to delete completely">
+                        </label>
+                        <label class="field-block">
+                            <span>Confirm Category</span>
+                            <input type="text" id="delete-category-confirm" class="modern-input compact-input" placeholder="Type the category again">
+                        </label>
+                        <button id="delete-category-btn" class="modern-btn danger-btn">Delete Category</button>
+                        <div id="delete-category-status" class="status-text"></div>
+                    </div>
+                </div>
+            </div>
+
             <!-- LEGACY MIGRATION ACCORDION -->
             <div class="accordion-section collapsed">
                 <div class="accordion-header">

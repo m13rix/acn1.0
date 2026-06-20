@@ -2,7 +2,7 @@ import * as lancedb from '@lancedb/lancedb';
 import { mkdir } from 'fs/promises';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
-import type { FactRecord, LinkRecord, RetrievalHintRecord } from './types.js';
+import type { DeleteCategoryResult, FactRecord, LinkRecord, RetrievalHintRecord } from './types.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = join(__dirname, '..', '..', 'data', 'memory');
@@ -13,7 +13,19 @@ function sanitizeTableName(value: string): string {
 }
 
 function quote(value: string): string {
-  return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+function quoteIdentifier(value: string): string {
+  return `\`${value.replace(/`/g, '``')}\``;
+}
+
+function chunks<T>(items: T[], size: number): T[][] {
+  const result: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    result.push(items.slice(index, index + size));
+  }
+  return result;
 }
 
 function parseJson<T>(raw: unknown, fallback: T): T {
@@ -435,21 +447,41 @@ export class MemoryStore {
     })));
   }
 
-  async deleteFactsByIds(ids: string[]): Promise<void> {
+  private async queryColumn(tableName: string, predicate: string, column: string): Promise<string[]> {
+    const db = await this.getDb();
+    if (!(await this.tableExists(tableName))) return [];
+    const table = await db.openTable(tableName);
+    const rows = await table.query()
+      .where(predicate)
+      .select([column])
+      .toArray();
+    return rows
+      .map((row) => String(row[column] ?? '').trim())
+      .filter(Boolean);
+  }
+
+  private async deleteRowsByIds(tableName: string, ids: string[]): Promise<void> {
     if (ids.length === 0) return;
     const db = await this.getDb();
-    if (!(await this.tableExists(this.factsTableName))) return;
-    const table = await db.openTable(this.factsTableName);
-    await table.delete(`id IN (${ids.map(quote).join(',')})`);
+    if (!(await this.tableExists(tableName))) return;
+    const table = await db.openTable(tableName);
+    for (const batch of chunks(ids, 500)) {
+      await table.delete(`id IN (${batch.map(quote).join(',')})`);
+    }
+  }
+
+  async deleteFactsByIds(ids: string[]): Promise<void> {
+    await this.deleteRowsByIds(this.factsTableName, ids);
   }
 
   async getFactIdsBySourceId(sourceId: string): Promise<string[]> {
     const normalizedSourceId = sourceId.trim();
     if (!normalizedSourceId) return [];
-    const facts = await this.getAllFacts();
-    return facts
-      .filter((fact) => fact.sourceId === normalizedSourceId)
-      .map((fact) => fact.id);
+    return this.queryColumn(
+      this.factsTableName,
+      `${quoteIdentifier('sourceId')} = ${quote(normalizedSourceId)}`,
+      'id',
+    );
   }
 
   async deleteFactsBySourceId(sourceId: string): Promise<string[]> {
@@ -458,28 +490,120 @@ export class MemoryStore {
       return [];
     }
 
-    await Promise.all([
-      this.deleteLinksByFactIds(factIds),
-      this.deleteHintsByFactIds(factIds),
-      this.deleteFactsByIds(factIds),
-    ]);
+    await this.deleteLinksByFactIds(factIds);
+    await this.deleteHintsByFactIds(factIds);
+    await this.deleteFactsByIds(factIds);
     return factIds;
   }
 
+  async deleteCategory(category: string): Promise<DeleteCategoryResult> {
+    const normalizedCategory = category.trim().toLocaleLowerCase();
+    if (!normalizedCategory) {
+      return {
+        category: normalizedCategory,
+        factIds: [],
+        factCount: 0,
+        hintCount: 0,
+        linkCount: 0,
+      };
+    }
+
+    const factIds = await this.queryColumn(
+      this.factsTableName,
+      `${quoteIdentifier('exclusiveToAgentName')} = ${quote(normalizedCategory)}`,
+      'id',
+    );
+
+    const [hintIds, linkIds] = await Promise.all([
+      this.getHintIdsForCategoryDelete(normalizedCategory, factIds),
+      this.getLinkIdsForCategoryDelete(normalizedCategory, factIds),
+    ]);
+
+    await this.deleteRowsByIds(this.linksTableName, linkIds);
+    await this.deleteRowsByIds(this.hintsTableName, hintIds);
+    await this.deleteFactsByIds(factIds);
+
+    return {
+      category: normalizedCategory,
+      factIds,
+      factCount: factIds.length,
+      hintCount: hintIds.length,
+      linkCount: linkIds.length,
+    };
+  }
+
   async deleteHintsByFactIds(factIds: string[]): Promise<void> {
-    if (factIds.length === 0) return;
-    const db = await this.getDb();
-    if (!(await this.tableExists(this.hintsTableName))) return;
-    const table = await db.openTable(this.hintsTableName);
-    await table.delete(`factId IN (${factIds.map(quote).join(',')})`);
+    await this.deleteRowsByIds(this.hintsTableName, await this.getHintIdsByFactIds(factIds));
+  }
+
+  async deleteHintsByCategory(category: string, factIds: string[] = []): Promise<void> {
+    const normalizedCategory = category.trim().toLocaleLowerCase();
+    if (!normalizedCategory && factIds.length === 0) return;
+    await this.deleteRowsByIds(this.hintsTableName, await this.getHintIdsForCategoryDelete(normalizedCategory, factIds));
   }
 
   async deleteLinksByFactIds(factIds: string[]): Promise<void> {
-    if (factIds.length === 0) return;
-    const db = await this.getDb();
-    if (!(await this.tableExists(this.linksTableName))) return;
-    const table = await db.openTable(this.linksTableName);
-    const inExpr = `(${factIds.map(quote).join(',')})`;
-    await table.delete(`fromFactId IN ${inExpr} OR toFactId IN ${inExpr}`);
+    await this.deleteRowsByIds(this.linksTableName, await this.getLinkIdsByFactIds(factIds));
+  }
+
+  async deleteLinksByCategory(category: string, factIds: string[] = []): Promise<void> {
+    const normalizedCategory = category.trim().toLocaleLowerCase();
+    if (!normalizedCategory && factIds.length === 0) return;
+    await this.deleteRowsByIds(this.linksTableName, await this.getLinkIdsForCategoryDelete(normalizedCategory, factIds));
+  }
+
+  private async getHintIdsByFactIds(factIds: string[]): Promise<string[]> {
+    if (factIds.length === 0) return [];
+    const ids = new Set<string>();
+    for (const batch of chunks(factIds, 500)) {
+      const predicate = `${quoteIdentifier('factId')} IN (${batch.map(quote).join(',')})`;
+      for (const id of await this.queryColumn(this.hintsTableName, predicate, 'id')) {
+        ids.add(id);
+      }
+    }
+    return Array.from(ids);
+  }
+
+  private async getHintIdsForCategoryDelete(category: string, factIds: string[]): Promise<string[]> {
+    const ids = new Set<string>();
+    for (const id of await this.queryColumn(
+      this.hintsTableName,
+      `${quoteIdentifier('exclusiveToAgentName')} = ${quote(category)}`,
+      'id',
+    )) {
+      ids.add(id);
+    }
+    for (const id of await this.getHintIdsByFactIds(factIds)) {
+      ids.add(id);
+    }
+    return Array.from(ids);
+  }
+
+  private async getLinkIdsByFactIds(factIds: string[]): Promise<string[]> {
+    if (factIds.length === 0) return [];
+    const ids = new Set<string>();
+    for (const batch of chunks(factIds, 500)) {
+      const inExpr = `(${batch.map(quote).join(',')})`;
+      const predicate = `${quoteIdentifier('fromFactId')} IN ${inExpr} OR ${quoteIdentifier('toFactId')} IN ${inExpr}`;
+      for (const id of await this.queryColumn(this.linksTableName, predicate, 'id')) {
+        ids.add(id);
+      }
+    }
+    return Array.from(ids);
+  }
+
+  private async getLinkIdsForCategoryDelete(category: string, factIds: string[]): Promise<string[]> {
+    const ids = new Set<string>();
+    for (const id of await this.queryColumn(
+      this.linksTableName,
+      `${quoteIdentifier('exclusiveToAgentName')} = ${quote(category)}`,
+      'id',
+    )) {
+      ids.add(id);
+    }
+    for (const id of await this.getLinkIdsByFactIds(factIds)) {
+      ids.add(id);
+    }
+    return Array.from(ids);
   }
 }

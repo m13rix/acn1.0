@@ -90,7 +90,6 @@ function providerConfigForSession(session: Session, stream: boolean | undefined)
       openai: {
         ...existingOpenAi,
         promptCacheKey: existingOpenAi['promptCacheKey'] || promptCacheKey,
-        promptCacheRetention: existingOpenAi['promptCacheRetention'] || '24h',
       },
     },
     stream,
@@ -142,6 +141,7 @@ function buildAiSdkTools(context: AiSdkTextAgentRuntimeContext, state: RuntimeSt
   // This prevents the model from executing the same action/cli twice when it
   // mistakenly emits duplicate tool calls in one step.
   const stepDeduplicationCache = new Map<string, Promise<any>>();
+  let stepToolExecutionTail: Promise<void> = Promise.resolve();
 
   for (const definition of toolRequest.tools) {
     const name = definition.function.name;
@@ -159,7 +159,7 @@ function buildAiSdkTools(context: AiSdkTextAgentRuntimeContext, state: RuntimeSt
           return cached;
         }
 
-        const executePromise = (async () => {
+        const executePromise = stepToolExecutionTail.then(async () => {
           const result = await context.toolEngine.executeProviderToolCall(toolCall);
           const observation = outputToModelText(result);
 
@@ -184,7 +184,8 @@ function buildAiSdkTools(context: AiSdkTextAgentRuntimeContext, state: RuntimeSt
             filename: result.filename,
             finishMessage: result.finishMessage,
           };
-        })();
+        });
+        stepToolExecutionTail = executePromise.then(() => undefined, () => undefined);
 
         stepDeduplicationCache.set(contentKey, executePromise);
         return executePromise;

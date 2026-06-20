@@ -20,17 +20,16 @@ test('sandbox action exposes injected tools on globalThis', async () => {
 
   const result = await sandbox.execute(`(async () => {
     const keys = Object.keys(globalThis).filter(k =>
-      ['improvement','skills','memory','files','heartbeat','message','codex','advancedCLI','utils'].includes(k)
+      ['improvement','skills','memory','files','terminal','code','heartbeat','message','codex','advancedCLI','utils'].includes(k)
     );
     console.log(JSON.stringify(keys.sort()));
     console.log(typeof (globalThis as any).improvement?.getState);
-    console.log(JSON.stringify((globalThis as any).utils.tools.list().filter((name: string) => ['files','memory','utils'].includes(name)).sort()));
-    console.log((globalThis as any).utils.tools.doc('utils').includes('utils.tools.doc'));
+    console.log(typeof (globalThis as any).terminal?.run);
+    console.log(typeof (globalThis as any).code?.outline);
   })();`);
 
   assert.equal(result.success, true);
-  assert.match(result.output, /\["advancedCLI","codex","files","heartbeat","improvement","memory","message","utils"\]/);
+  assert.match(result.output, /\["advancedCLI","code","codex","files","heartbeat","improvement","memory","message","terminal","utils"\]/);
   assert.match(result.output, /function/);
-  assert.match(result.output, /\["files","memory","utils"\]/);
-  assert.match(result.output, /true/);
+  assert.match(result.output, /function\nfunction/);
 });

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Local Sandbox Manager
  *
  * Creates isolated execution environments for agent code.
@@ -26,6 +26,10 @@ const PROJECT_ROOT = join(__dirname, '..', '..');
 
 // Path to the built-in files tool
 const FILES_TOOL_PATH = join(PROJECT_ROOT, 'tools', 'files', 'index.ts');
+// Path to the built-in terminal tool
+const TERMINAL_TOOL_PATH = join(PROJECT_ROOT, 'tools', 'terminal', 'index.ts');
+// Path to the built-in code tool
+const CODE_TOOL_PATH = join(PROJECT_ROOT, 'tools', 'code', 'index.ts');
 // Path to the built-in agents tool
 const AGENTS_TOOL_PATH = join(PROJECT_ROOT, 'tools', 'agents', 'index.ts');
 const ACTION_WORKER_JS_PATH = join(__dirname, 'action-worker.js');
@@ -113,14 +117,37 @@ export class LocalSandbox implements ISandbox {
     }
 
     getDescription(): string {
-        return `## Local Sandbox
+        return `## Code As Action
 
-\`action\` runs TypeScript in an isolated action context; variables do not persist between calls. Use files for state and \`console.log(...)\` for observations.
-\`cli\` runs shell commands in the sandbox directory.
+You act through one provider tool: \`action\`. It runs TypeScript in the current workspace and returns console output. Variables do not persist between action calls; files and named terminal/agent jobs do.
 
-Available inside \`action\`:
-- \`edit_file(filename, content)\` — create or overwrite a file.
-- \`view_file(filename)\` — read and return a file's contents as a string.`;
+Inside \`action\`, the provided packages are already in scope. Use them directly. Do not import or destructure global tools. Additional npm packages may be loaded with \`require("package")\` after installing them.
+
+Use \`console.log(...)\` to surface observations.
+
+## Primary Tools
+
+Use \`files\` for workspace inspection and edits:
+- \`files.search(query, options?)\` - basically grep, but better. ALWAYS USE THIS to find text in files. It skips generated/runtime directories and logs by default; use includeIgnored only when intentional.
+- \`files.list(path, options?)\` lists directories.
+- \`files.read(path, options?)\` reads files. Prefer \`aroundLine/context\` or \`startLine/endLine\` for large files.
+- \`files.edit(path, edits)\` is the primary way to modify existing files with exact \`{ old, new }\` replacements.
+- \`files.write(path, fullContents)\` creates or intentionally replaces a whole file.
+For absolute paths outside the project, pass \`allowExternal: true\` in the relevant options object.
+
+Read relevant code before editing it. Prefer \`files.edit\` over whole-file rewrites.
+
+Use \`code\` for code structure:
+- \`code.outline(path)\` returns functions, classes, and methods with line ranges.
+
+Use \`terminal\` for execution:
+- \`terminal.run(command, options?)\` runs a finite command. Pass \`allowExternal: true\` when \`cwd\` is intentionally outside the project.
+- \`terminal.start(name, command, options?)\` starts a persistent named session.
+- \`terminal.read(name, options?)\`, \`terminal.send(name, text)\`, \`terminal.stop(name)\`, and \`terminal.list()\` manage sessions.
+
+Use named terminal sessions for servers, watchers, debuggers, and interactive programs. Do not use shell backgrounding for long-running work.
+
+Every tool has \`tool.help()\`. If syntax is unclear, inspect help instead of guessing.`;
     }
 
     /**
@@ -353,19 +380,23 @@ Available inside \`action\`:
      */
     private generateExecutionFile(code: string, runtime: 'process' | 'worker' = 'process'): string {
         const requireStatements: string[] = [];
-        const injectedToolNames: string[] = ['files'];
+        const injectedToolNames: string[] = ['files', 'terminal', 'code'];
 
         // Always require the files tool (built-in system tool)
         const filesToolRelativePath = this.getRelativePath(FILES_TOOL_PATH);
-        requireStatements.push(`const files = __telosLazyWaitableTool(() => require('${filesToolRelativePath}'), 'files');`);
+        requireStatements.push(`const files = __telosLazyWaitableTool(() => require('${filesToolRelativePath}'), 'files', ${JSON.stringify(this.getBuiltInToolHelp('files'))});`);
+        const terminalToolRelativePath = this.getRelativePath(TERMINAL_TOOL_PATH);
+        requireStatements.push(`const terminal = __telosLazyWaitableTool(() => require('${terminalToolRelativePath}'), 'terminal', ${JSON.stringify(this.getBuiltInToolHelp('terminal'))});`);
+        const codeToolRelativePath = this.getRelativePath(CODE_TOOL_PATH);
+        requireStatements.push(`const code = __telosLazyWaitableTool(() => require('${codeToolRelativePath}'), 'code', ${JSON.stringify(this.getBuiltInToolHelp('code'))});`);
 
         // Add user-configured tools
         for (const tool of this.tools) {
             // Skip built-in tools if they were explicitly added in config
-            if (tool.config.name === 'files') continue;
+            if (tool.config.name === 'files' || tool.config.name === 'terminal' || tool.config.name === 'code') continue;
 
             const relativePath = this.getRelativePath(tool.absolutePath);
-            requireStatements.push(`const ${tool.config.name} = __telosLazyWaitableTool(() => require('${relativePath}'), '${tool.config.name}');`);
+            requireStatements.push(`const ${tool.config.name} = __telosLazyWaitableTool(() => require('${relativePath}'), '${tool.config.name}', ${JSON.stringify(this.getConfiguredToolHelp(tool))});`);
             injectedToolNames.push(tool.config.name);
         }
 
@@ -373,9 +404,9 @@ Available inside \`action\`:
         const toolGlobals = this.getToolGlobalsBootstrap(injectedToolNames);
 
         // Build the set of tool names already auto-imported so we can strip duplicates
-        const autoImportedNames = new Set<string>(['files']);
+        const autoImportedNames = new Set<string>(['files', 'terminal', 'code']);
         for (const tool of this.tools) {
-            if (tool.config.name !== 'files') {
+            if (tool.config.name !== 'files' && tool.config.name !== 'terminal' && tool.config.name !== 'code') {
                 autoImportedNames.add(tool.config.name);
             }
         }
@@ -501,13 +532,23 @@ function __telosTrackAsyncTask(value, label) {
   return value;
 }
 
-function __telosWrapWaitableTool(tool, toolName) {
+function __telosBuildToolHelp(toolName, toolHelpText) {
+  const text = String(toolHelpText || '').trim();
+  return text || \`No documentation is available for tool "\${toolName}".\`;
+}
+
+function __telosWrapWaitableTool(tool, toolName, toolHelpText) {
   if (!tool || (typeof tool !== 'object' && typeof tool !== 'function')) {
     return tool;
   }
 
   return new Proxy(tool, {
     get(target, prop, receiver) {
+      if (prop === 'help') {
+        return function help() {
+          return __telosBuildToolHelp(toolName, toolHelpText);
+        };
+      }
       const value = Reflect.get(target, prop, receiver);
       if (typeof prop === 'string' && typeof value === 'function') {
         return function (...args) {
@@ -520,16 +561,37 @@ function __telosWrapWaitableTool(tool, toolName) {
       }
       return value;
     },
+    has(target, prop) {
+      return prop === 'help' || prop in target;
+    },
+    ownKeys(target) {
+      const keys = new Set(Reflect.ownKeys(target));
+      keys.add('help');
+      return Array.from(keys);
+    },
+    getOwnPropertyDescriptor(target, prop) {
+      if (prop === 'help') {
+        return {
+          configurable: true,
+          enumerable: true,
+          writable: false,
+          value: function help() {
+            return __telosBuildToolHelp(toolName, toolHelpText);
+          },
+        };
+      }
+      return Reflect.getOwnPropertyDescriptor(target, prop);
+    },
   });
 }
 
-function __telosLazyWaitableTool(loadTool, toolName) {
+function __telosLazyWaitableTool(loadTool, toolName, toolHelpText) {
   let loaded = false;
   let tool;
 
   function getLoadedTool() {
     if (!loaded) {
-      tool = __telosWrapWaitableTool(loadTool(), toolName);
+      tool = __telosWrapWaitableTool(loadTool(), toolName, toolHelpText);
       loaded = true;
     }
     return tool;
@@ -540,19 +602,37 @@ function __telosLazyWaitableTool(loadTool, toolName) {
       if (prop === '__telosIsLazyTool') {
         return true;
       }
+      if (prop === 'help') {
+        return function help() {
+          return __telosBuildToolHelp(toolName, toolHelpText);
+        };
+      }
       return Reflect.get(getLoadedTool(), prop, receiver);
     },
     set(_target, prop, value, receiver) {
       return Reflect.set(getLoadedTool(), prop, value, receiver);
     },
     has(_target, prop) {
-      return prop in getLoadedTool();
+      return prop === 'help' || prop in getLoadedTool();
     },
-    ownKeys() {
-      return Reflect.ownKeys(getLoadedTool());
+    ownKeys(target) {
+      const keys = new Set([...Reflect.ownKeys(target), ...Reflect.ownKeys(getLoadedTool())]);
+      keys.add('help');
+      return Array.from(keys);
     },
-    getOwnPropertyDescriptor(_target, prop) {
-      return Reflect.getOwnPropertyDescriptor(getLoadedTool(), prop);
+    getOwnPropertyDescriptor(target, prop) {
+      if (prop === 'help') {
+        return {
+          configurable: true,
+          enumerable: true,
+          writable: false,
+          value: function help() {
+            return __telosBuildToolHelp(toolName, toolHelpText);
+          },
+        };
+      }
+      return Reflect.getOwnPropertyDescriptor(getLoadedTool(), prop)
+        || Reflect.getOwnPropertyDescriptor(target, prop);
     },
     apply(_target, thisArg, args) {
       const loadedTool = getLoadedTool();
@@ -593,6 +673,55 @@ async function __telosWaitForTrackedAsyncTasks() {
             .join('\n');
     }
 
+    private getBuiltInToolHelp(toolName: 'files' | 'terminal' | 'code'): string {
+        if (toolName === 'files') {
+            return [
+                'Tool: files',
+                'Use for filesystem work in the sandbox. Search returns an array of { path, line, preview } matches.',
+                'API:',
+                '- await files.read(path, { raw?, lineNumbers?, startLine?, endLine?, aroundLine?, context?, allowExternal? }?)',
+                '- await files.search(query, { path?, dir?, glob?, maxResults?, includeIgnored?, previewChars?, recursive?, caseSensitive?, allowExternal? }?)',
+                '- await files.list(path, { depth?, includeSizes?, maxEntries?, includeIgnored?, allowExternal? }?)',
+                '- await files.write(path, fullContents, { allowExternal? }?)',
+                '- await files.edit(path, [{ old, new, replaceAll?, occurrence? }], { allowExternal? }?)',
+                'Pass allowExternal: true only when intentionally accessing an absolute path outside the project.',
+            ].join('\n');
+        }
+
+        if (toolName === 'terminal') {
+            return [
+                'Tool: terminal',
+                'Use for shell commands and persistent terminal sessions.',
+                'API:',
+                '- await terminal.run(command, { timeoutMs?, cwd?, allowExternal?, env? }?)',
+                '- await terminal.start(name, command, { cwd?, allowExternal?, env?, cols?, rows? }?)',
+                '- await terminal.read(name, { tail? })',
+                '- await terminal.send(name, text)',
+                '- await terminal.stop(name)',
+                '- await terminal.list()',
+            ].join('\n');
+        }
+
+        return [
+            'Tool: code',
+            'Use for code-aware helpers.',
+            'API:',
+            '- await code.outline(path)',
+        ].join('\n');
+    }
+
+    private getConfiguredToolHelp(tool: LoadedTool): string {
+        const description = String(tool.config.description || '').trim();
+        const lines = [
+            `Tool: ${tool.config.name}`,
+            description || 'No description provided.',
+        ];
+        if (tool.config.module) {
+            lines.push(`Module: ${tool.config.module}`);
+        }
+        return lines.join('\n');
+    }
+
     /**
      * Extract import and require statements from code
      * Returns the requires and the code without those statements
@@ -600,18 +729,21 @@ async function __telosWaitForTrackedAsyncTasks() {
      */
     private extractImports(code: string): { imports: string; codeWithoutImports: string } {
         const lines = (code || '').split('\n');
+        const lineStartsInCode = this.getLineStartsInCode(code || '');
         const requires: string[] = [];
         const codeLines: string[] = [];
         let inMultiLineImport = false;
         let currentImport = '';
 
-        for (const line of lines) {
+        for (let index = 0; index < lines.length; index++) {
+            const line = lines[index] ?? '';
             const trimmed = line.trim();
+            const startsInCode = lineStartsInCode[index] !== false;
 
             // Check if line starts an import statement (including 'import type')
             const isImport = trimmed.startsWith('import ') || trimmed.startsWith('import\t') || trimmed.startsWith('import{') || trimmed.startsWith('import type ');
 
-            if (isImport) {
+            if (startsInCode && isImport) {
                 // Check if it's a complete import (ends with semicolon or quote)
                 if (trimmed.includes(';') || (trimmed.includes("'") && trimmed.split("'").length >= 3) || (trimmed.includes('"') && trimmed.split('"').length >= 3)) {
                     // Complete import on one line - convert to require()
@@ -626,7 +758,7 @@ async function __telosWaitForTrackedAsyncTasks() {
                     inMultiLineImport = true;
                     currentImport = line;
                 }
-            } else if (inMultiLineImport) {
+            } else if (startsInCode && inMultiLineImport) {
                 // Continue building multi-line import
                 currentImport += '\n' + line;
                 // Check if this line completes the import (has semicolon or closing quote)
@@ -674,11 +806,17 @@ async function __telosWaitForTrackedAsyncTasks() {
      */
     private stripDuplicateToolImports(code: string, autoImportedNames: Set<string>): string {
         const lines = (code || '').split('\n');
+        const lineStartsInCode = this.getLineStartsInCode(code || '');
         const result: string[] = [];
         const aliasRewrites = new Map<string, string>();
 
-        for (const line of lines) {
+        for (let index = 0; index < lines.length; index++) {
+            const line = lines[index] ?? '';
             const trimmed = line.trim();
+            if (lineStartsInCode[index] === false) {
+                result.push(line);
+                continue;
+            }
 
             // Match: const/let/var name = require('...');
             const requireMatch = trimmed.match(/^(?:const|let|var)\s+(\w+)\s*=\s*require\s*\(\s*['"]([^'"]+)['"]\s*\)\s*;?\s*$/);
@@ -686,13 +824,31 @@ async function __telosWaitForTrackedAsyncTasks() {
                 const name = requireMatch[1];
                 const moduleName = requireMatch[2];
                 if (name && autoImportedNames.has(name)) {
-                    // Drop the line — this tool is already auto-imported at the top
+                    // Drop the line â€” this tool is already auto-imported at the top
                     result.push(`// [auto-fix] removed duplicate require for already-injected tool: ${name}`);
                     continue;
                 }
                 if (name && moduleName && autoImportedNames.has(moduleName)) {
                     aliasRewrites.set(name, moduleName);
                     result.push(`// [auto-fix] removed aliased require for already-injected tool: ${name} -> ${moduleName}`);
+                    continue;
+                }
+            }
+
+            // Match: const { toolName } = require('...');
+            const destructuredRequireMatch = trimmed.match(/^(?:const|let|var)\s+\{([^}]+)\}\s*=\s*require\s*\(\s*['"]([^'"]+)['"]\s*\)\s*;?\s*$/);
+            if (destructuredRequireMatch) {
+                const names = (destructuredRequireMatch[1] || '')
+                    .split(',')
+                    .map((name) => name.trim())
+                    .filter(Boolean);
+                const remaining = names.filter((name) => !autoImportedNames.has(name));
+                const removed = names.filter((name) => autoImportedNames.has(name));
+                if (removed.length > 0) {
+                    result.push(`// [auto-fix] removed duplicate destructured require for already-injected tool(s): ${removed.join(', ')}`);
+                    if (remaining.length > 0) {
+                        result.push(line.replace(/\{[^}]+\}/, `{ ${remaining.join(', ')} }`));
+                    }
                     continue;
                 }
             }
@@ -713,6 +869,24 @@ async function __telosWaitForTrackedAsyncTasks() {
                 }
             }
 
+            // Match: import { toolName } from '...';
+            const namedImportMatch = trimmed.match(/^import\s+\{([^}]+)\}\s+from\s+['"]([^'"]+)['"]\s*;?\s*$/);
+            if (namedImportMatch) {
+                const names = (namedImportMatch[1] || '')
+                    .split(',')
+                    .map((name) => name.trim())
+                    .filter(Boolean);
+                const remaining = names.filter((name) => !autoImportedNames.has(name));
+                const removed = names.filter((name) => autoImportedNames.has(name));
+                if (removed.length > 0) {
+                    result.push(`// [auto-fix] removed duplicate named import for already-injected tool(s): ${removed.join(', ')}`);
+                    if (remaining.length > 0) {
+                        result.push(line.replace(/\{[^}]+\}/, `{ ${remaining.join(', ')} }`));
+                    }
+                    continue;
+                }
+            }
+
             result.push(line);
         }
 
@@ -723,6 +897,81 @@ async function __telosWaitForTrackedAsyncTasks() {
         }
 
         return normalized;
+    }
+
+    private getLineStartsInCode(code: string): boolean[] {
+        const flags: boolean[] = [true];
+        let state: 'code' | 'single' | 'double' | 'template' | 'lineComment' | 'blockComment' = 'code';
+        let escaped = false;
+
+        for (let index = 0; index < code.length; index++) {
+            const char = code[index];
+            const next = code[index + 1];
+
+            if (char === '\n') {
+                if (state === 'lineComment') {
+                    state = 'code';
+                }
+                flags.push(state === 'code');
+                escaped = false;
+                continue;
+            }
+
+            if (state === 'lineComment') {
+                continue;
+            }
+
+            if (state === 'blockComment') {
+                if (char === '*' && next === '/') {
+                    state = 'code';
+                    index++;
+                }
+                continue;
+            }
+
+            if (state === 'single' || state === 'double' || state === 'template') {
+                if (escaped) {
+                    escaped = false;
+                    continue;
+                }
+                if (char === '\\') {
+                    escaped = true;
+                    continue;
+                }
+                if (
+                    (state === 'single' && char === "'")
+                    || (state === 'double' && char === '"')
+                    || (state === 'template' && char === '`')
+                ) {
+                    state = 'code';
+                }
+                continue;
+            }
+
+            if (char === '/' && next === '/') {
+                state = 'lineComment';
+                index++;
+                continue;
+            }
+            if (char === '/' && next === '*') {
+                state = 'blockComment';
+                index++;
+                continue;
+            }
+            if (char === "'") {
+                state = 'single';
+                continue;
+            }
+            if (char === '"') {
+                state = 'double';
+                continue;
+            }
+            if (char === '`') {
+                state = 'template';
+            }
+        }
+
+        return flags;
     }
 
     /**
@@ -799,7 +1048,7 @@ async function __telosWaitForTrackedAsyncTasks() {
         const upPath = '../'.repeat(upCount);
         const downPath = toolParts.slice(commonLength).join('/');
 
-        // Keep .ts extension — tsx handles TypeScript requires natively
+        // Keep .ts extension â€” tsx handles TypeScript requires natively
         const requirePath = upPath + downPath;
 
         if (!requirePath) {
@@ -1274,7 +1523,7 @@ declare global {
             // Look for hunk header: @@ -start,count +start,count @@
             // Relaxed regex to handle LLM hallucinations (garbage text, missing trailing @@)
             // We just look for the numbers pattern: -N,N +N,N
-            const hunkMatch = line.match(/[-−](\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))?/);
+            const hunkMatch = line.match(/[-âˆ’](\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))?/);
             if (hunkMatch) {
                 // Determine if this looks like a hunk header (starts with @@ or similar, or just is the numbers)
                 // If the line contains typical hunk numbers, we treat it as a header
@@ -1738,10 +1987,10 @@ declare global {
             // Build result message
             const summary: string[] = [];
             if (appliedEdits.length > 0) {
-                summary.push(`✓ Applied ${appliedEdits.length}/${edits.length} edits to ${filename}`);
+                summary.push(`âœ“ Applied ${appliedEdits.length}/${edits.length} edits to ${filename}`);
             }
             if (errors.length > 0) {
-                summary.push(`✗ Failed ${errors.length}/${edits.length} edits:\n${errors.join('\n\n')}`);
+                summary.push(`âœ— Failed ${errors.length}/${edits.length} edits:\n${errors.join('\n\n')}`);
             }
 
             // If it's a TS/JS file and all edits succeeded, run it

@@ -28,6 +28,7 @@ import { analyzeWithStanza, type StanzaTextAnnotation } from './stanzaRuntime.js
 import { MemoryStore } from './store.js';
 import type {
   CandidateSelectionOptions,
+  DeleteCategoryResult,
   EmbeddedPhraseRecord,
   FactRecord,
   IngestTextInput,
@@ -744,9 +745,23 @@ export class MemoryService {
     await this.initialize();
     const deletedFactIds = await this.store.deleteFactsBySourceId(sourceId);
     if (deletedFactIds.length > 0) {
-      await this.reloadIndex();
+      this.pruneLoadedRecords(deletedFactIds);
     }
     return deletedFactIds;
+  }
+
+  async deleteCategory(category: string): Promise<DeleteCategoryResult> {
+    await this.initialize();
+    const normalizedCategory = normalizeCategory(category);
+    if (!normalizedCategory) {
+      throw new Error('category must be a non-empty string.');
+    }
+
+    const result = await this.store.deleteCategory(normalizedCategory);
+    if (result.factCount > 0 || result.hintCount > 0 || result.linkCount > 0) {
+      this.pruneLoadedRecords(result.factIds, normalizedCategory);
+    }
+    return result;
   }
 
   async migrateLegacyNamespace(sourceNamespace = 'global_memory', debugTrace?: MemoryDebugTrace): Promise<IngestTextResult> {
@@ -865,14 +880,18 @@ export class MemoryService {
     this.facts = facts;
     this.hints = hints;
     this.links = links;
+    this.rebuildLoadedIndex();
+  }
+
+  private rebuildLoadedIndex(): void {
     this.indexedFactsById.clear();
     const hintsByFactId = new Map<string, RetrievalHintRecord[]>();
-    for (const hint of hints) {
+    for (const hint of this.hints) {
       const bucket = hintsByFactId.get(hint.factId) ?? [];
       bucket.push(hint);
       hintsByFactId.set(hint.factId, bucket);
     }
-    this.indexedFacts = facts.map((fact) => {
+    this.indexedFacts = this.facts.map((fact) => {
       const entry: IndexedFactRecord = {
         fact,
         hints: hintsByFactId.get(fact.id) ?? [],
@@ -898,6 +917,22 @@ export class MemoryService {
       this.indexedFactsById.set(fact.id, entry);
       return entry;
     });
+  }
+
+  private pruneLoadedRecords(factIds: string[], category?: string | null): void {
+    const factIdSet = new Set(factIds);
+    const normalizedCategory = normalizeCategory(category);
+    this.facts = this.facts.filter((fact) => !factIdSet.has(fact.id));
+    this.hints = this.hints.filter((hint) =>
+      !factIdSet.has(hint.factId)
+      && (!normalizedCategory || hint.exclusiveToAgentName !== normalizedCategory)
+    );
+    this.links = this.links.filter((link) =>
+      !factIdSet.has(link.fromFactId)
+      && !factIdSet.has(link.toFactId)
+      && (!normalizedCategory || link.exclusiveToAgentName !== normalizedCategory)
+    );
+    this.rebuildLoadedIndex();
   }
 
   private appendToIndex(

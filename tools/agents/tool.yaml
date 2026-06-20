@@ -1,13 +1,25 @@
 name: agents
 description: |
   Manage and orchestrate agents and sub-agents.
-  
-  Methods:
-  - agents.call(name, request, options?): Call any agent/sub-agent. Uses the same pipeline as user messages. `options.interface` can override the configured interface when compatible.
-  - agents.resume(request): Continue the most recent agents.call session in the current sandbox, reusing its conversation history.
-  - agents.callSelf(request): Re-run the current agent as itself (not as a sub-agent), useful from heartbeat handlers.
-  - agents.subAgent(name, config): Create session-exclusive sub-agent (copy of caller with additive prompt; config.model is optional and defaults to "auto")
-  - agents.newAgent(prompt): Create new permanent agent via Gemini CLI
-  - agents.list(): List all available agents with descriptions
+
+  Main API:
+  - `await agents.run(agentName, input, options?)`: Run an agent to completion. Returns `{ finalMessage, changedFiles? }`.
+  - `await agents.start(jobName, agentName, input, options?)`: Start an agent job in the background.
+  - `await agents.status(jobName)`: Inspect whether a background job is running, completed, failed, or stopped.
+  - `await agents.result(jobName)`: Return the completed job result object.
+  - `await agents.trace(jobName, { tail? })`: Read recent text output from a background job.
+  - `await agents.send(jobName, input)`: Queue a new user message for a background job.
+  - `await agents.stop(jobName)`: Best-effort stop for a running background job.
+
+  Other API:
+  - `agents.newSubAgent(name, config)`: Create session-exclusive sub-agent.
+  - `agents.subAgent(name, config)`: Compatibility alias for `newSubAgent`.
+  - `agents.newAgent(prompt)`: Create new permanent agent via Gemini CLI.
+  - `agents.list()`: List available agents; the current caller is marked with `-> You`.
+  - `agents.call(...)`, `agents.callSelf(...)`, and `agents.resume(...)` are compatibility helpers; prefer `run/start/send`.
+
+  Options:
+  - `interface`: Override the configured interface when compatible.
+  - `dir`: Run the agent in a sandbox subdirectory instead of the caller's current sandbox root.
 
 module: index.ts

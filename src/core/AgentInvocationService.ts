@@ -22,6 +22,7 @@ export interface CallAgentOptions extends AgentInvocationOptions {
   restoreSnapshot?: SessionSnapshot;
   onSessionSnapshot?: (snapshot: SessionSnapshot, agent: LoadedAgent) => void | Promise<void>;
   onModelRouted?: (result: NotDiamondRoutingResult, agent: LoadedAgent) => void | Promise<void>;
+  signal?: AbortSignal;
 }
 
 export class AgentInvocationService {
@@ -66,6 +67,16 @@ export class AgentInvocationService {
         ...agent.config.memory,
         autoHints: { enabled: false },
       };
+      if (agent.config.adaptiveStepContext) {
+        agent.config.adaptiveStepContext = {
+          ...agent.config.adaptiveStepContext,
+          debug: {
+            ...agent.config.adaptiveStepContext.debug,
+            enabled: false,
+            openBrowser: false,
+          },
+        };
+      }
     }
 
     const modality = agent.config.modality || 'text';
@@ -96,6 +107,7 @@ export class AgentInvocationService {
       restoreSnapshot: options.restoreSnapshot,
       onSessionSnapshot: options.onSessionSnapshot,
       onModelRouted: options.onModelRouted,
+      signal: options.signal,
     });
   }
 

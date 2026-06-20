@@ -1,14 +1,15 @@
 name: CORE
 description: The primary and base agent.
 
-model: deepseek/deepseek-v4-flash
-provider: openrouter
+model: gpt-5.5
+provider: openai-codex
 systemPrompt: prompts/system.md
+runPath: ./
 
 modelSwitching:
   mode: whitelist
   whitelist:
-    - deepseek/deepseek-v4-flash
+    - gpt-5.5
   selector:
     model: openai/gpt-oss-20b
     provider: openrouter

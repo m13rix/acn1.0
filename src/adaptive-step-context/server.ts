@@ -73,12 +73,21 @@ async function startServer(port: number): Promise<ServerState> {
 export async function ensureAdaptiveStepContextServer(options: EnsureOptions = {}): Promise<string> {
   const port = parsePort(options.port ?? process.env.ADAPTIVE_STEP_CONTEXT_PORT);
   if (!state && !starting) {
-    starting = startServer(port).then((next) => {
-      state = next;
-      return next;
-    }).finally(() => {
-      starting = null;
-    });
+    starting = startServer(port)
+      .then((next) => {
+        state = next;
+        return next;
+      })
+      .catch((error: any) => {
+        if (error?.code === 'EADDRINUSE') {
+          console.warn(`[AdaptiveStepContext] Debug server port ${port} is already in use; continuing without starting another heatmap server.`);
+          return { server: null as unknown as Server, port, openedSessions: new Set<string>() };
+        }
+        throw error;
+      })
+      .finally(() => {
+        starting = null;
+      });
   }
 
   const active = state ?? await starting!;

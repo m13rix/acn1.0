@@ -251,6 +251,8 @@ export interface RunAgentOptions {
     onSessionSnapshot?: (snapshot: SessionSnapshot, agent: LoadedAgent) => void | Promise<void>;
     /** Called after a sub-agent first request is routed to a concrete model */
     onModelRouted?: (result: NotDiamondRoutingResult, agent: LoadedAgent) => void | Promise<void>;
+    /** Best-effort cancellation for background agent jobs. */
+    signal?: AbortSignal;
 }
 
 /**
@@ -273,7 +275,14 @@ export async function runAgent(options: RunAgentOptions): Promise<string> {
         restoreSnapshot,
         onSessionSnapshot,
         onModelRouted,
+        signal,
     } = options;
+
+    const throwIfAborted = () => {
+        if (signal?.aborted) {
+            throw new Error('Agent run stopped.');
+        }
+    };
 
     const childDepth = parentDepth + 1;
     const display = getGlobalDisplay() || new StreamDisplay();
@@ -345,7 +354,20 @@ export async function runAgent(options: RunAgentOptions): Promise<string> {
     }
 
     if (options.isSubagent) {
-        agentForSession.config = { ...agentForSession.config, memory: { ...agentForSession.config.memory, autoHints: { enabled: false } } };
+        agentForSession.config = {
+            ...agentForSession.config,
+            memory: { ...agentForSession.config.memory, autoHints: { enabled: false } },
+            adaptiveStepContext: agentForSession.config.adaptiveStepContext
+                ? {
+                    ...agentForSession.config.adaptiveStepContext,
+                    debug: {
+                        ...agentForSession.config.adaptiveStepContext.debug,
+                        enabled: false,
+                        openBrowser: false,
+                    },
+                }
+                : undefined,
+        };
     }
     if (typeof instructionAlgorithmOverride !== 'undefined') {
         agentForSession.config = {
@@ -415,27 +437,34 @@ export async function runAgent(options: RunAgentOptions): Promise<string> {
 
     const localCallbacks: ExecutorCallbacks = {
         onReasoningDelta: (delta: string) => {
+            throwIfAborted();
             display.startReasoning();
             display.writeReasoning(delta);
         },
         onReasoningDone: () => {
+            throwIfAborted();
             display.endReasoning();
         },
         onTextDelta: (delta: string) => {
+            throwIfAborted();
             display.startText();
             display.writeText(delta);
         },
         onTextDone: (fullText: string) => {
+            throwIfAborted();
             display.endText();
             session.recordVisibleAssistantOutput(fullText);
         },
         onAction: (code: string) => {
+            throwIfAborted();
             display.showAction(code);
         },
         onObservation: (output: string) => {
+            throwIfAborted();
             display.showObservation(output);
         },
         onBeforeProviderCall: () => {
+            throwIfAborted();
             display.reset();
         },
         onMemoryHintsRetrieved: (_content: string, score: number) => {
@@ -498,6 +527,7 @@ export async function runAgent(options: RunAgentOptions): Promise<string> {
     // ── 6. Execute in agent context ────────────────────────────────────
 
     try {
+        throwIfAborted();
         const response = await runWithAgentContext(
             agentName,
             async () => executor.execute(executionMessage, { continueActiveTurn: continuingActiveTurn }),

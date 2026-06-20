@@ -15,8 +15,8 @@ test('replays assistant tool-call reasoning as OpenRouter message.reasoning', ()
         toolCalls: [
           {
             id: 'call_1',
-            name: 'cli',
-            arguments: { content: 'dir' },
+            name: 'action',
+            arguments: { content: 'console.log(await files.list("."));' },
           },
         ],
       },
@@ -47,8 +47,8 @@ test('extracts replayable reasoning from reasoning_details text blocks', () => {
         toolCalls: [
           {
             id: 'call_1',
-            name: 'cli',
-            arguments: { content: 'dir' },
+            name: 'action',
+            arguments: { content: 'console.log(await files.list("."));' },
           },
         ],
       },

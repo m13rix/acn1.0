@@ -64,6 +64,25 @@ test('buildCodexRequest disables storage for chatgpt codex backend', () => {
   assert.equal('max_output_tokens' in request, false);
 });
 
+test('buildCodexRequest omits unsupported prompt cache retention', () => {
+  const request = buildCodexRequest(
+    [{ role: 'user', content: 'Hello' }],
+    {
+      model: 'openai-codex/gpt-5-codex',
+      stream: true,
+      providerOptions: {
+        openai: {
+          promptCacheKey: 'session-cache-key',
+          promptCacheRetention: '24h',
+        },
+      },
+    }
+  );
+
+  assert.equal(request.prompt_cache_key, 'session-cache-key');
+  assert.equal('prompt_cache_retention' in request, false);
+});
+
 test('buildCodexRequest normalizes minimal reasoning to low', () => {
   const request = buildCodexRequest(
     [{ role: 'user', content: 'Hello' }],

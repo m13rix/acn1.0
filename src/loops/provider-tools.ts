@@ -357,16 +357,7 @@ export class ProviderToolsLoop extends BaseLoop {
   }
 
   getDescription(): string {
-    return `## Provider Tools Loop
-
-Use native tools only:
-- \`action({ content })\`: run TypeScript in the sandbox.
-- \`cli({ content })\`: run a shell command.
-- \`edit_file({ filename, content })\`: create, replace, or SEARCH/REPLACE one file.
-- \`view_file({ filename })\`: read and return the contents of a file.
-- \`${PRIMARY_COMPLETION_FUNCTION}({ message })\`: final user-facing answer when done.
-
-If you need user input, call \`message.ask(...)\` inside \`action\`.`;
+    return ``;
   }
 }
 

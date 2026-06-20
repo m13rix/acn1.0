@@ -50,9 +50,6 @@ export function buildCodexRequest(
   if (cacheOptions.promptCacheKey) {
     request.prompt_cache_key = cacheOptions.promptCacheKey;
   }
-  if (cacheOptions.promptCacheRetention) {
-    request.prompt_cache_retention = cacheOptions.promptCacheRetention;
-  }
 
   Object.keys(request).forEach((key) => {
     if (request[key] === undefined) {
@@ -65,7 +62,6 @@ export function buildCodexRequest(
 
 function getPromptCacheOptions(providerOptions: Record<string, unknown> | undefined): {
   promptCacheKey?: string;
-  promptCacheRetention?: string;
 } {
   const openai = providerOptions?.['openai'];
   const openaiCodex = providerOptions?.['openaiCodex'];
@@ -81,14 +77,8 @@ function getPromptCacheOptions(providerOptions: Record<string, unknown> | undefi
       : typeof options['prompt_cache_key'] === 'string'
         ? options['prompt_cache_key']
         : undefined;
-    const promptCacheRetention = typeof options['promptCacheRetention'] === 'string'
-      ? options['promptCacheRetention']
-      : typeof options['prompt_cache_retention'] === 'string'
-        ? options['prompt_cache_retention']
-        : undefined;
-
-    if (promptCacheKey || promptCacheRetention) {
-      return { promptCacheKey, promptCacheRetention };
+    if (promptCacheKey) {
+      return { promptCacheKey };
     }
   }
 
