@@ -9,6 +9,7 @@ import {
 import {
   decodeWire,
   encodeDirectPairingCode,
+  encodeFullDirectPairingPayload,
   encodeWire,
   fingerprint,
   type AppAuthorizationRecord,
@@ -58,6 +59,7 @@ export interface TelosCodeLinkEndpointOptions {
   workspaceSnapshots?: WorkspaceSnapshotService;
   catalog?: TelosCodeCatalogService;
   now?: () => Date;
+  onRouteVerified?(route: string): void | Promise<void>;
 }
 
 interface PendingPairing {
@@ -111,7 +113,10 @@ export class TelosCodeLinkEndpoint {
       words: encoded.words,
       channelId: `pair:${nonceKey}`,
       route: encoded.route,
-      fullAddress: input.fullAddress,
+      fullAddress: encodeFullDirectPairingPayload({
+        route: input.fullAddress || `/ip4/${input.host}/tcp/${input.port}`,
+        nonce: encoded.nonce,
+      }),
       expiresAt: new Date(expiresAt).toISOString(),
     };
     this.pairing.set(nonceKey, { nonce: encoded.nonce, expiresAt, public: session });
@@ -379,6 +384,7 @@ export class TelosCodeLinkEndpoint {
       approvedAt: this.now().getTime(),
     });
     this.saveAuthorization(authorization);
+    if (typeof message.dialRoute === 'string') await this.options.onRouteVerified?.(message.dialRoute);
     await this.send(incoming.stream, {
       type: 'pairing.result',
       approved: true,
@@ -448,7 +454,7 @@ export class TelosCodeLinkEndpoint {
       harnessId: this.options.harnessId,
       projects: this.store.listProjects(),
       threads: this.store.listThreads({ includeArchived: true }),
-      appClients: this.store.listAppClients(),
+      appClients: this.store.listAppClients().map(publicAppClient),
     });
     try {
       while (true) {
@@ -482,8 +488,8 @@ export class TelosCodeLinkEndpoint {
             result,
           });
           if (command._tag === 'app-client.revoke') {
-            await this.revokeClient(appInstanceId);
-            return;
+            await this.revokeClient(command.appClientId);
+            if (command.appClientId === appInstanceId) return;
           }
         } catch (error) {
           await this.send(stream, {
@@ -806,8 +812,13 @@ export class TelosCodeLinkEndpoint {
         result = { previews: this.threads.previews.list(command.threadId) };
         break;
       case 'app-client.revoke':
-        if (command.appClientId !== appInstanceId) throw new Error('A client may revoke only itself.');
+        if (!this.store.getAppClient(command.appClientId)) {
+          throw new Error(`Telos Code app client not found: ${command.appClientId}`);
+        }
         result = { revoked: true };
+        break;
+      case 'app-client.list':
+        result = { appClients: this.store.listAppClients().map(publicAppClient) };
         break;
       default:
         throw new Error(`Command is not implemented yet: ${(command as { _tag?: string })._tag}`);
@@ -882,6 +893,19 @@ function publicAttachment(attachment: import('../thread-store/types.js').StoredA
   return { id: attachment.id, threadId: attachment.threadId, name: attachment.name,
     mimeType: attachment.mimeType, size: attachment.size, sha256: attachment.sha256,
     createdAt: attachment.createdAt };
+}
+
+function publicAppClient(client: import('../thread-store/types.js').StoredAppClient): Record<string, unknown> {
+  return {
+    id: client.id,
+    appId: client.appId,
+    deviceName: client.deviceName,
+    fingerprint: client.fingerprint,
+    capabilities: client.capabilities,
+    createdAt: client.createdAt,
+    lastSeenAt: client.lastSeenAt,
+    revokedAt: client.revokedAt,
+  };
 }
 
 function isStringHeaders(value: unknown): value is Record<string, string | string[]> {

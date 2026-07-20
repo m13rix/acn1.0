@@ -181,6 +181,11 @@ interface PendingDurableUpload {
     caption: string;
 }
 
+interface TelosCodePairingPresentation {
+    message: string;
+    qrPng?: Buffer;
+}
+
 interface TelegramApiErrorLike {
     response?: {
         error_code?: number;
@@ -226,7 +231,7 @@ export class TelegramService {
         resolve: (approved: boolean) => void;
         timer: NodeJS.Timeout;
     }>();
-    private telosCodePairingProvider: (() => Promise<string>) | null = null;
+    private telosCodePairingProvider: (() => Promise<TelosCodePairingPresentation>) | null = null;
     private questionCounter = 0;
     private threadService: ThreadService | null = null;
     private readonly threadCatalog = new TelosCodeCatalogService();
@@ -952,7 +957,13 @@ export class TelegramService {
                 return;
             }
             try {
-                await ctx.reply(await this.telosCodePairingProvider());
+                const presentation = await this.telosCodePairingProvider();
+                if (presentation.qrPng) {
+                    await ctx.replyWithPhoto({ source: presentation.qrPng }, {
+                        caption: 'Scan this QR code in a compatible Telos Code pairing flow.',
+                    });
+                }
+                await ctx.reply(presentation.message);
             } catch (error) {
                 await ctx.reply(`Unable to create a Telos Code pairing code: ${error instanceof Error ? error.message : String(error)}`);
             }
@@ -3145,7 +3156,7 @@ export class TelegramService {
         }
     }
 
-    public registerTelosCodePairingProvider(provider: (() => Promise<string>) | null): void {
+    public registerTelosCodePairingProvider(provider: (() => Promise<TelosCodePairingPresentation>) | null): void {
         this.telosCodePairingProvider = provider;
     }
 

@@ -617,10 +617,13 @@ async function main(): Promise<void> {
         approveClient: (request) => telegramService?.requestTelosCodeApproval(request) ?? false,
       });
       telegramService?.attachThreadService(telosCodeRuntime.threadService);
-      telegramService?.registerTelosCodePairingProvider(async () => telosCodeRuntime!.formatPairingMessage());
-      const pairingMessage = telosCodeRuntime.formatPairingMessage();
-      console.log(COLORS.muted(`\n${pairingMessage}\n`));
-      await telegramService?.broadcast(`${pairingMessage}\n\nUse /teloscode whenever you need a fresh code.`);
+      telegramService?.registerTelosCodePairingProvider(async () => {
+        const presentation = await telosCodeRuntime!.createPairingPresentation();
+        return { message: presentation.message, qrPng: presentation.qrPng };
+      });
+      const pairingPresentation = await telosCodeRuntime.createPairingPresentation();
+      console.log(COLORS.muted(`\n${pairingPresentation.message}\n${pairingPresentation.terminalQr}\n`));
+      await telegramService?.broadcast(`${pairingPresentation.message}\n\nUse /teloscode whenever you need a fresh code.`);
     } catch (error) {
       console.error(COLORS.error('Failed to start Telos Code transport:'), error);
     }
