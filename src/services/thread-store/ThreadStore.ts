@@ -15,6 +15,7 @@ import type {
   StoredInteraction,
   StoredTurn,
   StoredAppClient,
+  StoredAttachment,
   StoredTerminalSession,
   ThreadProject,
   WorkspaceCheckpoint,
@@ -89,6 +90,17 @@ interface InteractionRow {
   answered_at: string | null;
 }
 
+interface AttachmentRow {
+  id: string;
+  thread_id: string;
+  name: string;
+  mime_type: string;
+  size: number;
+  sha256: string;
+  storage_path: string;
+  created_at: string;
+}
+
 interface CheckpointRow {
   id: string;
   timeline_id: string;
@@ -156,6 +168,19 @@ function interactionFromRow(row: InteractionRow): StoredInteraction {
     answer: row.answer_json ? parseJson<Record<string, unknown>>(row.answer_json) : null,
     expiresAt: row.expires_at,
     answeredAt: row.answered_at,
+  };
+}
+
+function attachmentFromRow(row: AttachmentRow): StoredAttachment {
+  return {
+    id: row.id,
+    threadId: row.thread_id,
+    name: row.name,
+    mimeType: row.mime_type,
+    size: row.size,
+    sha256: row.sha256,
+    storagePath: row.storage_path,
+    createdAt: row.created_at,
   };
 }
 
@@ -598,6 +623,46 @@ export class ThreadStore {
     const interaction = this.getInteraction(id);
     if (!interaction) throw new Error(`Interaction not found: ${id}`);
     return interaction;
+  }
+
+  public createAttachment(input: {
+    id?: string;
+    threadId: string;
+    name: string;
+    mimeType: string;
+    size: number;
+    sha256: string;
+    storagePath: string;
+  }): StoredAttachment {
+    const id = input.id || this.id();
+    this.database
+      .prepare(
+        `INSERT INTO attachments
+          (id, thread_id, name, mime_type, size, sha256, storage_path, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(id, input.threadId, input.name, input.mimeType, input.size, input.sha256,
+        input.storagePath, this.now().toISOString());
+    return this.getAttachment(id)!;
+  }
+
+  public getAttachment(id: string): StoredAttachment | null {
+    const row = this.database.prepare('SELECT * FROM attachments WHERE id = ?').get(id) as
+      | AttachmentRow
+      | undefined;
+    return row ? attachmentFromRow(row) : null;
+  }
+
+  public listAttachments(threadId: string): StoredAttachment[] {
+    return (this.database
+      .prepare('SELECT * FROM attachments WHERE thread_id = ? ORDER BY created_at ASC')
+      .all(threadId) as AttachmentRow[]).map(attachmentFromRow);
+  }
+
+  public deleteAttachment(id: string): StoredAttachment | null {
+    const attachment = this.getAttachment(id);
+    if (attachment) this.database.prepare('DELETE FROM attachments WHERE id = ?').run(id);
+    return attachment;
   }
 
   public saveTerminalSession(input: {

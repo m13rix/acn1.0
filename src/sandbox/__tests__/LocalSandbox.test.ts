@@ -137,7 +137,7 @@ test('code snapshot operations use bound action-worker service IPC', async () =>
   }
 });
 
-test('message questions and text publish through bound action-worker service IPC', async () => {
+test('message questions, text, and files publish through bound action-worker service IPC', async () => {
   const tempRoot = await mkdtemp(join(process.cwd(), 'sandboxes', 'test-message-service-ipc-'));
   const requests: Array<{ type: string; payload: unknown; ephemeralPaths: string[] }> = [];
   const messagePath = join(process.cwd(), 'tools', 'message', 'index.ts');
@@ -147,6 +147,7 @@ test('message questions and text publish through bound action-worker service IPC
       requests.push(request);
       if (request.type === 'interaction.create') return { response: 'approved' };
       if (request.type === 'message.publish') return { published: true };
+      if (request.type === 'attachment.publish') return { attachments: [] };
       throw new Error(`Unexpected service request: ${request.type}`);
     },
   });
@@ -160,6 +161,7 @@ test('message questions and text publish through bound action-worker service IPC
     const result = await sandbox.execute([
       'const answer = await message.ask("Continue?");',
       'await message.sendText(`Answer: ${answer}`);',
+      'await message.sendFiles(["artifact.txt"]);',
       'console.log(answer);',
     ].join('\n'));
 
@@ -168,6 +170,7 @@ test('message questions and text publish through bound action-worker service IPC
     assert.deepEqual(requests.map((request) => request.type), [
       'interaction.create',
       'message.publish',
+      'attachment.publish',
     ]);
   } finally {
     await sandbox.cleanup();

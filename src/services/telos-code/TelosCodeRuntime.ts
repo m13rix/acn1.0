@@ -52,7 +52,10 @@ export class TelosCodeRuntime {
       );
     }
     const snapshots = new WorkspaceSnapshotService(store, join(dataDirectory, 'workspace-snapshots'));
-    const threads = new ThreadService(store, { workspaceSnapshots: snapshots });
+    const threads = new ThreadService(store, {
+      workspaceSnapshots: snapshots,
+      attachmentStoragePath: join(dataDirectory, 'attachments'),
+    });
     const requestedPort = options.listenPort ?? readPort(process.env.TELOS_CODE_PORT, 4424);
     const created = await createLibp2pTelosLinkNode({
       storagePath: join(dataDirectory, 'link'),

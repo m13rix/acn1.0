@@ -20,7 +20,6 @@ import { TelosCodeLinkEndpoint } from './TelosCodeLinkEndpoint.js';
 
 class FakeAppStream implements AppStream {
   readonly appId = 'telos-code';
-  readonly channelType = 'events' as const;
   readonly closed = Promise.resolve();
   readonly sent: Array<Record<string, unknown>> = [];
   private readonly queue: Uint8Array[] = [];
@@ -30,6 +29,7 @@ class FakeAppStream implements AppStream {
   constructor(
     readonly channelId: string,
     private readonly onSend?: (message: Record<string, unknown>, stream: FakeAppStream) => void,
+    readonly channelType: 'events' | 'file-direct' = 'events',
   ) {}
 
   push(message: Record<string, unknown>): void {
@@ -75,7 +75,7 @@ function incoming(stream: FakeAppStream): IncomingAppStream {
   return {
     appId: 'telos-code',
     protocol: '/telos/code/1',
-    channelType: 'events',
+    channelType: stream.channelType,
     channelId: stream.channelId,
     stream,
   };
@@ -95,7 +95,8 @@ test('pairs an app identity only after explicit approval and authenticates recon
     device: { name: 'Harness', type: 'server' },
   });
   const store = await ThreadStore.open({ databasePath: join(directory, 'threads.db') });
-  const threads = new ThreadService(store, { executionAdapter: unusedAdapter });
+  const threads = new ThreadService(store, { executionAdapter: unusedAdapter,
+    attachmentStoragePath: join(directory, 'attachments') });
   const approvals: string[] = [];
   const endpoint = new TelosCodeLinkEndpoint(node, threads, store, {
     harnessId: '01900000-0000-7000-8000-000000000001',
@@ -237,6 +238,37 @@ test('pairs an app identity only after explicit approval and authenticates recon
     assert.deepEqual(store.getInteraction('01900000-0000-7000-8000-000000000401')?.answer, {
       response: 'yes',
     });
+
+    const uploadBytes = Buffer.from('immutable attachment bytes');
+    let uploadedAttachmentId = '';
+    const fileStream = new FakeAppStream('files:primary', (message, stream) => {
+      if (message.type === 'session.challenge') {
+        stream.push({ type: 'session.proof', proof: createAppSessionProof(localIdentity,
+          message.challenge as Parameters<typeof createAppSessionProof>[1]) });
+      }
+      if (message.type === 'session.ready') stream.push({ type: 'attachment.upload.begin',
+        requestId: 'upload-1', threadId: '01900000-0000-7000-8000-000000000301',
+        name: 'proof.txt', mimeType: 'text/plain', size: uploadBytes.length,
+        sha256: 'fa320e87c0ec9d342a0a77a8f3ddc8540f4d785fd0729f6b4656681912bc2699' });
+      if (message.type === 'attachment.upload.ready') {
+        stream.push({ type: 'attachment.upload.chunk', requestId: 'upload-1', index: 0, data: uploadBytes });
+        stream.push({ type: 'attachment.upload.complete', requestId: 'upload-1' });
+      }
+      if (message.type === 'attachment.upload.complete' && message.attachment) {
+        uploadedAttachmentId = String((message.attachment as Record<string, unknown>).id);
+        assert.equal('storagePath' in (message.attachment as Record<string, unknown>), false);
+        stream.push({ type: 'attachment.download', requestId: 'download-1',
+          threadId: '01900000-0000-7000-8000-000000000301', attachmentId: uploadedAttachmentId });
+      }
+      if (message.type === 'attachment.download.complete') stream.end();
+    }, 'file-direct');
+    fileStream.push({ type: 'session.hello', appInstanceId: localIdentity.identity.appInstanceId });
+    await endpoint.acceptIncoming(incoming(fileStream));
+    assert.ok(uploadedAttachmentId);
+    assert.equal(store.getAttachment(uploadedAttachmentId)?.name, 'proof.txt');
+    assert.equal(Buffer.concat(fileStream.sent
+      .filter((message) => message.type === 'attachment.download.chunk')
+      .map((message) => Buffer.from(message.data as Uint8Array))).toString(), uploadBytes.toString());
 
     await endpoint.revokeClient(localIdentity.identity.appInstanceId);
     assert.ok(node.apps.getAuthorization(localIdentity.identity.appInstanceId)?.revokedAt);

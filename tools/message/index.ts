@@ -505,11 +505,12 @@ export async function sendVoice(text: string, voiceName: string = 'Orus'): Promi
   const { explicitApiUrl, apiUrl, recipient } = getMessageApiContext();
   const routeId = recipient.routeId || recipient.chatId || getOwner();
   const agentName = process.env.TELOS_AGENT_NAME;
+  const harnessRequest = process.env.TELOS_HARNESS_SERVICES === '1' ? getHarnessRequest() : undefined;
 
   console.log(`[Message-Debug] Route ID: ${routeId} (Env route: ${getBridgeRouteId()}, Chat: ${getBridgeChatId()}, Owner: ${getOwner()})`);
   console.log(`[Message-Debug] API URL: ${apiUrl}`);
 
-  if (!routeId) {
+  if (!routeId && !harnessRequest) {
     console.error('[Message] Cannot send voice: No owner and no Chat ID found.');
     return;
   }
@@ -569,6 +570,17 @@ export async function sendVoice(text: string, voiceName: string = 'Orus'): Promi
       console.log(`[Message-Debug] OGG File created: ${oggPath} (${stats.size} bytes)`);
     } else {
       throw new Error(`[Message-Debug] OGG File failed to create at ${oggPath}`);
+    }
+
+    if (harnessRequest) {
+      await harnessRequest('voice.publish', {
+        path: oggPath,
+        name: `voice-${Date.now()}.ogg`,
+        text,
+        voiceName,
+      });
+      console.log('[Message] Voice attachment published.');
+      return;
     }
 
     // Send via API if available
@@ -946,6 +958,14 @@ export async function ask(input: string | AskInput, menuOptions?: AskMenuOptions
  * Sends files to the user.
  */
 export async function sendFiles(files: string[]): Promise<void> {
+  const harnessRequest = process.env.TELOS_HARNESS_SERVICES === '1' ? getHarnessRequest() : undefined;
+  if (harnessRequest) {
+    const sandboxDir = getAgentSandbox()?.directory || process.cwd();
+    await harnessRequest('attachment.publish', {
+      paths: files.map((file) => path.resolve(sandboxDir, file)),
+    });
+    return;
+  }
   const { explicitApiUrl, apiUrl, recipient } = getMessageApiContext();
   const agentName = process.env.TELOS_AGENT_NAME;
 

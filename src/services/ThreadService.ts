@@ -13,8 +13,10 @@ import { LocalSandbox } from '../sandbox/LocalSandbox.js';
 import type { AgentConfig, LoadedAgent } from '../types/index.js';
 import { ThreadStore } from './thread-store/ThreadStore.js';
 import type { HarnessThread, StoredInteraction, StoredThreadEvent, StoredTurn } from './thread-store/types.js';
+import type { StoredAttachment } from './thread-store/types.js';
 import { TerminalService } from './TerminalService.js';
 import { GitService } from './GitService.js';
+import { AttachmentService } from './AttachmentService.js';
 import { WorkspaceSnapshotService } from './WorkspaceSnapshotService.js';
 
 export interface ThreadExecutionCallbacks extends ExecutorCallbacks {
@@ -80,6 +82,7 @@ export class ThreadService {
   private readonly workspaceSnapshots: WorkspaceSnapshotService | undefined;
   readonly terminals: TerminalService;
   readonly git: GitService;
+  readonly attachments: AttachmentService;
 
   constructor(
     readonly store: ThreadStore,
@@ -87,10 +90,14 @@ export class ThreadService {
       executionAdapter?: ThreadExecutionAdapter;
       workspaceSnapshots?: WorkspaceSnapshotService;
       terminalService?: TerminalService;
+      attachmentService?: AttachmentService;
+      attachmentStoragePath?: string;
     } = {},
   ) {
     this.workspaceSnapshots = options.workspaceSnapshots;
     this.terminals = options.terminalService || new TerminalService(store, options.workspaceSnapshots);
+    this.attachments = options.attachmentService
+      || new AttachmentService(store, options.attachmentStoragePath || resolve('data', 'telos-code', 'attachments'));
     this.git = new GitService(store, options.workspaceSnapshots, (event) => {
       this.emit(event.threadId, 'activity', {
         turnId: null,
@@ -171,6 +178,19 @@ export class ThreadService {
       existing.delete(subscriber);
       if (existing.size === 0) this.subscribers.delete(threadId);
     };
+  }
+
+  async createUploadedAttachment(input: {
+    threadId: string; bytes: Uint8Array; name: string; mimeType?: string; source?: string;
+  }): Promise<StoredAttachment> {
+    this.requireThread(input.threadId);
+    const attachment = await this.attachments.createFromBytes(input);
+    this.emit(input.threadId, 'attachment', {
+      turnId: null, attachmentId: attachment.id, state: 'created', name: attachment.name,
+      mimeType: attachment.mimeType, size: attachment.size, sha256: attachment.sha256,
+      source: input.source || 'interface-upload', final: true,
+    });
+    return attachment;
   }
 
   enqueueTurn(input: {
@@ -530,8 +550,8 @@ export class ThreadService {
               final: true,
             });
           },
-          onServiceRequest: (type, payload) =>
-            this.handleExecutionServiceRequest(job, abortController.signal, type, payload),
+          onServiceRequest: (type, payload, ephemeralPaths) =>
+            this.handleExecutionServiceRequest(job, abortController.signal, type, payload, ephemeralPaths),
         },
       });
       reasoning.flush();
@@ -618,6 +638,7 @@ export class ThreadService {
     signal: AbortSignal,
     type: string,
     payload: unknown,
+    ephemeralPaths: string[] = [],
   ): unknown | Promise<unknown> {
     const body = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
     if (type.startsWith('terminal.')) {
@@ -634,6 +655,9 @@ export class ThreadService {
         final: true,
       });
       return { published: true };
+    }
+    if (type === 'attachment.publish' || type === 'voice.publish') {
+      return this.publishExecutionAttachments(job, type, body, ephemeralPaths);
     }
     if (type !== 'interaction.create') {
       throw new Error(`Unsupported thread service request: ${type}`);
@@ -701,6 +725,44 @@ export class ThreadService {
       };
       this.interactionWaiters.set(interaction.id, waiter);
     });
+  }
+
+  private async publishExecutionAttachments(
+    job: TurnJob,
+    type: 'attachment.publish' | 'voice.publish',
+    body: Record<string, unknown>,
+    ephemeralPaths: string[],
+  ): Promise<{ attachments: StoredAttachment[] }> {
+    const requested = type === 'voice.publish' ? [body.path] : Array.isArray(body.paths) ? body.paths : [];
+    const paths = requested.filter((value): value is string => typeof value === 'string' && !!value.trim());
+    if (!paths.length) throw new Error(`${type} requires at least one file path.`);
+    const workspace = this.workspacePath(job.thread);
+    const allowedEphemeral = new Set(ephemeralPaths.map((value) => resolve(value)));
+    const created: StoredAttachment[] = [];
+    for (const requestedPath of paths) {
+      const absolute = resolve(workspace, requestedPath);
+      const relativePath = relative(workspace, absolute);
+      if (type !== 'voice.publish'
+        && (relativePath.startsWith('..') || isAbsolute(relativePath))
+        && !allowedEphemeral.has(absolute)) {
+        throw new Error(`Attachment source escapes the thread workspace: ${requestedPath}`);
+      }
+      const attachment = await this.attachments.createFromFile({
+        threadId: job.thread.id,
+        sourcePath: absolute,
+        name: type === 'voice.publish' && typeof body.name === 'string' ? body.name : undefined,
+        mimeType: type === 'voice.publish' ? 'audio/ogg' : undefined,
+      });
+      created.push(attachment);
+      this.emit(job.thread.id, 'attachment', {
+        turnId: job.turn.id, attachmentId: attachment.id, state: 'created', name: attachment.name,
+        mimeType: attachment.mimeType, size: attachment.size, sha256: attachment.sha256,
+        source: type === 'voice.publish' ? 'tts' : 'message-tool',
+        text: type === 'voice.publish' && typeof body.text === 'string' ? body.text : undefined,
+        final: true,
+      });
+    }
+    return { attachments: created };
   }
 
   private async handleTerminalServiceRequest(
@@ -925,7 +987,8 @@ export class HarnessThreadExecutionAdapter implements ThreadExecutionAdapter {
     },
   ): Promise<unknown> {
     const { type, payload } = request;
-    if (type === 'interaction.create' || type === 'message.publish' || type.startsWith('terminal.')) {
+    if (type === 'interaction.create' || type === 'message.publish'
+      || type === 'attachment.publish' || type === 'voice.publish' || type.startsWith('terminal.')) {
       if (!input.callbacks.onServiceRequest) throw new Error(`Unsupported harness service request: ${type}`);
       return input.callbacks.onServiceRequest(type, payload, request.ephemeralPaths);
     }

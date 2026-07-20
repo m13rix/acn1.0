@@ -63,6 +63,17 @@ export interface StoredInteraction {
   answeredAt: string | null;
 }
 
+export interface StoredAttachment {
+  id: string;
+  threadId: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  sha256: string;
+  storagePath: string;
+  createdAt: string;
+}
+
 export type WorkspaceEntryKind = 'file' | 'directory' | 'symlink';
 
 export interface WorkspaceCheckpointFile {

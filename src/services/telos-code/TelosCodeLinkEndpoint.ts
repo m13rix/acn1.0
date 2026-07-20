@@ -1,4 +1,5 @@
-import { timingSafeEqual } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 
 import type { TelosCodeCommand } from '@telos/code-contracts/telos';
 import {
@@ -153,6 +154,8 @@ export class TelosCodeLinkEndpoint {
         await this.serveEvents(incoming.stream, iterator, appInstanceId);
       } else if (incoming.channelType === 'terminal') {
         await this.serveTerminal(incoming, iterator);
+      } else if (incoming.channelType === 'file-direct') {
+        await this.serveFiles(incoming.stream, iterator);
       } else {
         throw new Error(`Channel is not implemented yet: ${incoming.channelType}`);
       }
@@ -164,6 +167,70 @@ export class TelosCodeLinkEndpoint {
       await incoming.stream.cancel('Telos Code session failed').catch(() => undefined);
     } finally {
       if (appInstanceId) this.untrackStream(appInstanceId, incoming.stream);
+    }
+  }
+
+  private async serveFiles(stream: AppStream, iterator: AsyncIterator<Uint8Array>): Promise<void> {
+    const uploads = new Map<string, {
+      threadId: string; name: string; mimeType?: string; size: number; sha256: string;
+      chunks: Uint8Array[]; received: number;
+    }>();
+    while (true) {
+      const next = await iterator.next();
+      if (next.done) return;
+      const message = decodeProtocolMessage(next.value);
+      if (message.type === 'attachment.download') {
+        const requestId = String(message.requestId || '');
+        const attachment = this.threads.attachments.get(
+          String(message.attachmentId || ''), String(message.threadId || ''));
+        const bytes = await readFile(attachment.storagePath);
+        await this.send(stream, { type: 'attachment.download.begin', requestId,
+          attachment: publicAttachment(attachment) });
+        for (let offset = 0, index = 0; offset < bytes.length; offset += 256 * 1024, index += 1) {
+          await this.send(stream, { type: 'attachment.download.chunk', requestId, index,
+            data: bytes.subarray(offset, Math.min(bytes.length, offset + 256 * 1024)) });
+        }
+        await this.send(stream, { type: 'attachment.download.complete', requestId });
+        continue;
+      }
+      if (message.type === 'attachment.upload.begin') {
+        const requestId = String(message.requestId || '');
+        const size = Number(message.size);
+        if (!requestId || !Number.isSafeInteger(size) || size < 0 || size > 100 * 1024 * 1024) {
+          throw new Error('Attachment upload manifest is invalid or exceeds 100 MiB.');
+        }
+        this.requireThread(String(message.threadId || ''));
+        uploads.set(requestId, { threadId: String(message.threadId), name: String(message.name || ''),
+          mimeType: typeof message.mimeType === 'string' ? message.mimeType : undefined,
+          size, sha256: String(message.sha256 || ''), chunks: [], received: 0 });
+        await this.send(stream, { type: 'attachment.upload.ready', requestId });
+        continue;
+      }
+      if (message.type === 'attachment.upload.chunk') {
+        const upload = uploads.get(String(message.requestId || ''));
+        if (!upload) throw new Error(`Attachment upload is unknown: ${String(message.requestId || '')}`);
+        if (!(message.data instanceof Uint8Array)) throw new Error('Attachment upload chunk is invalid.');
+        upload.received += message.data.byteLength;
+        if (upload.received > upload.size) throw new Error('Attachment upload exceeds declared size.');
+        upload.chunks.push(message.data);
+        continue;
+      }
+      if (message.type === 'attachment.upload.complete') {
+        const requestId = String(message.requestId || '');
+        const upload = uploads.get(requestId);
+        if (!upload) throw new Error(`Attachment upload is unknown: ${requestId}`);
+        uploads.delete(requestId);
+        const bytes = Buffer.concat(upload.chunks.map((chunk) => Buffer.from(chunk)));
+        if (bytes.byteLength !== upload.size) throw new Error('Attachment upload size does not match its manifest.');
+        const actualHash = createHash('sha256').update(bytes).digest('hex');
+        if (upload.sha256 && actualHash !== upload.sha256) throw new Error('Attachment upload hash verification failed.');
+        const attachment = await this.threads.createUploadedAttachment({ threadId: upload.threadId,
+          bytes, name: upload.name, mimeType: upload.mimeType });
+        await this.send(stream, { type: 'attachment.upload.complete', requestId,
+          attachment: publicAttachment(attachment) });
+        continue;
+      }
+      throw new Error(`Unsupported file-direct message: ${message.type}`);
     }
   }
 
@@ -635,6 +702,12 @@ function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
   const first = Buffer.from(left);
   const second = Buffer.from(right);
   return first.length === second.length && timingSafeEqual(first, second);
+}
+
+function publicAttachment(attachment: import('../thread-store/types.js').StoredAttachment): Record<string, unknown> {
+  return { id: attachment.id, threadId: attachment.threadId, name: attachment.name,
+    mimeType: attachment.mimeType, size: attachment.size, sha256: attachment.sha256,
+    createdAt: attachment.createdAt };
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {

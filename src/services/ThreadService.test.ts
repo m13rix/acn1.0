@@ -17,7 +17,10 @@ async function fixture(
   const directory = join(tmpdir(), `telos-thread-service-${uuidv7()}`);
   await mkdir(directory, { recursive: true });
   const store = await ThreadStore.open({ databasePath: join(directory, 'threads.db') });
-  const service = new ThreadService(store, { executionAdapter: adapter });
+  const service = new ThreadService(store, {
+    executionAdapter: adapter,
+    attachmentStoragePath: join(directory, 'attachments'),
+  });
   try {
     await run(service, store, directory);
   } finally {
@@ -207,6 +210,30 @@ test('persists action-worker questions and accepts only the first interface answ
       store.replayEvents(thread.id, 0).some((event) =>
         event.type === 'message' && (event.payload as Record<string, unknown>).text === 'Selected a'),
     );
+  });
+});
+
+test('publishes immutable action-worker file attachments as durable thread events', async () => {
+  const adapter: ThreadExecutionAdapter = {
+    async execute(input) {
+      await input.callbacks.onServiceRequest?.('attachment.publish', {
+        paths: [join(input.thread.launchProfile.workspacePath, 'artifact.txt')],
+      }, []);
+      return { response: 'done', snapshot: { messages: [], contextFiles: [],
+        surfacedMemoryFactIds: [], injectedMemoryHints: [] } };
+    },
+  };
+  await fixture(adapter, async (service, store, directory) => {
+    await writeFile(join(directory, 'artifact.txt'), 'first version');
+    const project = store.createProject({ path: directory });
+    const thread = store.createThread({ launchProfile: profile(project.id, directory) });
+    await service.enqueueTurn({ threadId: thread.id, text: 'publish it' }).completed;
+    await writeFile(join(directory, 'artifact.txt'), 'later version');
+    const attachment = store.listAttachments(thread.id)[0];
+    assert.ok(attachment);
+    assert.equal(await readFile(attachment.storagePath, 'utf8'), 'first version');
+    assert.ok(store.replayEvents(thread.id, 0).some((event) => event.type === 'attachment'
+      && (event.payload as Record<string, unknown>).attachmentId === attachment.id));
   });
 });
 
