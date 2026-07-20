@@ -58,6 +58,8 @@ test('persists immutable launch profiles and monotonic replayable events', async
       ],
     );
     assert.equal(store.getThread(thread.id)?.launchProfile.modelId, 'gpt-5.6-codex');
+    assert.equal(store.searchThreads('second')[0]?.id, thread.id);
+    assert.equal(store.searchThreads('OPENAI-CODEX')[0]?.id, thread.id);
   });
 });
 

@@ -530,6 +530,29 @@ export class ThreadStore {
     ).map(threadFromRow);
   }
 
+  public searchThreads(
+    query: string,
+    options: { includeArchived?: boolean; limit?: number } = {},
+  ): HarnessThread[] {
+    const normalized = query.trim().toLowerCase();
+    if (!normalized) return [];
+    const pattern = `%${normalized.replace(/[\\%_]/gu, (value) => `\\${value}`)}%`;
+    const archived = options.includeArchived ? '' : 'AND t.archived_at IS NULL';
+    const limit = Math.max(1, Math.min(options.limit || 100, 500));
+    return (this.database.prepare(
+      `SELECT DISTINCT t.* FROM threads t
+       JOIN projects p ON p.id = t.project_id
+       LEFT JOIN thread_events e ON e.thread_id = t.id
+       WHERE (
+         LOWER(t.title) LIKE ? ESCAPE '\\'
+         OR LOWER(t.launch_profile_json) LIKE ? ESCAPE '\\'
+         OR LOWER(p.display_name) LIKE ? ESCAPE '\\'
+         OR LOWER(e.payload_json) LIKE ? ESCAPE '\\'
+       ) ${archived}
+       ORDER BY t.updated_at DESC LIMIT ?`,
+    ).all(pattern, pattern, pattern, pattern, limit) as ThreadRow[]).map(threadFromRow);
+  }
+
   public renameThread(threadId: string, title: string, expectedVersion?: number): HarnessThread {
     const thread = this.updateThreadProjection(threadId, expectedVersion, 'title = ?', [title.trim()], 'renamed', {
       title: title.trim(),

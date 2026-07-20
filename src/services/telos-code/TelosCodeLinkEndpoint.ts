@@ -654,6 +654,12 @@ export class TelosCodeLinkEndpoint {
         this.store.deleteThread(command.threadId);
         result = { deleted: true };
         break;
+      case 'thread.search':
+        result = { threads: this.store.searchThreads(command.query, {
+          includeArchived: command.includeArchived,
+          limit: command.limit,
+        }) };
+        break;
       case 'turn.enqueue': {
         const queued = this.threads.enqueueTurn({
           threadId: command.threadId,
