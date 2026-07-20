@@ -14,6 +14,7 @@ import type { AgentConfig, LoadedAgent } from '../types/index.js';
 import { ThreadStore } from './thread-store/ThreadStore.js';
 import type { HarnessThread, StoredInteraction, StoredThreadEvent, StoredTurn } from './thread-store/types.js';
 import { TerminalService } from './TerminalService.js';
+import { GitService } from './GitService.js';
 import { WorkspaceSnapshotService } from './WorkspaceSnapshotService.js';
 
 export interface ThreadExecutionCallbacks extends ExecutorCallbacks {
@@ -78,6 +79,7 @@ export class ThreadService {
   private readonly subscribers = new Map<string, Set<ThreadEventSubscriber>>();
   private readonly workspaceSnapshots: WorkspaceSnapshotService | undefined;
   readonly terminals: TerminalService;
+  readonly git: GitService;
 
   constructor(
     readonly store: ThreadStore,
@@ -89,6 +91,17 @@ export class ThreadService {
   ) {
     this.workspaceSnapshots = options.workspaceSnapshots;
     this.terminals = options.terminalService || new TerminalService(store, options.workspaceSnapshots);
+    this.git = new GitService(store, options.workspaceSnapshots, (event) => {
+      this.emit(event.threadId, 'activity', {
+        turnId: null,
+        activityType: 'git',
+        action: event.action,
+        state: event.state,
+        detail: event.detail,
+        result: event.result,
+        final: event.state === 'completed' || event.state === 'failed',
+      });
+    });
     this.executionAdapter = options.executionAdapter
       || new HarnessThreadExecutionAdapter(options.workspaceSnapshots);
   }
@@ -220,6 +233,13 @@ export class ThreadService {
   }): EnqueuedTurn {
     this.stop(input.threadId);
     return this.enqueueTurn(input);
+  }
+
+  isWorkspaceTurnActive(threadId: string): boolean {
+    const thread = this.requireThread(threadId);
+    return this.runningWorkspaces.has(this.workspaceKey(
+      thread.launchProfile.worktreePath || thread.launchProfile.workspacePath,
+    ));
   }
 
   async rewind(input: {

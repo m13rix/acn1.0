@@ -550,6 +550,20 @@ export class TelosCodeLinkEndpoint {
       case 'terminal.list':
         result = { terminals: this.threads.terminals.list(command.threadId) };
         break;
+      case 'git.action': {
+        if (
+          !['status', 'list-refs', 'list-worktrees', 'remotes'].includes(command.action)
+          && this.threads.isWorkspaceTurnActive(command.threadId)
+        ) {
+          throw new Error('Wait for or stop the active workspace turn before running this Git action.');
+        }
+        result = await this.threads.git.execute({
+          threadId: command.threadId,
+          action: command.action,
+          arguments: { ...command.arguments },
+        });
+        break;
+      }
       case 'app-client.revoke':
         if (command.appClientId !== appInstanceId) throw new Error('A client may revoke only itself.');
         result = { revoked: true };
