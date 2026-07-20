@@ -472,7 +472,7 @@ Example good use:
 
 ```typescript
 await agents.call(
-  "13_personal",
+  "user-facing",
   [
     "Do a warm school follow-up with Maxim.",
     "- The logistics are already decided.",
@@ -481,7 +481,7 @@ await agents.call(
     "- Return a concise summary."
   ].join("\\n")
 );
-console.log("13_personal follow-up sent");
+console.log("user-facing follow-up sent");
 ```
 
 ---

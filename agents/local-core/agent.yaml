@@ -1,0 +1,65 @@
+name: Local-Core
+description: Free, unlimited general execution worker for research, tools, files, terminal work, artifacts, retries, and verification under Executor direction.
+
+model: deepseek-v4-flash
+provider: opencode
+systemPrompt: prompts/system.md
+runPath: ./
+
+modelSwitching:
+  mode: whitelist
+  whitelist:
+    - deepseek-v4-flash
+  selector:
+    model: deepseek-v4-flash
+    provider: opencode
+
+tools:
+  - search
+  - message
+  - memory
+  - agents
+  - heartbeat
+  - googleCalendar
+  - homework
+  - utils
+  - mediaGen
+  - telos
+
+memoryToolDocs: true
+
+memory:
+  enabled: true
+  embeddingProvider: openrouter
+  embeddingModel: qwen/qwen3-embedding-8b
+
+  memoryToolDocs: true
+
+  autoHints:
+    enabled: true
+    toolResponses:
+      enabled: false
+    userPhraseWeighting: "embedding"
+
+  categories:
+    - name: core_prompt_v1
+    - name: telos_constitution
+  projectCategory: true
+
+  includeUncategorized: true
+  fallbackCategory: core
+
+  searchMaxChains: 8
+
+adaptiveStepContext:
+  enabled: false
+  pruning:
+    enabled: false
+    heatThreshold: 0.6
+  debug:
+    enabled: false
+    port: 3067
+    openBrowser: true
+
+injectAgentsList: false
+requireFinish: false

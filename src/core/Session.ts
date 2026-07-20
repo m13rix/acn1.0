@@ -114,10 +114,11 @@ function parseHistoryWindow(rawValue: string | undefined, fallback: number): num
   return parsed;
 }
 
-function getHistoryWindowConfig(): { fullTurnWindow: number; compactTurnWindow: number; totalTurnWindow: number } {
-  const fullTurnWindow = parseHistoryWindow(process.env.TELOS_SESSION_FULL_TURN_WINDOW, 0);
+function getHistoryWindowConfig(agent?: LoadedAgent): { fullTurnWindow: number; compactTurnWindow: number; totalTurnWindow: number } {
+  const defaultFullWindow = agent?.config.preserveSession ? FULL_TURN_WINDOW : 0;
+  const fullTurnWindow = parseHistoryWindow(process.env.TELOS_SESSION_FULL_TURN_WINDOW, defaultFullWindow);
   const compactTurnWindow = fullTurnWindow > 0
-    ? parseHistoryWindow(process.env.TELOS_SESSION_COMPACT_TURN_WINDOW, 0)
+    ? parseHistoryWindow(process.env.TELOS_SESSION_COMPACT_TURN_WINDOW, agent?.config.preserveSession ? COMPACT_TURN_WINDOW : 0)
     : 0;
 
   return {
@@ -645,7 +646,7 @@ export class Session {
   }
 
   private buildWindowedHistoryState(): { messages: Message[]; visibleFactIds: Set<string> } {
-    const { fullTurnWindow, totalTurnWindow } = getHistoryWindowConfig();
+    const { fullTurnWindow, totalTurnWindow } = getHistoryWindowConfig(this.agent);
     if (totalTurnWindow <= 0 || this.turns.length <= totalTurnWindow) {
       const visibleFactIds = new Set(this.turns.flatMap(turn => turn.surfacedMemoryFactIds));
       for (const factId of this.activeTurn?.surfacedMemoryFactIds || []) {
@@ -770,10 +771,10 @@ export class Session {
         excludeFactIds: this.getSurfacedMemoryFactIds(),
         queryPhraseWeightingMode: normalizePhraseWeightingMode(
           options?.queryPhraseWeightingMode ?? memoryCfg?.autoHints?.userPhraseWeighting,
-          'llm',
+          'embedding',
         ),
         candidateSelection: {
-          mode: 'top-k',
+          mode: 'auto',
           topK,
           maxCandidates: topK,
         },

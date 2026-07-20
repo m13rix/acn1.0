@@ -1,5 +1,11 @@
 
-import type { AgentMemoryConfig, ExecutionResult, LoadedTool } from '../types/index.js';
+import type { ActionBuiltinTool, AgentActionToolPolicy, AgentMemoryConfig, ExecutionResult, LoadedTool } from '../types/index.js';
+
+export interface SandboxActionExecutionPolicy {
+    tools?: LoadedTool[];
+    builtins?: ActionBuiltinTool[];
+    allowImports?: boolean;
+}
 
 export interface ISandbox {
     readonly id: string;
@@ -22,7 +28,13 @@ export interface ISandbox {
      * @param env - Optional environment variables
      * @param onStderr - Optional callback for streaming stderr (used for real-time display)
      */
-    execute(code: string, language?: string, env?: Record<string, string>, onStderr?: (data: string) => void): Promise<ExecutionResult>;
+    execute(
+        code: string,
+        language?: string,
+        env?: Record<string, string>,
+        onStderr?: (data: string) => void,
+        actionPolicy?: SandboxActionExecutionPolicy,
+    ): Promise<ExecutionResult>;
 
     /**
      * Execute a CLI command in the sandbox directory
@@ -50,5 +62,5 @@ export interface ISandbox {
     /**
      * Get description for system prompt
      */
-    getDescription(): string;
+    getDescription(actionPolicy?: AgentActionToolPolicy): string;
 }

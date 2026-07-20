@@ -1,4 +1,5 @@
 import express from 'express';
+import type { Express } from 'express';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import apiRoutes from './api.js';
@@ -6,7 +7,7 @@ import apiRoutes from './api.js';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CLIENT_DIR = join(__dirname, '..', 'client');
 
-export function createImportedToolsStudioApp() {
+export function createImportedToolsStudioApp(): Express {
   const app = express();
   app.use(express.json({ limit: '10mb' }));
   app.use('/api', apiRoutes);

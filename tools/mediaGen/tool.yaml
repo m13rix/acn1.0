@@ -1,0 +1,29 @@
+name: mediaGen
+description: |
+  AI media generation tool for OpenRouter-backed music and image generation.
+
+  - `mediaGen.generateMusic(optionsOrPrompt): Promise<GenerateMusicResult>`
+    Generate a 30-second music clip with `google/lyria-3-clip-preview` on OpenRouter and save it to disk.
+
+    Input can be a prompt string or an object:
+    `{ prompt: string, outputPath?: string, temperature?: number, seed?: number }`
+
+    Relative `outputPath` values resolve inside the current action sandbox/workspace. If omitted, output is saved under `.media-gen/`.
+
+    Returns:
+    `{ path, model, provider, prompt, mimeType, format, estimatedCostUsd, metadataPath, text?, rawResponseShape }`
+
+  - `mediaGen.generateImage(optionsOrPrompt): Promise<GenerateImageResult>`
+    Generate or edit an image through OpenRouter image-output models and save it to disk. Defaults to `google/gemini-3.1-flash-image` (Nano Banana 2), selected as the cheap/high-quality default. Other useful presets: `cheap`/`balanced` => Nano Banana 2, `pro` => `google/gemini-3-pro-image`, `legacyCheap` => `google/gemini-2.5-flash-image`. You may also pass any OpenRouter image-output model id.
+
+    Input can be a prompt string or an object:
+    `{ prompt: string, outputPath?: string, model?: string, aspectRatio?: string, imageSize?: string, temperature?: number, seed?: number, inputImages?: string[], imageConfig?: Record<string, unknown> }`
+
+    Common aspect ratios include `1:1`, `16:9`, `9:16`, `4:3`, `3:4`, `3:2`, `2:3`, `4:5`, `5:4`, and `21:9`. Common image sizes include `1K`, `2K`, `4K`; `0.5K` is supported by some Gemini preview models. `inputImages` values may be local paths, URLs, data URLs, or raw base64 for image editing/reference workflows.
+
+    Relative `outputPath` values resolve inside the current action sandbox/workspace. If omitted, output is saved under `.media-gen/`.
+
+    Returns:
+    `{ path, paths, model, provider, prompt, mimeType, format, estimatedCostUsd, metadataPath, text?, rawResponseShape }`
+
+module: index.ts

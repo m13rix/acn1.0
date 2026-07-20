@@ -74,18 +74,31 @@ export async function readAgentTextLog(logPath: string | undefined): Promise<Age
 }
 
 export function buildAgentCallTextResult(entries: AgentTextLogEntry[], fallbackResult: string): string {
-  const messages = entries
-    .map((entry) => normalizeLoggedText(entry.text))
-    .filter(Boolean);
   const fallback = normalizeLoggedText(fallbackResult);
+  const last = (source: AgentTextLogSource): string => {
+    for (let index = entries.length - 1; index >= 0; index--) {
+      const entry = entries[index];
+      if (entry?.source === source) {
+        const text = normalizeLoggedText(entry.text);
+        if (text) return text;
+      }
+    }
+    return '';
+  };
 
-  if (messages.length === 0) {
+  // `assistant_text` is emitted for every provider turn, including progress
+  // narration before tool calls. It is trace data, not an agent-call result.
+  // `response` is emitted only when the executor reaches its terminal response.
+  const terminalResponse = last('response');
+  if (terminalResponse) {
+    return terminalResponse;
+  }
+
+  if (fallback) {
     return fallback;
   }
 
-  if (fallback && messages[messages.length - 1] !== fallback) {
-    messages.push(fallback);
-  }
-
-  return messages.join('\n\n');
+  // Agents that deliberately suppress their provider completion may deliver
+  // their terminal outcome through the message tool instead.
+  return last('sent_text') || last('assistant_text');
 }

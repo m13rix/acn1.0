@@ -97,8 +97,19 @@ test('OpenAICodexProvider completes using stored OAuth profile', async () => {
           },
           async *stream(opts) {
             seenBody = opts.body;
+            assert.equal(opts.headers.originator, 'codex_cli_rs');
             yield { type: 'text.delta', delta: 'OK' };
-            yield { type: 'done' };
+            yield {
+              type: 'done',
+              usage: {
+                promptTokens: 50,
+                completionTokens: 5,
+                totalTokens: 55,
+                cachedPromptTokens: 40,
+                cacheWriteTokens: 10,
+                reasoningTokens: 2,
+              },
+            };
           },
         },
       }
@@ -110,6 +121,7 @@ test('OpenAICodexProvider completes using stored OAuth profile', async () => {
     );
 
     assert.equal(response.content, 'OK');
+    assert.equal(response.usage?.cachedPromptTokens, 40);
     assert.equal(seenBody?.stream, true);
   });
 });

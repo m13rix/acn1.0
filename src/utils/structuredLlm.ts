@@ -23,6 +23,7 @@ const SUPPORTED_IMAGE_EXTENSIONS = new Set([
 ]);
 
 export type JsonSchema = Record<string, unknown>;
+type StructuredLlmSchemaArgument = ZodTypeAny | JsonSchema | { schema: ZodTypeAny | JsonSchema };
 
 export interface StructuredLlmRuntimeConfig {
   provider: string;
@@ -257,6 +258,10 @@ export function zodToJsonSchema(schema: ZodTypeAny, seen = new WeakMap<object, J
 }
 
 export function schemaToJsonSchema(schema: unknown): JsonSchema {
+  if (isPlainObject(schema) && 'schema' in schema) {
+    return schemaToJsonSchema((schema as { schema?: unknown }).schema);
+  }
+
   if (isZodSchema(schema)) {
     return zodToJsonSchema(schema);
   }
@@ -265,6 +270,13 @@ export function schemaToJsonSchema(schema: unknown): JsonSchema {
   }
 
   throw new Error('schema must be a Zod schema or a JSON schema object.');
+}
+
+function unwrapSchemaArgument(schema: StructuredLlmSchemaArgument | undefined): ZodTypeAny | JsonSchema | undefined {
+  if (isPlainObject(schema) && 'schema' in schema) {
+    return (schema as { schema?: ZodTypeAny | JsonSchema }).schema;
+  }
+  return schema;
 }
 
 function formatZodError(error: any): string {
@@ -687,7 +699,17 @@ export async function structuredLlm<TJson = unknown>(
 ): Promise<TJson>;
 export async function structuredLlm(
   prompt: string,
-  schema: ZodTypeAny | JsonSchema,
+  options: { schema: ZodTypeAny | JsonSchema },
+  imagePath?: string
+): Promise<unknown>;
+export async function structuredLlm(
+  prompt: string,
+  schema?: undefined,
+  imagePath?: string
+): Promise<string>;
+export async function structuredLlm(
+  prompt: string,
+  schema?: StructuredLlmSchemaArgument,
   imagePath?: string
 ): Promise<unknown> {
   if (typeof prompt !== 'string' || !prompt.trim()) {
@@ -695,14 +717,17 @@ export async function structuredLlm(
   }
 
   const runtime = await resolveStructuredLlmConfig();
-  const jsonSchema = schemaToJsonSchema(schema);
-  const systemPrompt = [
-    'You are a structured-output helper.',
-    'Return only valid JSON.',
-    'Do not wrap the answer in markdown fences.',
-    'Do not add commentary, explanations, or extra keys.',
-    'The JSON must satisfy the provided schema exactly.',
-  ].join(' ');
+  const schemaArg = unwrapSchemaArgument(schema);
+  const jsonSchema = schemaArg ? schemaToJsonSchema(schemaArg) : undefined;
+  const systemPrompt = jsonSchema
+    ? [
+      'You are a structured-output helper.',
+      'Return only valid JSON.',
+      'Do not wrap the answer in markdown fences.',
+      'Do not add commentary, explanations, or extra keys.',
+      'The JSON must satisfy the provided schema exactly.',
+    ].join(' ')
+    : 'You are a concise helpful assistant. Answer the user directly.';
 
   const messages: Array<{ role: string; content: string; images?: string[] }> = [
     { role: 'system', content: systemPrompt },
@@ -729,10 +754,10 @@ export async function structuredLlm(
             model: runtime.model,
             stream: false,
             think: false,
-            format: jsonSchema,
+            ...(jsonSchema ? { format: jsonSchema } : {}),
             messages: ollamaMessages,
             options: {
-              temperature: 0,
+              temperature: jsonSchema ? 0 : 0.2,
             },
           });
           transportError = null;
@@ -763,7 +788,7 @@ export async function structuredLlm(
       }));
       const providerConfig: ProviderConfig = {
         model: runtime.model,
-        temperature: 0,
+        temperature: jsonSchema ? 0 : 0.2,
         maxTokens: 4096,
         reasoning: 'off',
         stream: false,
@@ -772,9 +797,22 @@ export async function structuredLlm(
       rawContent = response.content || '';
     }
 
+    if (!jsonSchema || !schemaArg) {
+      const text = rawContent.trim();
+      if (text) {
+        return text;
+      }
+      lastError = 'Model returned an empty response.';
+      messages.push({
+        role: 'user',
+        content: 'The previous response was empty. Return a concise text answer.',
+      });
+      continue;
+    }
+
     try {
       const parsed = parseJsonResponse(rawContent);
-      return validateStructuredResponse(schema, parsed);
+      return validateStructuredResponse(schemaArg, parsed);
     } catch (error: any) {
       lastError = error?.message || String(error);
       messages.push({
@@ -788,7 +826,9 @@ export async function structuredLlm(
     }
   }
 
-  throw new Error(`utils.llm failed to produce valid structured JSON after 3 attempts: ${lastError}`);
+  throw new Error(schemaArg
+    ? `utils.llm failed to produce valid structured JSON after 3 attempts: ${lastError}`
+    : `utils.llm failed to produce text after 3 attempts: ${lastError}`);
 }
 
 export const structuredLlmInternals = {

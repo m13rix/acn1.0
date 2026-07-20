@@ -23,7 +23,7 @@ function buildPayload(now: Date) {
 
 export async function start(emit: (event: Omit<HeartbeatSensorEvent, 'sensor'>) => void) {
   emitFn = emit;
-  lastProcessedSecondMs = null;
+  lastProcessedSecondMs = Math.floor(Date.now() / SECOND_MS) * SECOND_MS;
   scheduleNextTick();
 }
 

@@ -15,4 +15,19 @@ description: |
   - temperatureUnit: 'celsius' | 'fahrenheit'
   - windSpeedUnit: 'kmh' | 'ms' | 'mph' | 'kn'
 
+  `context.trigger.get(): Promise<string>`
+  - Realtime advisor only. Returns the formatted current automatic trigger state.
+
+  `context.trigger.set(type, value): Promise<string>`
+  - Realtime advisor only. Sets automatic triggering.
+  - type: "debounce" | "every"
+  - debounce value is minutes without new audio voice lines.
+  - every value is the number of new audio voice lines between automatic triggers.
+
+  `context.log.add(text): Promise<string>`
+  - Realtime advisor only. Saves a detailed conversation log entry.
+
+  `context.log.list(maxResults?): Promise<string>`
+  - Realtime advisor only. Returns recent saved conversation logs.
+
 module: index.ts

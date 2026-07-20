@@ -323,6 +323,23 @@ export function renderRealtimeAdvisorClientHtml(): string {
       white-space: pre-wrap;
     }
 
+    .memory-log {
+      max-height: 300px;
+      overflow: auto;
+      display: grid;
+      gap: 10px;
+      padding: 12px;
+      background: #fffef9;
+      border-radius: 0 0 var(--radius) var(--radius);
+    }
+
+    .memory-entry {
+      padding: 9px 0;
+      border-bottom: 1px solid rgba(214, 221, 216, 0.75);
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
     .qr-backdrop {
       position: fixed;
       inset: 0;
@@ -463,6 +480,14 @@ export function renderRealtimeAdvisorClientHtml(): string {
         <h2>Log</h2>
         <div class="log" id="log"></div>
       </section>
+
+      <section class="panel">
+        <h2>Advisor Context</h2>
+        <div class="memory-log">
+          <div class="small" id="triggerState">Automatic trigger: loading</div>
+          <div id="advisorLogs"></div>
+        </div>
+      </section>
     </aside>
 
     <section class="main">
@@ -508,6 +533,8 @@ export function renderRealtimeAdvisorClientHtml(): string {
   <script>
     const $ = (selector) => document.querySelector(selector);
     const logEl = $('#log');
+    const advisorLogsEl = $('#advisorLogs');
+    const triggerStateEl = $('#triggerState');
     const transcriptEl = $('#transcript');
     const pendingRows = $('#pendingRows');
     const adviceEl = $('#advice');
@@ -521,6 +548,7 @@ export function renderRealtimeAdvisorClientHtml(): string {
     const ctx = wave.getContext('2d');
     let busy = false;
     let connectionUrl = location.origin;
+    let linkPairingPayload = '';
 
     $('#baseUrl').textContent = location.origin;
 
@@ -535,7 +563,8 @@ export function renderRealtimeAdvisorClientHtml(): string {
     }
 
     async function jsonFetch(url, options) {
-      const response = await fetch(url, options);
+      const finalOptions = options ? { ...options } : {};
+      const response = await fetch(url, finalOptions);
       const text = await response.text();
       let body = {};
       try { body = text ? JSON.parse(text) : {}; } catch { body = { raw: text }; }
@@ -552,10 +581,10 @@ export function renderRealtimeAdvisorClientHtml(): string {
     }
 
     function renderQr() {
-      const clientUrl = connectionUrl.replace(/\/+$/, '') + '/client';
-      const qrImageUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=248x248&margin=12&data=' + encodeURIComponent(clientUrl);
+      const qrPayload = linkPairingPayload || (connectionUrl.replace(/\/+$/, '') + '/client');
+      const qrImageUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=248x248&margin=12&data=' + encodeURIComponent(qrPayload);
       qrBox.innerHTML = '<img alt="QR code for phone connection" src="' + qrImageUrl + '" />';
-      qrUrl.textContent = clientUrl;
+      qrUrl.textContent = qrPayload;
     }
 
     function drawWave() {
@@ -634,17 +663,41 @@ export function renderRealtimeAdvisorClientHtml(): string {
       }
     }
 
+    function renderAdvisorContext(trigger, logs) {
+      triggerStateEl.textContent = trigger?.formatted || 'Automatic trigger: unknown';
+      advisorLogsEl.innerHTML = '';
+      if (!logs || !logs.length) {
+        advisorLogsEl.innerHTML = '<div class="small">No saved advisor logs yet.</div>';
+        return;
+      }
+      for (const item of logs) {
+        const entry = document.createElement('div');
+        entry.className = 'memory-entry';
+        const meta = document.createElement('div');
+        meta.className = 'meta';
+        meta.textContent = new Date(item.createdAt).toLocaleString();
+        const text = document.createElement('div');
+        text.textContent = item.text;
+        entry.appendChild(meta);
+        entry.appendChild(text);
+        advisorLogsEl.appendChild(entry);
+      }
+    }
+
     async function refresh() {
       try {
         const health = await jsonFetch('/health');
         healthDot.className = 'dot ok';
         const tunnel = health.tunnel || {};
         const tunnelText = health.publicUrl ? 'public' : (tunnel.enabled ? tunnel.status : 'local');
-        healthText.textContent = (health.pyannoteEnabled ? 'online · pyannote' : 'online · local') + ' · ' + tunnelText;
+        healthText.textContent = (health.assemblyAiEnabled ? 'online · AssemblyAI' : 'online · local') + ' · ' + tunnelText;
         setConnectionUrl(health.publicUrl || health.baseUrl || location.origin, tunnel.enabled ? tunnel.status : 'disabled');
+        const link = await jsonFetch('/v1/link/health');
+        linkPairingPayload = link.pairingPayload || '';
         const state = await jsonFetch('/v1/state');
         renderTranscript(state.currentConversation);
         renderPending(state.pendingSpeakers || []);
+        renderAdvisorContext(state.automaticTrigger, state.logs || []);
       } catch (error) {
         healthDot.className = 'dot err';
         healthText.textContent = 'offline';
@@ -697,9 +750,7 @@ export function renderRealtimeAdvisorClientHtml(): string {
       setBusy(true);
       try {
         const body = await jsonFetch('/v1/chunks', { method: 'POST', body: data });
-        log('chunk accepted: ' + body.chunkId);
-        if (body.advice) adviceEl.textContent = body.advice;
-        if (body.newSpeakers && body.newSpeakers.length) log('new speaker proposals: ' + body.newSpeakers.length);
+        log(body.success ? 'chunk accepted' : 'chunk submitted');
         form.chunkId.value = '';
         await refresh();
       } catch (error) {

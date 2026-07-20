@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import type { IngestTextInput } from './types.js';
 import type { MemoryService } from './MemoryService.js';
+import { assertMemoryIngestAllowed, isMemoryIngestAllowed } from './ingestGuard.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = join(__dirname, '..', '..', 'data', 'memory');
@@ -63,6 +64,11 @@ export class MemoryQueueService {
       return;
     }
 
+    if (!isMemoryIngestAllowed()) {
+      this.initialized = true;
+      return;
+    }
+
     await mkdir(DATA_DIR, { recursive: true });
     this.state = await this.readState();
     this.state.spacingMs = normalizeSpacingMs(this.state.spacingMs / 1000);
@@ -71,6 +77,7 @@ export class MemoryQueueService {
   }
 
   async setSpacingSeconds(spacingSeconds?: number): Promise<void> {
+    assertMemoryIngestAllowed();
     await this.initialize();
     this.state.spacingMs = normalizeSpacingMs(spacingSeconds);
     await this.persistState();
@@ -78,6 +85,7 @@ export class MemoryQueueService {
   }
 
   async enqueue(input: IngestTextInput): Promise<QueueReceipt> {
+    assertMemoryIngestAllowed();
     await this.initialize();
 
     const now = Date.now();

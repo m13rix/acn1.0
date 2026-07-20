@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 from functools import lru_cache
@@ -60,7 +61,8 @@ def get_pipeline(lang: str, model_dir: str):
         download_method=DownloadMethod.REUSE_RESOURCES,
         logging_level="WARN",
         verbose=False,
-        use_gpu=False,
+        use_gpu=os.environ.get("MEMORY_STANZA_USE_GPU", "auto").strip().lower()
+        not in {"0", "false", "no", "off"},
     )
 
 

@@ -11,7 +11,8 @@ interface MemoryRuntime {
   notesSync: MemoryNotesSyncService;
 }
 
-let runtime: MemoryRuntime | null = null;
+const runtimes = new Map<string, MemoryRuntime>();
+const runtimePromises = new Map<string, Promise<MemoryRuntime>>();
 
 function getQueueSpacingSeconds(config?: Partial<MemoryRuntimeConfig> | AgentMemoryConfig): number | undefined {
   return config && 'queue' in config ? config.queue?.spacingSeconds : undefined;
@@ -32,6 +33,7 @@ function configToRuntimeConfig(config?: Partial<MemoryRuntimeConfig> | AgentMemo
     mercuryModel: config.mercuryModel ?? config.linkerModel,
     mercuryTemperature: config.mercuryTemperature ?? config.linkerTemperature,
     mercuryMaxTokens: config.mercuryMaxTokens ?? config.linkerMaxTokens,
+    embeddingProvider: config.embeddingProvider,
     embeddingModel: config.embeddingModel,
     linkCandidatePoolMax: config.linkCandidatePoolMax ?? config.candidatePoolMax,
     maxAutoLinksPerFact: config.maxAutoLinksPerFact,
@@ -57,28 +59,33 @@ export async function getMemoryRuntime(config?: Partial<MemoryRuntimeConfig> | A
     spacingSeconds: getQueueSpacingSeconds(config),
   });
 
-  if (runtime && runtime.key === key) {
+  const existing = runtimes.get(key);
+  if (existing) return existing;
+  const pending = runtimePromises.get(key);
+  if (pending) return pending;
+
+  const created = (async () => {
+    const service = new MemoryService(runtimeConfig);
+    await service.initialize();
+
+    const queue = new MemoryQueueService(service, getQueueSpacingSeconds(config));
+    await queue.initialize();
+    const notesSync = new MemoryNotesSyncService(service, queue);
+    const notesSyncConfig = getNotesSyncConfig(config);
+    if (notesSyncConfig?.enabled !== false) {
+      await notesSync.initialize(notesSyncConfig);
+    }
+
+    const runtime = { key, service, queue, notesSync };
+    runtimes.set(key, runtime);
+    runtimePromises.delete(key);
     return runtime;
-  }
-
-  const service = new MemoryService(runtimeConfig);
-  await service.initialize();
-
-  const queue = new MemoryQueueService(service, getQueueSpacingSeconds(config));
-  await queue.initialize();
-  const notesSync = new MemoryNotesSyncService(service, queue);
-  const notesSyncConfig = getNotesSyncConfig(config);
-  if (notesSyncConfig?.enabled !== false) {
-    await notesSync.initialize(notesSyncConfig);
-  }
-
-  runtime = {
-    key,
-    service,
-    queue,
-    notesSync,
-  };
-  return runtime;
+  })().catch((error) => {
+    runtimePromises.delete(key);
+    throw error;
+  });
+  runtimePromises.set(key, created);
+  return created;
 }
 
 export async function ensureMemoryBackgroundRuntime(config?: Partial<MemoryRuntimeConfig> | AgentMemoryConfig): Promise<void> {

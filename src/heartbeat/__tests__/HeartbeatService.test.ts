@@ -429,6 +429,20 @@ test('fires clock every bindings for arbitrary compound intervals without duplic
       { id: 'clock-every-90m', metadata: {} }
     );
 
+    await service.bind(
+      service.createEventRef('clock', 'every', ['4h']),
+      async (payload: any, ctx: any) => {
+        await ctx.rebind({
+          metadata: {
+            topLevelIso: payload.iso,
+            topLevelWeekday: payload.weekday,
+            topLevelHour: payload.hour,
+          },
+        });
+      },
+      { id: 'clock-every-payload-compat', metadata: {} }
+    );
+
     const fourHourDate = new Date(2026, 0, 7, 4, 0, 0, 0);
     await service.dispatchEvent({
       sensor: 'clock',
@@ -451,8 +465,12 @@ test('fires clock every bindings for arbitrary compound intervals without duplic
     const after4h = JSON.parse(await readFile(path.join(layout.dataDir, 'bindings.json'), 'utf-8')) as Array<Record<string, any>>;
     const binding4h = after4h.find(binding => binding.id === 'clock-every-4h');
     const binding90mAfter4h = after4h.find(binding => binding.id === 'clock-every-90m');
+    const bindingPayloadCompat = after4h.find(binding => binding.id === 'clock-every-payload-compat');
     assert.equal(binding4h?.metadata?.lastOccurredAt, fourHourDate.toISOString());
     assert.equal(binding90mAfter4h?.metadata?.lastOccurredAt, undefined);
+    assert.equal(bindingPayloadCompat?.metadata?.topLevelIso, fourHourDate.toISOString());
+    assert.equal(bindingPayloadCompat?.metadata?.topLevelWeekday, fourHourDate.toLocaleDateString('en-US', { weekday: 'long' }));
+    assert.equal(bindingPayloadCompat?.metadata?.topLevelHour, fourHourDate.getHours());
 
     const ninetyMinuteDate = new Date(2026, 0, 7, 4, 30, 0, 0);
     const ninetyMinutePayload = {

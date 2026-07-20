@@ -6,7 +6,9 @@
  */
 
 import * as fs from 'fs';
+import { randomUUID } from 'node:crypto';
 import { join, relative, resolve, isAbsolute } from 'path';
+import { inspect } from 'node:util';
 
 import { listAgents, loadAgent } from '../../src/core/AgentRunner.js';
 import { getAgentInvocationService } from '../../src/core/AgentInvocationService.js';
@@ -23,7 +25,6 @@ import type { AgentInstructionAlgorithmConfig } from '../../src/types/index.js';
 import type { NotDiamondRoutingResult } from '../../src/services/model-selection/NotDiamondRouter.js';
 
 const SUBAGENT_SCOPE_SEPARATOR = '::';
-const AGENT_CALL_QUEUE_NOTICE = 'Parallel agents.call detected; call was queued and executed sequentially.';
 
 function normaliseModelId(model: string): string {
     return stripInlineAlias(model).trim().toLowerCase();
@@ -149,9 +150,11 @@ interface SubAgentConfig {
 const SUBAGENTS_FILE = '.telos-subagents.json';
 const LAST_AGENT_SESSION_FILE = '.telos-last-agent-session.json';
 const AGENT_TRACE_LIMIT = 200_000;
+const FULL_AGENT_RESULT_INSPECT = Symbol.for('nodejs.util.inspect.custom');
 let subAgentsCache: Map<string, SubAgentConfig> | null = null;
 
 export interface AgentRunResult {
+    jobName: string;
     finalMessage: string;
     changedFiles?: string[];
 }
@@ -163,11 +166,23 @@ interface AgentRunOptions {
 
 type AgentJobStatus = 'running' | 'completed' | 'failed' | 'stopping' | 'stopped';
 
+interface AgentJobSummary {
+    jobName: string;
+    agentName: string;
+    status: AgentJobStatus;
+    startedAt: string;
+    updatedAt: string;
+    pendingMessages: number;
+    message?: string;
+    error?: string;
+}
+
 interface AgentJob {
     name: string;
     agentName: string;
     input: string;
     options: AgentRunOptions;
+    sandbox?: LocalSandbox;
     status: AgentJobStatus;
     startedAt: string;
     updatedAt: string;
@@ -266,6 +281,14 @@ function diffFileSnapshots(before: Map<string, number>, after: Map<string, numbe
     return changed.sort();
 }
 
+function createUniqueJobName(prefix = 'job'): string {
+    let jobName = `${prefix}-${randomUUID()}`;
+    while (agentJobs.has(jobName)) {
+        jobName = `${prefix}-${randomUUID()}`;
+    }
+    return jobName;
+}
+
 function appendJobTrace(job: AgentJob, text: string): void {
     job.trace.push(text);
     let size = job.trace.reduce((sum, part) => sum + part.length, 0);
@@ -275,12 +298,60 @@ function appendJobTrace(job: AgentJob, text: string): void {
     }
 }
 
-function formatAgentRunResult(finalMessage: string, changedFiles: string[]): AgentRunResult {
-    const result: AgentRunResult = { finalMessage };
+function formatAgentRunResult(jobName: string, finalMessage: string, changedFiles: string[]): AgentRunResult {
+    const result: AgentRunResult = { jobName, finalMessage };
     if (changedFiles.length > 0) {
         result.changedFiles = changedFiles;
     }
+    Object.defineProperty(result, FULL_AGENT_RESULT_INSPECT, {
+        enumerable: false,
+        configurable: false,
+        value: () => inspect(
+            changedFiles.length > 0
+                ? { jobName, finalMessage, changedFiles }
+                : { jobName, finalMessage },
+            {
+                depth: null,
+                maxStringLength: null,
+                maxArrayLength: null,
+                breakLength: 120,
+                compact: false,
+            },
+        ),
+    });
     return result;
+}
+
+function createAgentJob(jobName: string, agentName: string, input: string, options?: AgentRunOptions, sandbox?: LocalSandbox): AgentJob {
+    const now = new Date().toISOString();
+    return {
+        name: jobName,
+        agentName,
+        input,
+        options: options || {},
+        sandbox,
+        status: 'running',
+        startedAt: now,
+        updatedAt: now,
+        trace: [],
+        pendingInputs: [],
+        abortController: new AbortController(),
+        descriptor: buildStandardResumeDescriptor(agentName, options?.interface),
+        promise: Promise.resolve(),
+    };
+}
+
+function summarizeJob(job: AgentJob, message?: string): AgentJobSummary {
+    return {
+        jobName: job.name,
+        agentName: job.agentName,
+        status: job.status,
+        startedAt: job.startedAt,
+        updatedAt: job.updatedAt,
+        pendingMessages: job.pendingInputs.length,
+        ...(message ? { message } : {}),
+        ...(job.error ? { error: job.error } : {}),
+    };
 }
 
 function assertPersistentActionRuntime(methodName: string): void {
@@ -301,7 +372,6 @@ async function runNamedAgentInCurrentSandbox(options: {
     systemPromptOverride?: string;
     instructionAlgorithmOverride?: AgentInstructionAlgorithmConfig | false;
     isSubagent?: boolean;
-    queueNotice?: string;
     resumeSnapshot?: SessionSnapshot;
     resumeDescriptor?: AgentResumeDescriptor;
     sandboxOverride?: LocalSandbox;
@@ -376,9 +446,7 @@ async function runNamedAgentInCurrentSandbox(options: {
     const aggregatedResult = buildAgentCallTextResult(textEntries, queued.value);
     options.trace?.(aggregatedResult);
 
-    return queued.waited
-        ? `${options.queueNotice || AGENT_CALL_QUEUE_NOTICE}\n\n${aggregatedResult}`
-        : aggregatedResult;
+    return aggregatedResult;
 }
 
 function buildStandardResumeDescriptor(name: string, interfaceOverride?: string): AgentResumeDescriptor {
@@ -708,18 +776,19 @@ async function runAgentFinalMessage(name: string, request: unknown, options?: Ag
 }
 
 export async function run(agentName: string, input: unknown, options?: AgentRunOptions): Promise<AgentRunResult> {
+    const jobName = createUniqueJobName('job');
+    const normalizedInput = normalizeAgentRequest(input, 'run');
     const sandbox = await resolveSandboxForOptions(options);
     if (!sandbox) {
-        return { finalMessage: `Error: No sandbox available. Cannot run agent "${agentName}" outside of an active session.` };
+        return formatAgentRunResult(jobName, `Error: No sandbox available. Cannot run agent "${agentName}" outside of an active session.`, []);
     }
+    const job = createAgentJob(jobName, agentName, normalizedInput, options, sandbox);
 
-    const before = await collectFileSnapshot(sandbox.directory);
-    const finalMessage = await runAgentFinalMessage(agentName, input, {
-        ...options,
-        sandboxOverride: sandbox,
-    });
-    const after = await collectFileSnapshot(sandbox.directory);
-    return formatAgentRunResult(finalMessage, diffFileSnapshots(before, after));
+    agentJobs.set(jobName, job);
+    job.promise = runAgentJob(job);
+    await job.promise;
+
+    return job.result || formatAgentRunResult(jobName, job.error || `agents job "${jobName}" stopped before producing a result.`, []);
 }
 
 /**
@@ -730,12 +799,14 @@ export async function call(name: string, request: unknown, options?: AgentRunOpt
 }
 
 async function runAgentJob(job: AgentJob): Promise<void> {
-    const sandbox = await resolveSandboxForOptions(job.options);
+    const sandbox = job.sandbox || await resolveSandboxForOptions(job.options);
     if (!sandbox) {
         job.status = 'failed';
         job.error = `No sandbox available. Cannot start agent "${job.agentName}" outside of an active session.`;
+        job.result = formatAgentRunResult(job.name, job.error, []);
         return;
     }
+    job.sandbox = sandbox;
 
     const before = await collectFileSnapshot(sandbox.directory);
     let nextInput: string | undefined = job.input;
@@ -769,67 +840,40 @@ async function runAgentJob(job: AgentJob): Promise<void> {
         }
 
         const after = await collectFileSnapshot(sandbox.directory);
-        job.result = formatAgentRunResult(lastMessage, diffFileSnapshots(before, after));
+        job.result = formatAgentRunResult(job.name, lastMessage, diffFileSnapshots(before, after));
         job.status = job.abortController.signal.aborted ? 'stopped' : 'completed';
     } catch (error) {
         job.error = error instanceof Error ? error.message : String(error);
         job.status = job.abortController.signal.aborted ? 'stopped' : 'failed';
         appendJobTrace(job, `\n[error]\n${job.error}\n`);
+        job.result = formatAgentRunResult(job.name, job.error, []);
     } finally {
         job.updatedAt = new Date().toISOString();
     }
 }
 
-export async function start(jobName: string, agentName: string, input: unknown, options?: AgentRunOptions): Promise<string> {
+export async function start(jobName: string, agentName: string, input: unknown, options?: AgentRunOptions): Promise<AgentJobSummary> {
     assertPersistentActionRuntime('start');
     if (typeof jobName !== 'string' || !/^[A-Za-z0-9_.-]+$/.test(jobName)) {
         throw new Error('agents.start(jobName, agentName, input): jobName must contain only letters, numbers, dots, underscores, or hyphens');
     }
-    if (agentJobs.has(jobName)) {
-        throw new Error(`agents job "${jobName}" already exists`);
+    const existing = agentJobs.get(jobName);
+    if (existing) {
+        return summarizeJob(existing, `Agent job "${jobName}" already exists; returning existing job status.`);
     }
 
     const normalizedInput = normalizeAgentRequest(input, 'start');
-    const abortController = new AbortController();
-    const job: AgentJob = {
-        name: jobName,
-        agentName,
-        input: normalizedInput,
-        options: options || {},
-        status: 'running',
-        startedAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        trace: [],
-        pendingInputs: [],
-        abortController,
-        promise: Promise.resolve(),
-    };
-
-    job.promise = runAgentJob(job);
+    const sandbox = await resolveSandboxForOptions(options);
+    const job = createAgentJob(jobName, agentName, normalizedInput, options, sandbox);
     agentJobs.set(jobName, job);
+    job.promise = runAgentJob(job);
     job.promise.catch(() => undefined);
-    return `Started agent job "${jobName}" running "${agentName}".`;
+    return summarizeJob(job, `Started agent job "${jobName}" running "${agentName}".`);
 }
 
-export async function status(jobName: string): Promise<{
-    jobName: string;
-    agentName: string;
-    status: AgentJobStatus;
-    startedAt: string;
-    updatedAt: string;
-    pendingMessages: number;
-    error?: string;
-}> {
+export async function status(jobName: string): Promise<AgentJobSummary> {
     const job = getAgentJob(jobName);
-    return {
-        jobName: job.name,
-        agentName: job.agentName,
-        status: job.status,
-        startedAt: job.startedAt,
-        updatedAt: job.updatedAt,
-        pendingMessages: job.pendingInputs.length,
-        error: job.error,
-    };
+    return summarizeJob(job);
 }
 
 export async function result(jobName: string): Promise<AgentRunResult> {
@@ -840,7 +884,7 @@ export async function result(jobName: string): Promise<AgentRunResult> {
     if (job.status === 'failed') {
         throw new Error(job.error || `agents job "${jobName}" failed`);
     }
-    return job.result || { finalMessage: job.error || `agents job "${jobName}" stopped before producing a result.` };
+    return job.result || { jobName: job.name, finalMessage: job.error || `agents job "${jobName}" stopped before producing a result.` };
 }
 
 export async function trace(jobName: string, options?: { tail?: number }): Promise<string> {
@@ -884,6 +928,9 @@ export async function stop(jobName: string): Promise<string> {
 }
 
 function getAgentJob(jobName: string): AgentJob {
+    if (typeof jobName !== 'string' || !jobName.trim()) {
+        throw new Error('agents.status/result/trace/send/stop requires a jobName string. If you just called agents.start(...), use `const job = await agents.start(...); await agents.status(job.jobName);`.');
+    }
     const job = agentJobs.get(jobName);
     if (!job) {
         throw new Error(`agents job "${jobName}" does not exist`);
@@ -953,7 +1000,6 @@ export async function callSelf(request: unknown): Promise<string> {
             parentDepth: getAgentDepth(),
             stream: isStreamingEnabled(),
             isSubagent: false,
-            queueNotice: 'Parallel agents.callSelf detected; call was queued and executed sequentially.',
         });
         console.error(`[agents] callSelf completed for "${selfName}": ${summarizeAgentResult(result)}`);
         return result;

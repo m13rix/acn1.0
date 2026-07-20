@@ -14,6 +14,17 @@ const DEFAULT_ENDPOINT = 'http://127.0.0.1:5200/execute';
 
 type ModScript = string | (() => unknown | Promise<unknown>);
 
+/**
+ * tsx/esbuild adds these name-registration calls when it transpiles named
+ * functions inside an action callback. The callback body is sent to the
+ * Minecraft runtime, which does not provide esbuild's __name helper.
+ */
+function stripTranspilerNameHelpers(source: string): string {
+  return source
+    .replace(/\s*__name\(\s*[A-Za-z_$][\w$]*\s*,\s*(['"])(?:\\.|(?!\1)[^\\])*\1\s*\);?/g, '')
+    .trim();
+}
+
 function normalizeScript(script: ModScript): string {
   if (typeof script === 'string') {
     const trimmed = script.trim();
@@ -32,7 +43,7 @@ function normalizeScript(script: ModScript): string {
   const bodyEnd = source.lastIndexOf('}');
 
   if (bodyStart !== -1 && bodyEnd > bodyStart) {
-    const body = source.slice(bodyStart + 1, bodyEnd).trim();
+    const body = stripTranspilerNameHelpers(source.slice(bodyStart + 1, bodyEnd));
     if (!body) {
       throw new Error('mod.execute callback body is empty.');
     }
@@ -142,4 +153,5 @@ export async function execute(script: ModScript, options: ExecuteOptions = {}): 
 export const __internals = {
   formatConsoleLog,
   normalizeScript,
+  stripTranspilerNameHelpers,
 };

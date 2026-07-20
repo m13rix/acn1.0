@@ -10,6 +10,9 @@ import type {
   QueryPhraseCandidate,
 } from './types.js';
 
+const QUERY_WEIGHT_CACHE_MAX = 512;
+const queryWeightCache = new Map<string, Promise<Array<{ phrase: string; weight: number }>>>();
+
 const NORMALIZATION_SYSTEM_PROMPT = `You are a precision memory-normalization engine.
 
 Your job is to rewrite any user-provided text into a form that is optimal for long-term memory storage and retrieval.
@@ -626,19 +629,54 @@ export async function weightQueryPhrases(
   if (phrases.length === 0) {
     return [];
   }
-
-  const result = await completeMercuryJsonOrEmpty(config, [
-    { role: 'system', content: QUERY_WEIGHT_SYSTEM_PROMPT },
-    {
-      role: 'user',
-      content: JSON.stringify({
-        query,
-        phrases: phrases.map((phrase) => phrase.text),
-      }),
-    },
-  ], 'weight_query_phrases', validateWeightResponse, [], debug);
-
-  return normalizeWeightRows(phrases, result);
+  const cacheKey = JSON.stringify([
+    config.mercuryProvider,
+    config.mercuryModel,
+    query,
+    phrases.map((phrase) => [phrase.type, phrase.text]),
+  ]);
+  const cached = queryWeightCache.get(cacheKey);
+  if (cached) {
+    queryWeightCache.delete(cacheKey);
+    queryWeightCache.set(cacheKey, cached);
+    return cached;
+  }
+  const pending = (async () => {
+    const chunkSize = phrases.length > 20 ? 16 : phrases.length;
+    const chunks: QueryPhraseCandidate[][] = [];
+    for (let start = 0; start < phrases.length; start += chunkSize) chunks.push(phrases.slice(start, start + chunkSize));
+    const weightedChunks = await Promise.all(chunks.map(async (chunk, index) => {
+      const chunkConfig: MemoryRuntimeConfig = {
+        ...config,
+        mercuryMaxTokens: Math.min(config.mercuryMaxTokens, Math.max(384, chunk.length * 24)),
+      };
+      const result = await completeMercuryJsonOrEmpty(chunkConfig, [
+        { role: 'system', content: QUERY_WEIGHT_SYSTEM_PROMPT },
+        {
+          role: 'user',
+          content: JSON.stringify({
+            query,
+            phrases: chunk.map((phrase) => phrase.text),
+          }),
+        },
+      ], chunks.length > 1 ? `weight_query_phrases_${index + 1}_of_${chunks.length}` : 'weight_query_phrases', validateWeightResponse, [], debug);
+      return normalizeWeightRows(chunk, result).map((item) => ({
+        ...item,
+        weight: item.weight * chunk.length / phrases.length,
+      }));
+    }));
+    return normalizeWeightRows(phrases, weightedChunks.flat());
+  })().catch((error) => {
+    queryWeightCache.delete(cacheKey);
+    throw error;
+  });
+  queryWeightCache.set(cacheKey, pending);
+  while (queryWeightCache.size > QUERY_WEIGHT_CACHE_MAX) {
+    const oldest = queryWeightCache.keys().next().value as string | undefined;
+    if (!oldest) break;
+    queryWeightCache.delete(oldest);
+  }
+  return pending;
 }
 
 export async function generateMemoryLinks(

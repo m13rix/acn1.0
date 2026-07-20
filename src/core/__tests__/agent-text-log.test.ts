@@ -10,35 +10,40 @@ import {
   readAgentTextLog,
 } from '../agentTextLog.js';
 
-test('buildAgentCallTextResult stacks logged text messages in order and keeps TASK_DONE fallback', async () => {
+test('buildAgentCallTextResult returns only the terminal response, never intermediate text', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'telos-agent-text-log-'));
   const logPath = join(dir, 'call.jsonl');
 
   try {
     appendAgentTextLog(logPath, 'assistant_text', 'First visible message');
-    appendAgentTextLog(logPath, 'sent_text', 'Tool-delivered text');
+    appendAgentTextLog(logPath, 'assistant_text', 'Intermediate progress after a tool call');
+    appendAgentTextLog(logPath, 'response', 'Final evidence report');
 
     const entries = await readAgentTextLog(logPath);
     assert.deepEqual(
       entries.map((entry) => entry.text),
-      ['First visible message', 'Tool-delivered text']
+      ['First visible message', 'Intermediate progress after a tool call', 'Final evidence report']
     );
 
     const combined = buildAgentCallTextResult(entries, 'Final TASK_DONE');
-    assert.equal(
-      combined,
-      'First visible message\n\nTool-delivered text\n\nFinal TASK_DONE'
-    );
+    assert.equal(combined, 'Final evidence report');
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
 });
 
-test('buildAgentCallTextResult avoids duplicating identical final response when already logged', () => {
+test('buildAgentCallTextResult falls back to a direct terminal result, then a delivered message', () => {
   const combined = buildAgentCallTextResult(
-    [{ source: 'response', text: 'Final TASK_DONE' }],
+    [{ source: 'assistant_text', text: 'Intermediate text' }],
     'Final TASK_DONE'
   );
 
   assert.equal(combined, 'Final TASK_DONE');
+  assert.equal(
+    buildAgentCallTextResult([
+      { source: 'assistant_text', text: 'Intermediate text' },
+      { source: 'sent_text', text: 'Delivered final message' },
+    ], ''),
+    'Delivered final message',
+  );
 });

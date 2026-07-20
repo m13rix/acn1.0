@@ -1,0 +1,26 @@
+packages:
+  - .
+
+allowBuilds:
+  '@openrouter/sdk': true
+  better-sqlite3: true
+  cbor-extract: true
+  esbuild: true
+  node-pty: true
+  protobufjs: true
+  puppeteer: true
+  sharp: true
+  sleep: true
+  speaker: true
+
+onlyBuiltDependencies:
+  - '@openrouter/sdk'
+  - better-sqlite3
+  - cbor-extract
+  - esbuild
+  - node-pty
+  - protobufjs
+  - puppeteer
+  - sharp
+  - sleep
+  - speaker

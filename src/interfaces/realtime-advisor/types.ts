@@ -3,8 +3,10 @@ import type { SessionSnapshot } from '../../core/Session.js';
 export const REALTIME_ADVISOR_INTERFACE = 'realtime-advisor';
 export const REALTIME_ADVISOR_ROUTE_ID = 'realtime-advisor:default';
 
-export type TranscriptEntrySource = 'quick' | 'pyannote';
+export type TranscriptEntrySource = 'quick' | 'assemblyai';
 export type SpeakerProposalStatus = 'pending' | 'resolved' | 'dismissed';
+export type RealtimeAdvisorTriggerType = 'debounce' | 'every';
+export type RealtimeAdvisorTunnelProvider = 'localtunnel' | 'localhost-run' | 'off';
 
 export interface RealtimeAdvisorConfig {
   port: number;
@@ -24,13 +26,17 @@ export interface RealtimeAdvisorConfig {
   ecapaOverlapSeconds: number;
   ecapaFp16: boolean;
   ecapaDevice: string;
-  pyannoteApiKey?: string;
-  pyannoteApiBaseUrl: string;
-  mockPyannote: boolean;
+  assemblyAiApiKey?: string;
+  assemblyAiApiBaseUrl: string;
+  mockAssemblyAi: boolean;
   autoOpenClient: boolean;
   maxUploadBytes: number;
   localhostRunEnabled: boolean;
   localhostRunHost: string;
+  tunnelProvider: RealtimeAdvisorTunnelProvider;
+  localtunnelHost: string;
+  localtunnelSubdomain?: string;
+  localtunnelLocalHost: string;
 }
 
 export interface RealtimeChunkMetadata {
@@ -52,8 +58,8 @@ export interface StoredAudioChunk {
   quickTranscript: string;
   durationSeconds?: number;
   metadata?: Record<string, unknown>;
-  pyannote?: {
-    diarizationJobId?: string;
+  assemblyAi?: {
+    transcriptId?: string;
     status: 'queued' | 'running' | 'succeeded' | 'failed' | 'skipped';
     error?: string;
   };
@@ -81,6 +87,28 @@ export interface AgentContextState {
   snapshot?: SessionSnapshot;
   sentEntryRevisions: Record<string, number>;
   lastAdviceAt?: string;
+}
+
+export interface AutomaticTriggerState {
+  type: RealtimeAdvisorTriggerType;
+  value: number;
+  updatedAt: string;
+  lineCountSinceLastTrigger: number;
+  lastTriggeredAt?: string;
+  lastTriggerConversationId?: string;
+  lastTriggerChunkId?: string;
+  lastTriggerReason?: string;
+}
+
+export interface ConversationLogRecord {
+  id: string;
+  createdAt: string;
+  text: string;
+}
+
+export interface AdvisorInstructionsState {
+  text: string;
+  updatedAt?: string;
 }
 
 export interface ConversationRecord {
@@ -162,6 +190,9 @@ export interface RealtimeAdvisorState {
   pendingSpeakers: Record<string, PendingSpeakerProposal>;
   unknownBuffers: Record<string, UnknownCandidateBuffer>;
   scoreStats: AdaptiveScoreStats;
+  automaticTrigger: AutomaticTriggerState;
+  logs: ConversationLogRecord[];
+  advisorInstructions: AdvisorInstructionsState;
 }
 
 export interface AdaptiveScoreStats {
@@ -201,9 +232,9 @@ export interface TurnLevelTranscript {
   text: string;
 }
 
-export interface PyannoteJob<TOutput = Record<string, unknown>> {
+export interface AssemblyAiJob<TOutput = Record<string, unknown>> {
   jobId: string;
-  status: 'pending' | 'created' | 'running' | 'succeeded' | 'canceled' | 'failed';
+  status: 'queued' | 'processing' | 'completed' | 'error';
   createdAt?: string;
   updatedAt?: string;
   output?: TOutput;
@@ -211,11 +242,10 @@ export interface PyannoteJob<TOutput = Record<string, unknown>> {
   error?: string;
 }
 
-export interface PyannoteDiarizationOutput {
-  diarization?: DiarizationSegment[];
-  exclusiveDiarization?: DiarizationSegment[];
-  turnLevelTranscription?: TurnLevelTranscript[];
-  wordLevelTranscription?: Array<{
+export interface AssemblyAiDiarizationOutput {
+  text?: string;
+  utterances?: TurnLevelTranscript[];
+  words?: Array<{
     speaker: string;
     start: number;
     end: number;

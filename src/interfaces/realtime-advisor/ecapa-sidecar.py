@@ -5,10 +5,16 @@ import json
 import math
 import sys
 import traceback
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
+warnings.filterwarnings(
+    "ignore",
+    message=r"You are using `torch\.load` with `weights_only=False`.*",
+    category=FutureWarning,
+)
 
 MODEL_ID = "speechbrain/spkrec-ecapa-voxceleb"
 np = None

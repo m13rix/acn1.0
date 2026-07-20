@@ -6,6 +6,7 @@ import type {
   HeartbeatEventRef,
 } from '../../src/heartbeat/types.js';
 import { sendRequest } from '../srcAgent/index.js';
+import { buildPlanningSessionHandler, type PlanningSessionBindingInput } from './planning-session.js';
 
 const service = HeartbeatService.getInstance();
 
@@ -83,6 +84,52 @@ export async function bind(
   await ensureInitialized();
   return service.bind(eventRef, handler, options);
 }
+
+export async function bindPlanningSession(
+  eventRef: HeartbeatEventRef,
+  input: PlanningSessionBindingInput,
+) {
+  if (!input || typeof input !== 'object') {
+    throw new Error('heartbeat.bindPlanningSession requires an input object.');
+  }
+  const decisionId = String(input.decisionId || '').trim();
+  const instruction = String(input.instruction || '').trim();
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(decisionId)) {
+    throw new Error('heartbeat.bindPlanningSession requires a valid decisionId.');
+  }
+  if (!instruction) throw new Error('heartbeat.bindPlanningSession requires an instruction.');
+  const temporary = input.temporary !== false;
+  await ensureInitialized();
+  const binding = await service.bind(
+    eventRef,
+    buildPlanningSessionHandler(decisionId, instruction, temporary),
+    {
+      ...(input.id ? { id: input.id } : {}),
+      metadata: {
+        ...(input.metadata || {}),
+        kind: 'telos-planning-session',
+        decisionId,
+        invokesAgent: 'Telos',
+        temporary,
+      },
+    },
+  );
+  const verified = await service.getBinding(binding.id, { ownerAgent: binding.ownerAgent });
+  if (!verified) throw new Error(`Planning-session binding "${binding.id}" could not be verified.`);
+  return {
+    binding: verified,
+    verification: {
+      invokesAgent: 'Telos',
+      decisionId,
+      temporary,
+      verified: true,
+    },
+  };
+}
+
+export const __internals = {
+  buildPlanningSessionHandler,
+};
 
 export const bindings = {
   list: async (query?: HeartbeatBindingQuery) => {

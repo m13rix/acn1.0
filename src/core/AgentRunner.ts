@@ -13,7 +13,7 @@ import { AgentLoader } from '../loaders/AgentLoader.js';
 import { ToolLoader } from '../loaders/ToolLoader.js';
 import { Session } from './Session.js';
 import { Executor, type ExecutorCallbacks } from './Executor.js';
-import { resolveTextAgentRuntime } from './SessionFactory.js';
+import { loadAgentTools, resolveTextAgentRuntime } from './SessionFactory.js';
 import { runWithAgentContext } from './AgentContext.js';
 import { getGlobalDisplay } from './GlobalDisplay.js';
 import { StreamDisplay, COLORS, SYMBOLS, getLineContinuation } from '../cli/display.js';
@@ -390,13 +390,7 @@ export async function runAgent(options: RunAgentOptions): Promise<string> {
     let runtime = resolveTextAgentRuntime(agentForSession);
 
     // Load tools (same logic as chat.ts)
-    let toolNames = [...(agentForSession.config.tools || [])];
-    if (!toolNames.includes('files')) toolNames.push('files');
-    if (agentForSession.config.memory?.enabled !== false && !toolNames.includes('memory')) {
-        toolNames.push('memory');
-    }
-
-    const tools = await toolLoader.loadByNames(toolNames);
+    const tools = await loadAgentTools(agentForSession, toolLoader);
 
     // ── 4. Create session with SHARED sandbox ──────────────────────────
 
@@ -519,6 +513,7 @@ export async function runAgent(options: RunAgentOptions): Promise<string> {
                 await onSessionSnapshot(snapshot, agentForSession);
             }
         },
+        signal,
         requireFinish: process.env.TELOS_CHAT_ID === 'HEARTBEAT_ROUTE'
             ? (agentForSession.config.requireFinishHeartbeat ?? agentForSession.config.requireFinish)
             : agentForSession.config.requireFinish,

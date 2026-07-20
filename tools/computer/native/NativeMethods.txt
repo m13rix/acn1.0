@@ -1,0 +1,12 @@
+IUIAutomation
+CUIAutomation8
+IUIAutomationElement
+IUIAutomationCondition
+IUIAutomationTreeWalker
+IUIAutomationCacheRequest
+IUIAutomationInvokePattern
+IUIAutomationTogglePattern
+IUIAutomationSelectionItemPattern
+IUIAutomationExpandCollapsePattern
+IUIAutomationValuePattern
+IUIAutomationScrollPattern

@@ -24,6 +24,7 @@ tools:
   - srcAgent
   - sdamgia
   - utils
+  - mediaGen
 
 memory:
   enabled: true

@@ -6,9 +6,9 @@ description: |
     Captures a screenshot of a system monitor on the local machine.
     Example: `await utils.screenshot("./monitor0.png");`
 
-  - `utils.llm(prompt: string, schema: ZodSchema | JsonSchema, imagePath?: string): Promise<any>`
-    Calls a small LLM for structured JSON output.
-    `schema` is a plain JSON schema object.
+  - `utils.llm(prompt: string, schema?: ZodSchema | JsonSchema | { schema: ZodSchema | JsonSchema }, imagePath?: string): Promise<any>`
+    Calls a small LLM. With a schema, returns structured JSON output; without a schema, returns concise text.
+    `schema` is a plain JSON schema object and can be passed directly or as `{ schema }`.
     If `imagePath` is provided, the image is sent to the vision-capable model as extra context.
     Example:
     `const result = await utils.llm("Extract fields", { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"], additionalProperties: false }, "./screen.png");`

@@ -48,12 +48,13 @@ export async function extractPdfTextByPageRange(
   startPage: number,
   endPage: number
 ): Promise<string> {
-  const loadingTask = pdfjsLib.getDocument({
+  const documentInit = {
     data: toUint8Array(pdfBytes),
     useWorkerFetch: false,
     isEvalSupported: false,
     useSystemFonts: true,
-  });
+  } as Parameters<typeof pdfjsLib.getDocument>[0] & { isEvalSupported?: boolean };
+  const loadingTask = pdfjsLib.getDocument(documentInit);
   const pdf = await loadingTask.promise;
   const maxPage = pdf.numPages;
   const safeStart = Math.max(1, Math.min(maxPage, Math.floor(startPage)));

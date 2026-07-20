@@ -11,7 +11,7 @@ import {
   type MemoryDebugLogger,
   type MemoryDebugTrace,
 } from './debug.js';
-import { extractSentencePhrases, flattenPhraseSet, mergePhraseSets, type PhraseType } from './phrases.js';
+import { extractSentencePhrases, flattenPhraseSet, mergePhraseSets, type ExtractedPhraseSet, type PhraseType } from './phrases.js';
 import { generateAutoLinks, generateProceduralLinks } from './linker.js';
 import { normalizeMemoryText, weightQueryPhrases } from './mercury.js';
 import {
@@ -26,6 +26,7 @@ import {
 } from './search.js';
 import { analyzeWithStanza, type StanzaTextAnnotation } from './stanzaRuntime.js';
 import { MemoryStore } from './store.js';
+import { FastMemoryIndex } from './FastMemoryIndex.js';
 import type {
   CandidateSelectionOptions,
   DeleteCategoryResult,
@@ -46,6 +47,7 @@ import type {
   SeedFactScore,
 } from './types.js';
 import { DEFAULT_MEMORY_CONFIG } from './types.js';
+import { assertMemoryIngestAllowed } from './ingestGuard.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const MEMORY_DATA_DIR = join(__dirname, '..', '..', 'data', 'memory');
@@ -191,6 +193,9 @@ function parseJson<T>(raw: unknown, fallback: T): T {
 
 function resolveConfig(input?: Partial<MemoryRuntimeConfig>): MemoryRuntimeConfig {
   const cfg = input ?? {};
+  const embeddingProvider = cfg.embeddingProvider === 'google' || cfg.embeddingProvider === 'openrouter' || cfg.embeddingProvider === 'ollama'
+    ? cfg.embeddingProvider
+    : DEFAULT_MEMORY_CONFIG.embeddingProvider;
   const mercuryProvider = typeof cfg.mercuryProvider === 'string' && cfg.mercuryProvider.trim()
     ? cfg.mercuryProvider.trim()
     : typeof cfg.linkerProvider === 'string' && cfg.linkerProvider.trim()
@@ -224,6 +229,7 @@ function resolveConfig(input?: Partial<MemoryRuntimeConfig>): MemoryRuntimeConfi
     mercuryModel,
     mercuryTemperature,
     mercuryMaxTokens,
+    embeddingProvider,
     embeddingModel: typeof cfg.embeddingModel === 'string' && cfg.embeddingModel.trim()
       ? cfg.embeddingModel.trim()
       : DEFAULT_MEMORY_CONFIG.embeddingModel,
@@ -276,6 +282,75 @@ function normalizeWeightRowsFromScores(
       weight,
     };
   });
+}
+
+const QUERY_PHRASE_LIMIT = Math.max(8, Number(process.env.MEMORY_QUERY_PHRASE_LIMIT || 16) || 16);
+const QUERY_PHRASE_STOP_WORDS = new Set([
+  'a', 'an', 'and', 'are', 'as', 'at', 'be', 'been', 'being', 'but', 'by', 'for', 'from',
+  'had', 'has', 'have', 'he', 'her', 'hers', 'him', 'his', 'i', 'in', 'is', 'it', 'its',
+  'me', 'my', 'of', 'on', 'or', 'our', 'ours', 'she', 'that', 'the', 'their', 'theirs',
+  'them', 'they', 'this', 'those', 'to', 'us', 'was', 'we', 'were', 'what', 'which', 'who',
+  'will', 'with', 'you', 'your', 'yours',
+]);
+
+function limitQueryPhraseCandidates(candidates: QueryPhraseCandidate[]): QueryPhraseCandidate[] {
+  if (candidates.length <= QUERY_PHRASE_LIMIT) return candidates;
+  const ranked = candidates.map((phrase, index) => {
+    const tokens = phrase.text.toLocaleLowerCase().match(/[\p{L}\p{N}][\p{L}\p{N}_+.#/-]*/gu) || [];
+    const contentTokens = tokens.filter((token) => !QUERY_PHRASE_STOP_WORDS.has(token));
+    const uniqueContent = new Set(contentTokens).size;
+    const overlongPenalty = Math.max(0, tokens.length - 8) * 1.5;
+    const typeBonus = phrase.type === 'np' ? 0.4 : phrase.type === 'vp' ? 0.25 : 0.1;
+    const specificityBonus = /[A-Z0-9_+.#/-]/.test(phrase.text) ? 0.5 : 0;
+    return {
+      phrase,
+      index,
+      score: uniqueContent * 2 + Math.min(1, phrase.text.length / 48) + typeBonus + specificityBonus - overlongPenalty,
+    };
+  });
+  return ranked
+    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .slice(0, QUERY_PHRASE_LIMIT)
+    .sort((a, b) => a.index - b.index)
+    .map((item) => item.phrase);
+}
+
+const FAST_QUERY_ANALYSIS_WORDS = Math.max(40, Number(process.env.MEMORY_FAST_QUERY_ANALYSIS_WORDS || 80) || 80);
+const FAST_QUERY_LEADING_WORDS = new Set([
+  ...QUERY_PHRASE_STOP_WORDS,
+  'also', 'avoid', 'build', 'check', 'compare', 'create', 'design', 'diagnose', 'ensure', 'evaluate',
+  'examine', 'expose', 'improve', 'include', 'keep', 'maintain', 'measure', 'optimize', 'prevent',
+  'preserve', 'retrieve', 'search', 'show', 'support', 'test', 'use',
+]);
+
+function extractFastQueryPhrases(text: string): ExtractedPhraseSet {
+  const phrases: ExtractedPhraseSet = { np: [], vp: [], adjp: [] };
+  const seen = new Set<string>();
+  const clauses = text
+    .split(/[,;:\n]+|(?<=[.!?])\s+|\s+(?:and|or|while|without)\s+/iu)
+    .map((clause) => clause.replace(/[()\[\]{}"'`]/g, ' ').replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+  for (const clause of clauses) {
+    const words = clause.match(/[\p{L}\p{N}][\p{L}\p{N}_+.#/-]*/gu) || [];
+    while (words.length > 1 && FAST_QUERY_LEADING_WORDS.has(words[0]!.toLocaleLowerCase())) words.shift();
+    if (words.length === 0) continue;
+    const slices = words.length <= 8 ? [words] : [words.slice(0, 8), words.slice(-8)];
+    for (const slice of slices) {
+      const phrase = slice.join(' ').trim();
+      if (!phrase || QUERY_PHRASE_STOP_WORDS.has(phrase.toLocaleLowerCase())) continue;
+      const lower = phrase.toLocaleLowerCase();
+      const type: PhraseType = /\b(?:should|must|need|needs|can|could|retrieve|search|compare|show|avoid|prevent|preserve|optimize|measure|support|include)\b/iu.test(lower)
+        ? 'vp'
+        : /\b(?:fast|slow|relevant|irrelevant|stale|exact|semantic|automatic|persistent|local|remote)\b/iu.test(lower) && slice.length <= 4
+          ? 'adjp'
+          : 'np';
+      const key = `${type}\u0000${lower}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      phrases[type].push(phrase);
+    }
+  }
+  return phrases;
 }
 
 function phraseTextsForType(draft: MemoryItemDraft, type: PhraseType): string[] {
@@ -364,7 +439,10 @@ async function readLegacyNamespace(namespace: string): Promise<{ facts: LegacyFa
 export class MemoryService {
   private readonly config: MemoryRuntimeConfig;
   private readonly store: MemoryStore;
+  private readonly fastIndex: FastMemoryIndex;
   private initialized = false;
+  private fastSearchEnabled = false;
+  private fullIndexLoaded = false;
 
   private facts: FactRecord[] = [];
   private hints: RetrievalHintRecord[] = [];
@@ -375,6 +453,7 @@ export class MemoryService {
   constructor(config?: Partial<MemoryRuntimeConfig>) {
     this.config = resolveConfig(config);
     this.store = new MemoryStore(this.config.table);
+    this.fastIndex = new FastMemoryIndex(this.config.table);
   }
 
   getRuntimeConfig(): MemoryRuntimeConfig {
@@ -384,26 +463,40 @@ export class MemoryService {
   async initialize(): Promise<void> {
     if (this.initialized) return;
     await this.store.initialize();
-    await this.reloadIndex();
+    this.fastSearchEnabled = await this.fastIndex.open();
+    if (this.fastSearchEnabled) {
+      [this.facts, this.links] = await Promise.all([
+        this.fastIndex.loadFacts(),
+        this.fastIndex.loadLinkMetadata(),
+      ]);
+      this.hints = [];
+      this.rebuildLoadedIndex();
+    } else {
+      await this.reloadIndex();
+    }
     this.initialized = true;
   }
 
   async getAllFacts(): Promise<FactRecord[]> {
     await this.initialize();
+    await this.ensureFullIndex();
     return this.facts;
   }
 
   async getAllHints(): Promise<RetrievalHintRecord[]> {
     await this.initialize();
+    await this.ensureFullIndex();
     return this.hints;
   }
 
   async getAllLinks(): Promise<LinkRecord[]> {
     await this.initialize();
+    await this.ensureFullIndex();
     return this.links;
   }
 
   async ingestText(input: IngestTextInput, debugTrace?: MemoryDebugTrace): Promise<IngestTextResult> {
+    assertMemoryIngestAllowed();
     await this.initialize();
     const { trace: localDebug, log: debug } = resolveDebugTrace(debugTrace, 'ingestText');
 
@@ -505,6 +598,7 @@ export class MemoryService {
       await this.store.addFacts(factRecords);
       await this.store.addHints(hintRecords);
       await this.store.addLinks(linkRecords);
+      if (this.fastSearchEnabled) await this.fastIndex.append(factRecords, hintRecords, linkRecords);
       debug('memory.ingest.store_write', 'Persisted facts, hints, and links.', {
         durationMs: Date.now() - writeStarted,
         factCount: factRecords.length,
@@ -534,6 +628,7 @@ export class MemoryService {
 
   async search(query: string, options: SearchOptions = {}, debugTrace?: MemoryDebugTrace): Promise<SearchResult> {
     await this.initialize();
+    const searchStartedAt = Date.now();
     const { trace: localDebug, log: debug } = resolveDebugTrace(debugTrace, 'search');
     const cleanQuery = ensureNonEmptyString(query, 'query');
     const normalizedAgentName = normalizeCategory(options.agentName);
@@ -589,14 +684,26 @@ export class MemoryService {
       };
     }
 
-    const queryAnalysis = await analyzeWithStanza(cleanQuery, undefined, debug);
-    const sentencePhraseSets = queryAnalysis.sentences.map((sentence) =>
-      extractSentencePhrases(sentence, queryAnalysis.parserMode)
-    );
-    const mergedPhrases = mergePhraseSets(sentencePhraseSets);
-    const phraseCandidates: QueryPhraseCandidate[] = flattenPhraseSet(mergedPhrases);
+    const queryAnalysisStartedAt = Date.now();
+    const useFastQueryAnalysis = cleanQuery.split(/\s+/u).filter(Boolean).length >= FAST_QUERY_ANALYSIS_WORDS;
+    const fastPhraseSet = useFastQueryAnalysis ? extractFastQueryPhrases(cleanQuery) : null;
+    const queryAnalysis: StanzaTextAnnotation = useFastQueryAnalysis
+      ? {
+        language: /[\u0400-\u04ff]/u.test(cleanQuery) ? 'ru' : 'en',
+        parserMode: 'ud',
+        sentences: [{ sentenceIndex: 0, text: cleanQuery, constituency: null, dependencies: [] }],
+      }
+      : await analyzeWithStanza(cleanQuery, undefined, debug);
+    const queryAnalysisMs = Date.now() - queryAnalysisStartedAt;
+    const sentencePhraseSets = fastPhraseSet
+      ? [fastPhraseSet]
+      : queryAnalysis.sentences.map((sentence) => extractSentencePhrases(sentence, queryAnalysis.parserMode));
+    const mergedPhrases = fastPhraseSet || mergePhraseSets(sentencePhraseSets);
+    const rawPhraseCandidates: QueryPhraseCandidate[] = flattenPhraseSet(mergedPhrases);
+    const phraseCandidates = limitQueryPhraseCandidates(rawPhraseCandidates);
     debug('memory.search.query_phrases', 'Extracted raw query phrases.', {
       parserMode: queryAnalysis.parserMode,
+      fastQueryAnalysis: useFastQueryAnalysis,
       language: queryAnalysis.language,
       sentences: queryAnalysis.sentences.map((sentence, index) => ({
         sentenceIndex: index,
@@ -604,6 +711,8 @@ export class MemoryService {
         phrases: sentencePhraseSets[index],
       })),
       mergedPhrases,
+      rawPhraseCandidateCount: rawPhraseCandidates.length,
+      phraseCandidateLimit: QUERY_PHRASE_LIMIT,
       phraseCandidates,
     });
     const phraseWeightingMode: QueryPhraseWeightingMode =
@@ -612,21 +721,47 @@ export class MemoryService {
         : options.queryPhraseWeightingMode === 'llm'
           ? 'llm'
           : this.config.searchDefaultPhraseWeightingMode;
-    let queryGlobalEmbedding: number[] | null = null;
-    let queryPhraseEmbeddingsForCandidates: number[][] | null = null;
+    const queryEmbeddingStarted = Date.now();
+    let phraseWeightingMs = 0;
+    let queryEmbeddingMs = 0;
+    let queryGlobalEmbedding: number[];
+    let queryPhraseEmbeddingsForCandidates: number[][];
     let weightedPhrases: Array<{ phrase: string; weight: number }>;
+    const embedQueryAndPhrases = async (): Promise<{ global: number[]; phrases: number[][] }> => {
+      const canReuseStoredPhrases = this.fastSearchEnabled
+        && this.config.embeddingProvider === 'openrouter'
+        && this.config.embeddingModel === 'qwen/qwen3-embedding-8b';
+      const stored = canReuseStoredPhrases
+        ? await this.fastIndex.lookupPhraseEmbeddings(phraseCandidates)
+        : new Map<string, number[]>();
+      const missing = phraseCandidates.filter((phrase) => !stored.has(`${phrase.type}\u0000${phrase.text.trim().toLowerCase()}`));
+      const remote = await embedBatch([cleanQuery, ...missing.map((phrase) => phrase.text)], this.config.embeddingModel, {
+        provider: this.config.embeddingProvider,
+        debug,
+        label: 'query.phrases_parallel',
+      });
+      const remoteByKey = new Map(missing.map((phrase, index) => [
+        `${phrase.type}\u0000${phrase.text.trim().toLowerCase()}`,
+        remote[index + 1] || [],
+      ]));
+      return {
+        global: remote[0] || [],
+        phrases: phraseCandidates.map((phrase) => {
+          const key = `${phrase.type}\u0000${phrase.text.trim().toLowerCase()}`;
+          return stored.get(key) || remoteByKey.get(key) || [];
+        }),
+      };
+    };
     if (phraseWeightingMode === 'embedding') {
       const embeddingWeightStarted = Date.now();
-      queryGlobalEmbedding = await embedText(cleanQuery, this.config.embeddingModel, debug, 'query.global');
-      queryPhraseEmbeddingsForCandidates = phraseCandidates.length > 0
-        ? await embedBatch(phraseCandidates.map((phrase) => phrase.text), this.config.embeddingModel, {
-          debug,
-          label: 'query.phrase_weighting',
-        })
-        : [];
+      const vectors = await embedQueryAndPhrases();
+      queryEmbeddingMs = Date.now() - embeddingWeightStarted;
+      phraseWeightingMs = queryEmbeddingMs;
+      queryGlobalEmbedding = vectors.global;
+      queryPhraseEmbeddingsForCandidates = vectors.phrases;
       weightedPhrases = normalizeWeightRowsFromScores(
         phraseCandidates,
-        queryPhraseEmbeddingsForCandidates.map((embedding) => cosineSimilarity(queryGlobalEmbedding!, embedding)),
+        queryPhraseEmbeddingsForCandidates.map((embedding) => cosineSimilarity(queryGlobalEmbedding, embedding)),
       );
       debug('memory.search.embedding_weighted_phrases', 'Weighted query phrases with embedding similarity.', {
         durationMs: Date.now() - embeddingWeightStarted,
@@ -634,7 +769,24 @@ export class MemoryService {
         weightedPhrases,
       });
     } else {
-      weightedPhrases = await weightQueryPhrases(cleanQuery, phraseCandidates, this.config, debug);
+      const [weights, vectors] = await Promise.all([
+        (async () => {
+          const started = Date.now();
+          try { return await weightQueryPhrases(cleanQuery, phraseCandidates, this.config, debug); }
+          finally { phraseWeightingMs = Date.now() - started; }
+        })(),
+        (async () => {
+          const started = Date.now();
+          try {
+            return await embedQueryAndPhrases();
+          } finally {
+            queryEmbeddingMs = Date.now() - started;
+          }
+        })(),
+      ]);
+      weightedPhrases = weights;
+      queryGlobalEmbedding = vectors.global;
+      queryPhraseEmbeddingsForCandidates = vectors.phrases;
     }
     const weightedQueryPhrases = weightedPhrases.map((item) => {
       const match = phraseCandidates.find(phrase => phrase.text === item.phrase);
@@ -649,16 +801,11 @@ export class MemoryService {
       weightedQueryPhrases,
     });
 
-    const queryEmbeddingStarted = Date.now();
-    queryGlobalEmbedding ??= await embedText(cleanQuery, this.config.embeddingModel, debug, 'query.global');
-    const queryPhraseEmbeddings = weightedQueryPhrases.length > 0
-      ? queryPhraseEmbeddingsForCandidates && weightedQueryPhrases.length === phraseCandidates.length
-        ? queryPhraseEmbeddingsForCandidates
-        : await embedBatch(weightedQueryPhrases.map((phrase) => phrase.text), this.config.embeddingModel, {
-        debug,
-        label: 'query.phrases',
-      })
-      : [];
+    const phraseVectorByKey = new Map(phraseCandidates.map((phrase, index) => [
+      `${phrase.type}\u0000${phrase.text}`,
+      queryPhraseEmbeddingsForCandidates[index] || [],
+    ]));
+    const queryPhraseEmbeddings = weightedQueryPhrases.map((phrase) => phraseVectorByKey.get(`${phrase.type}\u0000${phrase.text}`) || []);
     debug('memory.search.embeddings', 'Generated query embeddings.', {
       durationMs: Date.now() - queryEmbeddingStarted,
       globalDimensions: queryGlobalEmbedding.length,
@@ -672,10 +819,29 @@ export class MemoryService {
         embedding: queryPhraseEmbeddings[index] ?? [],
       })),
     };
+    const queryPreparationMs = Date.now() - queryEmbeddingStarted;
 
     const phraseAggregationMode: PhraseAggregationMode = options.phraseAggregationMode ?? this.config.searchDefaultAggregationMode;
     const overallEmbeddingWeight = options.overallEmbeddingWeight ?? this.config.overallEmbeddingWeight;
-    const seedScores = scoreSeedFacts(visibleIndexedFacts, queryVectors, phraseAggregationMode, overallEmbeddingWeight, options.categoryMultipliers);
+    options.onQueryPrepared?.({
+      queryPhrases: weightedQueryPhrases,
+      phraseAggregationMode,
+      overallEmbeddingWeight,
+      embeddingModel: this.config.embeddingModel,
+      globalEmbedding: queryGlobalEmbedding,
+      phraseEmbeddings: queryPhraseEmbeddings,
+    });
+    const candidateScoringStartedAt = Date.now();
+    const seedScores = this.fastSearchEnabled
+      ? await this.fastIndex.score(queryVectors, phraseAggregationMode, overallEmbeddingWeight, {
+        allowedCategories,
+        includeUncategorized,
+        fallbackCategory,
+        excludedFactIds,
+        categoryMultipliers: options.categoryMultipliers,
+      })
+      : scoreSeedFacts(visibleIndexedFacts, queryVectors, phraseAggregationMode, overallEmbeddingWeight, options.categoryMultipliers);
+    const candidateScoringMs = Date.now() - candidateScoringStartedAt;
     const candidateSelection = resolveCandidateSelection(this.config, options);
     const autoSelectionAnalysis = candidateSelection.mode === 'auto'
       ? analyzeAutoCandidateSelection(seedScores, candidateSelection)
@@ -709,17 +875,22 @@ export class MemoryService {
       rescuedSeedFacts,
       selectedSeedFacts: seedFacts,
     });
-    const chainResults = searchGraphChains(
-      queryGlobalEmbedding,
-      visibleFacts,
-      visibleLinks,
-      seedFacts,
-      {
+    const graphConfig = {
         maxDepth: resolveInt(options.maxDepth, this.config.searchMaxDepth),
         maxChains: resolveInt(options.maxChains, this.config.searchMaxChains),
         beamWidth: resolveInt(options.beamWidth, this.config.searchBeamWidth),
-      },
-    );
+      };
+    const graphSearchStartedAt = Date.now();
+    const chainResults = this.fastSearchEnabled
+      ? await this.fastIndex.searchGraph(queryGlobalEmbedding, visibleFacts, seedFacts, {
+        allowedCategories,
+        includeUncategorized,
+        fallbackCategory,
+        excludedFactIds,
+        categoryMultipliers: options.categoryMultipliers,
+      }, graphConfig)
+      : searchGraphChains(queryGlobalEmbedding, visibleFacts, visibleLinks, seedFacts, graphConfig);
+    const graphSearchMs = Date.now() - graphSearchStartedAt;
     debug('memory.search.chains', 'Expanded graph chains from seed facts.', {
       chainCount: chainResults.length,
       chains: chainResults,
@@ -738,6 +909,15 @@ export class MemoryService {
       phraseAggregationMode,
       candidateSelection: resolvedCandidateSelection,
       overallEmbeddingWeight,
+      timings: {
+        queryAnalysisMs,
+        queryPreparationMs,
+        phraseWeightingMs,
+        queryEmbeddingMs,
+        candidateScoringMs,
+        graphSearchMs,
+        totalMs: Date.now() - searchStartedAt,
+      },
     };
   }
 
@@ -745,6 +925,7 @@ export class MemoryService {
     await this.initialize();
     const deletedFactIds = await this.store.deleteFactsBySourceId(sourceId);
     if (deletedFactIds.length > 0) {
+      if (this.fastSearchEnabled) await this.fastIndex.deleteFactIds(deletedFactIds);
       this.pruneLoadedRecords(deletedFactIds);
     }
     return deletedFactIds;
@@ -759,12 +940,14 @@ export class MemoryService {
 
     const result = await this.store.deleteCategory(normalizedCategory);
     if (result.factCount > 0 || result.hintCount > 0 || result.linkCount > 0) {
+      if (this.fastSearchEnabled) await this.fastIndex.deleteFactIds(result.factIds);
       this.pruneLoadedRecords(result.factIds, normalizedCategory);
     }
     return result;
   }
 
   async migrateLegacyNamespace(sourceNamespace = 'global_memory', debugTrace?: MemoryDebugTrace): Promise<IngestTextResult> {
+    assertMemoryIngestAllowed();
     await this.initialize();
     const { trace: localDebug, log: debug } = resolveDebugTrace(debugTrace, 'migrateLegacyNamespace');
     debug('memory.migrate.start', 'Starting legacy namespace migration.', {
@@ -815,6 +998,7 @@ export class MemoryService {
 
     const relationEmbeddings = legacy.links.length > 0
       ? await embedBatch(legacy.links.map(link => link.relation), this.config.embeddingModel, {
+          provider: this.config.embeddingProvider,
         debug,
         label: 'migration.link_relations',
       })
@@ -841,6 +1025,7 @@ export class MemoryService {
     const writeStarted = Date.now();
     await this.store.addFacts(factRecords);
     await this.store.addLinks(linkRecords);
+    if (this.fastSearchEnabled) await this.fastIndex.append(factRecords, [], linkRecords);
     debug('memory.migrate.store_write', 'Persisted migrated facts and links.', {
       durationMs: Date.now() - writeStarted,
       factCount: factRecords.length,
@@ -881,6 +1066,12 @@ export class MemoryService {
     this.hints = hints;
     this.links = links;
     this.rebuildLoadedIndex();
+    this.fullIndexLoaded = true;
+  }
+
+  private async ensureFullIndex(): Promise<void> {
+    if (this.fullIndexLoaded) return;
+    await this.reloadIndex();
   }
 
   private rebuildLoadedIndex(): void {
@@ -1037,6 +1228,7 @@ export class MemoryService {
 
     const started = Date.now();
     const globalEmbeddings = await embedBatch(drafts.map((draft) => draft.text), this.config.embeddingModel, {
+      provider: this.config.embeddingProvider,
       debug,
       label: `${label}.global`,
     });
@@ -1057,14 +1249,17 @@ export class MemoryService {
 
     const perTypeEmbeddings: Record<PhraseType, number[][]> = {
       np: perTypeRequests.np.length > 0 ? await embedBatch(perTypeRequests.np.map(item => item.text), this.config.embeddingModel, {
+        provider: this.config.embeddingProvider,
         debug,
         label: `${label}.np`,
       }) : [],
       vp: perTypeRequests.vp.length > 0 ? await embedBatch(perTypeRequests.vp.map(item => item.text), this.config.embeddingModel, {
+        provider: this.config.embeddingProvider,
         debug,
         label: `${label}.vp`,
       }) : [],
       adjp: perTypeRequests.adjp.length > 0 ? await embedBatch(perTypeRequests.adjp.map(item => item.text), this.config.embeddingModel, {
+        provider: this.config.embeddingProvider,
         debug,
         label: `${label}.adjp`,
       }) : [],
@@ -1420,25 +1615,32 @@ export class MemoryService {
   private collectLinkCandidateFacts(newFacts: FactRecord[], category: string | null): FactRecord[] {
     if (this.facts.length === 0) return [];
     const allowedCategories = category ? new Set([category]) : new Set<string>();
-    const candidateFacts = this.facts.filter((fact) => isRecordVisibleToCategories(fact.exclusiveToAgentName, allowedCategories, true));
+    const newFactIds = new Set(newFacts.map((fact) => fact.id));
+    const candidateFactsById = new Map(
+      this.facts
+        .filter((fact) => !newFactIds.has(fact.id))
+        .filter((fact) => isRecordVisibleToCategories(fact.exclusiveToAgentName, allowedCategories, true))
+        .map((fact) => [fact.id, fact]),
+    );
+    const candidateFacts = Array.from(candidateFactsById.values());
     if (candidateFacts.length === 0) return [];
 
-    const bestScoreByFactId = new Map<string, number>();
+    const candidatesById = new Map<string, FactRecord>();
     for (const newFact of newFacts) {
-      for (const existingFact of candidateFacts) {
-        const similarity = cosineSimilarity(newFact.globalEmbedding, existingFact.globalEmbedding);
-        const previous = bestScoreByFactId.get(existingFact.id);
-        if (previous === undefined || similarity > previous) {
-          bestScoreByFactId.set(existingFact.id, similarity);
-        }
+      const nearestFacts = candidateFacts
+        .map((fact) => ({
+          fact,
+          similarity: cosineSimilarity(newFact.globalEmbedding, fact.globalEmbedding),
+        }))
+        .sort((a, b) => b.similarity - a.similarity)
+        .slice(0, this.config.linkCandidatePoolMax);
+
+      for (const { fact } of nearestFacts) {
+        candidatesById.set(fact.id, fact);
       }
     }
 
-    return Array.from(bestScoreByFactId.entries())
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, this.config.linkCandidatePoolMax)
-      .map(([factId]) => candidateFacts.find(fact => fact.id === factId))
-      .filter((fact): fact is FactRecord => Boolean(fact));
+    return Array.from(candidatesById.values());
   }
 
   private async materializeLinks(
@@ -1450,6 +1652,7 @@ export class MemoryService {
     if (suggestions.length === 0) return [];
 
     const relationEmbeddings = await embedBatch(suggestions.map(link => link.relation), this.config.embeddingModel, {
+      provider: this.config.embeddingProvider,
       debug,
       label: 'materialize_links.relations',
     });
@@ -1483,7 +1686,7 @@ export class MemoryService {
     }
 
     const relation = 'semantic-near-duplicate';
-    const relationEmbedding = await embedText(relation, this.config.embeddingModel, debug, 'semantic_merge.relation');
+    const relationEmbedding = await embedText(relation, this.config.embeddingModel, debug, 'semantic_merge.relation', this.config.embeddingProvider);
     const links: LinkRecord[] = [];
     const now = Date.now();
 

@@ -1,0 +1,82 @@
+name: decision
+description: |
+  Persistent decision workspace for root Telos. It is a flexible notepad, not a workflow engine.
+
+  Workspaces preserve a world model, deliberation controls, an arbitrary-depth abstraction tree,
+  execution state, temporal state, and learning across invocations. Sibling nodes are horizontal
+  branches; child nodes may descend only when a parent resolution creates a lower decision.
+
+  Core API:
+  - `await decision.create(input)`
+    Creates a workspace and its root node. Required: `{ title, root: { purpose } }`.
+    Optional workspace fields include `trigger`, `modes`, `userWaiting`, `timeSensitivity`,
+    `constitutionalDomains`, `observationChannels`, `capabilityMapStatus`, and `metadata`.
+    Optional root fields include `label`, `horizon`, `successCondition`, `invariants`, and `values`.
+  - `await decision.list(options?)`
+    Returns compact summaries. Options: `{ status?: "active" | "resolved" | "archived" }`.
+  - `await decision.get(decisionId)`
+    Returns the complete workspace.
+  - `await decision.summary(decisionId)`
+    Returns a compact context-efficient view of the tree and unresolved state.
+  - `await decision.trace(decisionId)`
+    Returns the compact developer trace: mode, active node, parent constraint, world-model
+    categories, deliberation control, resolution, children, delegations, and reconsideration.
+  - `await decision.finish(decisionId, { outcome })`
+    Resolves the workspace. Refuses to finish with unresolved nodes or expected future evidence
+    that has no real trigger/planning session/verified heartbeat binding.
+  - `await decision.patch(decisionId, patch)`
+    Deep-merges workspace fields. Arrays in a patch replace existing arrays; use `append` to add.
+  - `await decision.append(decisionId, path, entries)`
+    Appends strings or structured entries to a workspace collection. Supported paths:
+    `world.observations`, `world.retrievedClaims`, `world.inferences`, `world.hypotheses`,
+    `world.unknowns`, `world.modelUncertainty`, `deliberation.robustActions`,
+    `deliberation.informationRequests`, `execution.executorJobs`, `execution.userFacingJobs`,
+    `execution.implementationSteps`, `execution.approvedSideEffects`, `execution.progress`, `execution.verification`,
+    `execution.rollback`, `temporal.notes`, `temporal.heartbeatBindings`,
+    `temporal.futureTriggers`, `temporal.planningSessions`, `temporal.expectedEvidence`,
+    `learning.predictedOutcomes`, `learning.observedOutcomes`,
+    `learning.causalInterpretations`, `learning.confidenceUpdates`, `learning.memoryChanges`.
+
+  Tree API:
+  - `await decision.nodes.add(decisionId, input)`
+    Adds a node. Required: `{ parentId, purpose }`. Optional: `label`, `parentConstraint`,
+    `horizon`, `successCondition`, `invariants`, `values`, `evidence`, `uncertainty`,
+    `transformations`, `options`, `evaluatedPlans`, and `metadata`. The parent must already be
+    resolved; its selected direction becomes the default parent constraint.
+  - `await decision.nodes.focus(decisionId, nodeId)`
+    Marks the active abstraction node used by structured trace and request preparation.
+  - `await decision.nodes.patch(decisionId, nodeId, patch)`
+    Deep-merges node fields. Identity and parent are immutable.
+  - `await decision.nodes.append(decisionId, nodeId, field, entries)`
+    Appends to `invariants`, `values`, `evidence`, `uncertainty`, `transformations`, `options`,
+    or `evaluatedPlans`.
+  - `await decision.nodes.addOptions(decisionId, nodeId, options)`
+    Convenience alias for appending atomic options. Generate before evaluating or combining.
+  - `await decision.nodes.resolve(decisionId, nodeId, resolution)`
+    Resolution requires `{ direction, rationale }`; it may include `strongestAlternative`,
+    `reconsiderWhen`, `confidence`, and other useful evidence.
+  - `await decision.nodes.reopen(decisionId, nodeId, { reason, removeDescendants? })`
+    Reopens a resolved node when new evidence invalidates it. Dependent children must be removed
+    explicitly because a changed parent resolution invalidates their decision spaces.
+  - `await decision.nodes.remove(decisionId, nodeId, { recursive?: boolean }?)`
+    Removes a non-root node. Nodes with children require `recursive: true`.
+
+  Entries may be plain strings or structured objects. Structured uncertainty can include
+  `plausibleStates`, `evidence`, `probabilityRange`, `modelConfidence`, `actionSensitivity`,
+  `resolutionCost`, and `treatment`. Structured options can include `kind`, `source`, and notes.
+
+  Delegation contract API:
+  - `await decision.requests.userFacing(decisionId, input)`
+    Primary input is only `{ userMessage, systemMessage, nodeId? }`: the user's verbatim message and
+    one natural prose instruction that explains the grounded context, intended human outcome, hard
+    factual boundaries, and meaningful uncertainty. `nodeId` defaults to the active node.
+    The older structured fields remain accepted for compatibility, but none of their arrays are
+    required. For a trivial non-persistent interaction, call `decision.requests.userFacing(input)`
+    without a decision id. It returns the trusted marker payload without creating a workspace.
+  - `await decision.requests.complete(decisionId, requestId, { status, summary, evidence? })`
+    Records completed, delivered, or failed status for a prepared user-facing request.
+
+  Executor delegation uses the existing primitive directly: `await agents.run("Executor", prompt)`.
+  If its prompt or result deserves persistence, append a compact entry to `execution.executorJobs`.
+
+module: index.ts

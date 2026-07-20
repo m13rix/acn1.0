@@ -1,88 +1,157 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
+import { lookup as lookupMime } from 'mime-types';
 import { structuredLlm } from '../../../../src/utils/structuredLlm.js';
 import type { HeartbeatSensorEvent, SensorAskInput } from '../../../../src/heartbeat/types.js';
-import { KeepAuthStore, type KeepAuthProfile } from '../../../../src/memory_notes/auth-store.js';
-import { bridgeProfileFromAuth, runBridge } from '../../../../src/memory_notes/bridge.js';
+import { ContentMemoryService } from '../../../../src/content_memory/service.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(__dirname, '..', '..', '..', '..');
 const DATA_DIR = path.join(ROOT_DIR, 'data', 'heartbeat');
-const NOTES_DATA_DIR = path.join(ROOT_DIR, 'data', 'memory-notes');
-const POLL_INTERVAL_MS = 60000;
-const RECENT_LIMIT = 10;
-const STABLE_DELAY_MS = 10000;
+const STATE_PATH = path.join(DATA_DIR, 'notes-sensor-state.json');
+const POLL_INTERVAL_MS = 60_000;
+const NOTE_STABLE_DELAY_MS = 5 * 60_000;
 
-interface KeepNoteSummary {
-  id: string;
-  title: string;
-  logicalTitle: string;
-  rawTitle: string;
-  kind: 'note' | 'list';
-  owner: 'system' | 'owner' | 'user';
-  archived: boolean;
-  trashed: boolean;
-  pinned: boolean;
-  createdAt?: string | null;
-  updatedAt?: string | null;
-  preview: string;
-}
+type PendingKind = 'newNote' | 'noteUpdated';
 
-interface KeepListItem {
-  id: string;
-  text: string;
-  checked: boolean;
-  sort?: number | null;
-}
-
-interface KeepNoteDetail extends KeepNoteSummary {
-  text: string;
-  items?: KeepListItem[];
-}
-
-interface NoteFingerprint {
-  modifiedAt: string | null;
+export interface NoteFingerprint {
+  modifiedAtMs: number;
+  size: number;
   contentHash: string;
 }
 
-interface PendingTrigger {
-  noteId: string;
-  title: string;
-  kind: KeepNoteDetail['kind'];
-  owner: KeepNoteDetail['owner'];
-  text: string;
-  items: KeepListItem[];
-  createdAt: string | null;
-  modifiedAt: string | null;
+interface FileSnapshot {
+  id: string;
+  name: string;
+  relativePath: string;
+  path: string;
+  extension: string;
+  mimeType: string;
+  isMarkdown: boolean;
+  createdAt: string;
+  modifiedAt: string;
+  birthtimeMs: number;
+  mtimeMs: number;
+  size: number;
+  contentHash: string;
+}
+
+interface PersistedFileState {
   fingerprint: NoteFingerprint;
+  isMarkdown: boolean;
+}
+
+interface NotesSensorState {
+  version: 1;
+  vaultPath: string;
+  initializedAt: string;
+  knownFiles: Record<string, PersistedFileState>;
+}
+
+interface PendingNoteTrigger {
+  kind: PendingKind;
+  snapshot: FileSnapshot;
   timeoutId: NodeJS.Timeout;
 }
 
 let intervalId: NodeJS.Timeout | null = null;
 let emitFn: ((event: Omit<HeartbeatSensorEvent, 'sensor'>) => void) | null = null;
-let latestNoteSnapshot: Record<string, unknown> | null = null;
-let baselineProfileId: string | null = null;
+let latestSnapshot: Record<string, unknown> | null = null;
 let pollInFlight = false;
+let state: NotesSensorState | null = null;
+let sensorStartedAtMs = 0;
 
-const knownNoteStates: Map<string, NoteFingerprint> = new Map();
-const pendingTriggers: Map<string, PendingTrigger> = new Map();
-const authStore = new KeepAuthStore(NOTES_DATA_DIR);
+const knownFileStates: Map<string, PersistedFileState> = new Map();
+const pendingNoteTriggers: Map<string, PendingNoteTrigger> = new Map();
 
-function hashContent(text: string): string {
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
+function notesPath(): string {
+  return ContentMemoryService.notesPath();
+}
+
+function normalizeRelativePath(filePath: string, vaultPath = notesPath()): string {
+  return path.relative(vaultPath, filePath).replace(/\\/g, '/');
+}
+
+function isTechnicalPath(relativePath: string): boolean {
+  const parts = relativePath.split(/[\\/]+/).map((part) => part.toLowerCase());
+  const normalized = parts.join('/');
+  return parts.some((part) =>
+    part === '.obsidian'
+    || part === '.git'
+    || part === 'node_modules'
+    || part === '.trash'
+    || part === '.stfolder'
+    || part === '.stversions'
+    || part.endsWith('.tmp')
+    || part.endsWith('.crdownload')
+  )
+    || normalized.startsWith('data/tool-output/')
+    || normalized.startsWith('data/adaptive-step-context/')
+    || /^exec_\d+\.cts$/i.test(parts.at(-1) || '')
+    || /^action-observation-/i.test(parts.at(-1) || '');
+}
+
+function isMarkdownPath(filePath: string): boolean {
+  return path.extname(filePath).toLowerCase() === '.md';
+}
+
+function hashContent(text: string | Buffer): string {
+  const input = Buffer.isBuffer(text) ? text.toString('binary') : text;
   let hash = 0;
-  for (let i = 0; i < text.length; i++) {
-    const chr = text.charCodeAt(i);
-    hash = ((hash << 5) - hash) + chr;
+  for (let i = 0; i < input.length; i++) {
+    hash = ((hash << 5) - hash) + input.charCodeAt(i);
     hash |= 0;
   }
   return hash.toString(36);
 }
 
-function describeNote(note: Pick<KeepNoteSummary, 'title' | 'id' | 'kind' | 'owner'>): string {
-  const title = typeof note.title === 'string' && note.title.trim() ? note.title.trim() : '(untitled)';
-  const suffix = typeof note.id === 'string' && note.id ? ` [${note.id}]` : '';
-  return `${title}${suffix} <${note.kind}/${note.owner}>`;
+function getMimeType(filePath: string): string {
+  return String(lookupMime(filePath) || 'application/octet-stream');
+}
+
+function fingerprintFromSnapshot(snapshot: FileSnapshot): NoteFingerprint {
+  return {
+    modifiedAtMs: snapshot.mtimeMs,
+    size: snapshot.size,
+    contentHash: snapshot.contentHash,
+  };
+}
+
+function fingerprintsEqual(left?: NoteFingerprint, right?: NoteFingerprint): boolean {
+  return Boolean(left
+    && right
+    && left.modifiedAtMs === right.modifiedAtMs
+    && left.size === right.size
+    && left.contentHash === right.contentHash);
+}
+
+function hasMeaningfulContentChange(previous: NoteFingerprint | undefined, next: NoteFingerprint): boolean {
+  return !previous || previous.contentHash !== next.contentHash || previous.size !== next.size;
+}
+
+function isPreexistingAtStartup(snapshot: FileSnapshot, startedAtMs: number): boolean {
+  if (!startedAtMs) {
+    return false;
+  }
+  const graceMs = 2_000;
+  return snapshot.birthtimeMs < startedAtMs - graceMs && snapshot.mtimeMs < startedAtMs - graceMs;
+}
+
+function classifyNotePage(page: { title?: string; id?: string }, text: string): { emit: boolean; reason: string } {
+  if (!text.trim()) {
+    return { emit: false, reason: 'empty text after note normalization' };
+  }
+
+  if (text.length < 5 && ((page.title || '').includes('Untitled') || !(page.title || '').trim())) {
+    return { emit: false, reason: 'short untitled placeholder note' };
+  }
+
+  return { emit: true, reason: 'note contains enough content' };
 }
 
 function formatLogValue(value: unknown): string {
@@ -113,8 +182,8 @@ function extractPromptField(prompt: string, label: string): string {
 }
 
 function fallbackHomeworkClassification(prompt: string): { shouldHandle: boolean; reason: string } | null {
-  const title = extractPromptField(prompt, 'Название заметки');
-  const text = extractPromptField(prompt, 'Текст заметки');
+  const title = extractPromptField(prompt, 'Название заметки') || extractPromptField(prompt, 'Note name');
+  const text = extractPromptField(prompt, 'Текст заметки') || extractPromptField(prompt, 'Note contents');
   const corpus = `${title}\n${text}\n${prompt}`.toLowerCase();
 
   const strongSignals = [
@@ -136,249 +205,247 @@ function fallbackHomeworkClassification(prompt: string): { shouldHandle: boolean
   ];
 
   const signalCount = strongSignals.reduce((count, pattern) => count + (pattern.test(corpus) ? 1 : 0), 0);
-  if (signalCount >= 2) {
-    return {
+  return signalCount >= 2
+    ? {
       shouldHandle: true,
       reason: 'Fallback notes heuristic matched multiple school/homework signals in the note text.',
+    }
+    : {
+      shouldHandle: false,
+      reason: 'Fallback notes heuristic did not find enough school/homework signals in the note text.',
     };
+}
+
+async function readState(vaultPath: string): Promise<NotesSensorState | null> {
+  try {
+    const raw = await fs.promises.readFile(STATE_PATH, 'utf8');
+    const parsed = JSON.parse(raw) as Partial<NotesSensorState>;
+    if (parsed.version !== 1 || parsed.vaultPath !== vaultPath || !parsed.knownFiles) {
+      return null;
+    }
+    return {
+      version: 1,
+      vaultPath,
+      initializedAt: parsed.initializedAt || nowIso(),
+      knownFiles: parsed.knownFiles,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function persistState(): Promise<void> {
+  if (!state) return;
+  await fs.promises.mkdir(DATA_DIR, { recursive: true });
+  await fs.promises.writeFile(STATE_PATH, JSON.stringify({
+    ...state,
+    knownFiles: Object.fromEntries(knownFileStates),
+  }, null, 2) + '\n', 'utf8');
+}
+
+async function readMarkdown(filePath: string): Promise<string> {
+  return fs.promises.readFile(filePath, 'utf8');
+}
+
+async function snapshotFile(filePath: string, vaultPath = notesPath()): Promise<FileSnapshot | null> {
+  const relativePath = normalizeRelativePath(filePath, vaultPath);
+  if (!relativePath || relativePath.startsWith('..') || path.isAbsolute(relativePath) || isTechnicalPath(relativePath)) {
+    return null;
   }
 
+  const info = await fs.promises.stat(filePath).catch(() => null);
+  if (!info?.isFile()) {
+    return null;
+  }
+
+  const isMarkdown = isMarkdownPath(filePath);
+  const content = isMarkdown
+    ? await readMarkdown(filePath).catch(() => '')
+    : await fs.promises.readFile(filePath).catch(() => Buffer.alloc(0));
+  const extension = path.extname(filePath).toLowerCase();
+
   return {
-    shouldHandle: false,
-    reason: 'Fallback notes heuristic did not find enough school/homework signals in the note text.',
+    id: relativePath,
+    name: path.basename(filePath),
+    relativePath,
+    path: filePath,
+    extension,
+    mimeType: isMarkdown ? 'text/markdown' : getMimeType(filePath),
+    isMarkdown,
+    createdAt: info.birthtime.toISOString(),
+    modifiedAt: info.mtime.toISOString(),
+    birthtimeMs: info.birthtimeMs,
+    mtimeMs: info.mtimeMs,
+    size: info.size,
+    contentHash: hashContent(content),
   };
 }
 
-function noteText(detail: KeepNoteDetail): string {
-  if (detail.kind === 'list') {
-    return (detail.items || [])
-      .map(item => `${item.checked ? '[x]' : '[ ]'} ${item.text}`)
-      .join('\n')
-      .trim();
-  }
-  return String(detail.text || '').trim();
-}
+async function scanVault(vaultPath = notesPath()): Promise<FileSnapshot[]> {
+  const out: FileSnapshot[] = [];
 
-function shouldIgnoreSystemNote(note: Pick<KeepNoteSummary, 'owner'>): boolean {
-  return note.owner === 'system';
-}
-
-function noteModifiedAt(note: Pick<KeepNoteSummary, 'updatedAt' | 'createdAt'>): string | null {
-  return note.updatedAt || note.createdAt || null;
-}
-
-function buildNoteFingerprint(detail: KeepNoteDetail, text: string): NoteFingerprint {
-  return {
-    modifiedAt: noteModifiedAt(detail),
-    contentHash: hashContent(text),
-  };
-}
-
-function hasFingerprintChanged(previous: NoteFingerprint | undefined, next: NoteFingerprint): boolean {
-  return !previous
-    || previous.modifiedAt !== next.modifiedAt
-    || previous.contentHash !== next.contentHash;
-}
-
-function hasMeaningfulContentChange(previous: NoteFingerprint | undefined, next: NoteFingerprint): boolean {
-  return !previous || previous.contentHash !== next.contentHash;
-}
-
-export function classifyNotePage(page: { title?: string; id?: string }, text: string): { emit: boolean; reason: string } {
-  if (!text.trim()) {
-    return { emit: false, reason: 'empty text after note normalization' };
+  async function walk(dir: string): Promise<void> {
+    const entries = await fs.promises.readdir(dir, { withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
+      const absolute = path.join(dir, entry.name);
+      const relative = normalizeRelativePath(absolute, vaultPath);
+      if (isTechnicalPath(relative)) continue;
+      if (entry.isDirectory()) {
+        await walk(absolute);
+      } else if (entry.isFile()) {
+        const snapshot = await snapshotFile(absolute, vaultPath);
+        if (snapshot) out.push(snapshot);
+      }
+    }
   }
 
-  if (text.length < 5 && ((page.title || '').includes('Untitled') || !(page.title || '').trim())) {
-    return { emit: false, reason: 'short untitled placeholder note' };
-  }
-
-  return { emit: true, reason: 'note contains enough content' };
+  await walk(vaultPath);
+  return out;
 }
 
-async function getActiveProfile(): Promise<KeepAuthProfile | null> {
-  return (await authStore.getActiveProfile()) || null;
-}
-
-async function runKeepBridge<T>(profile: KeepAuthProfile, action: string, input?: Record<string, unknown>): Promise<T> {
-  const statePath = authStore.getStatePath(profile.id);
-  return runBridge<T>({
-    action,
-    profile: bridgeProfileFromAuth(profile, statePath),
-    input,
-  });
-}
-
-async function getLatestNotes(profile: KeepAuthProfile, limit: number): Promise<KeepNoteSummary[]> {
-  return runKeepBridge<KeepNoteSummary[]>(profile, 'list_notes', {
-    limit,
-    trashed: false,
-  });
-}
-
-async function getNoteDetail(profile: KeepAuthProfile, noteId: string): Promise<KeepNoteDetail> {
-  return runKeepBridge<KeepNoteDetail>(profile, 'get_note', { note: noteId });
-}
-
-function clearPendingTrigger(noteId: string): void {
-  const pending = pendingTriggers.get(noteId);
-  if (!pending) {
-    return;
-  }
+function clearPendingTrigger(id: string): void {
+  const pending = pendingNoteTriggers.get(id);
+  if (!pending) return;
   clearTimeout(pending.timeoutId);
-  pendingTriggers.delete(noteId);
+  pendingNoteTriggers.delete(id);
 }
 
 function clearAllPendingTriggers(): void {
-  for (const noteId of pendingTriggers.keys()) {
-    clearPendingTrigger(noteId);
+  for (const id of pendingNoteTriggers.keys()) {
+    clearPendingTrigger(id);
   }
 }
 
-function buildLatestSnapshot(detail: KeepNoteDetail, text: string): Record<string, unknown> {
+function buildNotePayload(snapshot: FileSnapshot, contents: string): Record<string, unknown> {
   return {
-    id: detail.id,
-    title: detail.title,
-    logicalTitle: detail.logicalTitle,
-    rawTitle: detail.rawTitle,
-    owner: detail.owner,
-    kind: detail.kind,
-    text,
-    items: detail.items || [],
-    createdAt: detail.createdAt || null,
-    modifiedAt: detail.updatedAt || null,
+    id: snapshot.id,
+    name: snapshot.name,
+    title: path.basename(snapshot.name, snapshot.extension),
+    path: snapshot.path,
+    relativePath: snapshot.relativePath,
+    contents,
+    createdAt: snapshot.createdAt,
+    modifiedAt: snapshot.modifiedAt,
   };
 }
 
-async function refreshBaseline(profile: KeepAuthProfile): Promise<void> {
-  clearAllPendingTriggers();
-  knownNoteStates.clear();
-  baselineProfileId = profile.id;
-
-  const latestNotes = await getLatestNotes(profile, RECENT_LIMIT);
-  if (latestNotes.length > 0) {
-    for (const note of latestNotes) {
-      try {
-        const detail = await getNoteDetail(profile, note.id);
-        const text = noteText(detail);
-        knownNoteStates.set(note.id, buildNoteFingerprint(detail, text));
-      } catch {
-        // Ignore baseline hydration failures.
-      }
-    }
-    console.log(`[Notes Sensor] Baseline initialized from ${latestNotes.length} recent Google Keep note(s). Existing notes are now tracked and will emit only after a later user edit settles.`);
-  } else {
-    console.log('[Notes Sensor] No recent Google Keep notes found. Sensor is ready for the next user-authored change.');
-  }
+function buildAttachmentPayload(snapshot: FileSnapshot): Record<string, unknown> {
+  return {
+    id: snapshot.id,
+    name: snapshot.name,
+    path: snapshot.path,
+    relativePath: snapshot.relativePath,
+    mimeType: snapshot.mimeType,
+    createdAt: snapshot.createdAt,
+    modifiedAt: snapshot.modifiedAt,
+    size: snapshot.size,
+  };
 }
 
-function schedulePendingTrigger(detail: KeepNoteDetail, text: string, fingerprint: NoteFingerprint): void {
-  const existing = pendingTriggers.get(detail.id);
-  if (existing) {
-    clearTimeout(existing.timeoutId);
+function scheduleNoteTrigger(kind: PendingKind, snapshot: FileSnapshot): boolean {
+  const existing = pendingNoteTriggers.get(snapshot.id);
+  if (existing && fingerprintsEqual(fingerprintFromSnapshot(existing.snapshot), fingerprintFromSnapshot(snapshot))) {
+    return false;
   }
+  if (existing) clearTimeout(existing.timeoutId);
 
   const timeoutId = setTimeout(() => {
-    void settlePendingTrigger(detail.id);
-  }, STABLE_DELAY_MS);
+    void settlePendingNote(snapshot.id);
+  }, NOTE_STABLE_DELAY_MS);
+  timeoutId.unref?.();
 
-  pendingTriggers.set(detail.id, {
-    noteId: detail.id,
-    title: detail.title,
-    kind: detail.kind,
-    owner: detail.owner,
-    text,
-    items: detail.items || [],
-    createdAt: detail.createdAt || null,
-    modifiedAt: detail.updatedAt || null,
-    fingerprint,
+  pendingNoteTriggers.set(snapshot.id, {
+    kind: existing?.kind || kind,
+    snapshot,
     timeoutId,
   });
 
-  const logAction = existing ? 'Reset stability wait for' : 'Queued stability wait for';
-  console.log(`[Notes Sensor] ${logAction} ${describeNote(detail)} (${Math.floor(STABLE_DELAY_MS / 1000)}s retriggerable delay).`);
+  console.log(`[Notes Sensor] Queued ${existing ? 'updated' : kind} debounce for ${snapshot.relativePath} (${Math.floor(NOTE_STABLE_DELAY_MS / 1000)}s).`);
+  return true;
 }
 
-async function settlePendingTrigger(noteId: string): Promise<void> {
-  const pending = pendingTriggers.get(noteId);
-  if (!pending) {
+async function settlePendingNote(id: string): Promise<void> {
+  const pending = pendingNoteTriggers.get(id);
+  if (!pending || !emitFn) return;
+
+  const snapshot = await snapshotFile(pending.snapshot.path).catch(() => null);
+  if (!snapshot || !snapshot.isMarkdown) {
+    clearPendingTrigger(id);
     return;
   }
 
-  try {
-    const profile = await getActiveProfile();
-    if (!profile || profile.id !== baselineProfileId) {
-      clearPendingTrigger(noteId);
-      return;
-    }
-
-    const detail = await getNoteDetail(profile, noteId);
-    const text = noteText(detail);
-    const fingerprint = buildNoteFingerprint(detail, text);
-
-    if (shouldIgnoreSystemNote(detail)) {
-      knownNoteStates.set(detail.id, fingerprint);
-      clearPendingTrigger(noteId);
-      console.log(`[Notes Sensor] Skipping ${describeNote(detail)} after stability wait: system-owned note.`);
-      return;
-    }
-
-    const classification = classifyNotePage({ title: detail.title, id: detail.id }, text);
-    if (!classification.emit) {
-      knownNoteStates.set(detail.id, fingerprint);
-      clearPendingTrigger(noteId);
-      console.log(`[Notes Sensor] Skipping ${describeNote(detail)} after stability wait: ${classification.reason}.`);
-      return;
-    }
-
-    if (hasMeaningfulContentChange(pending.fingerprint, fingerprint)) {
-      console.log(`[Notes Sensor] ${describeNote(detail)} changed again during stability wait; extending delay.`);
-      schedulePendingTrigger(detail, text, fingerprint);
-      return;
-    }
-
-    const previous = knownNoteStates.get(detail.id);
-    if (!hasMeaningfulContentChange(previous, fingerprint)) {
-      knownNoteStates.set(detail.id, fingerprint);
-      clearPendingTrigger(noteId);
-      return;
-    }
-
-    latestNoteSnapshot = buildLatestSnapshot(detail, text);
-    knownNoteStates.set(detail.id, fingerprint);
-    clearPendingTrigger(noteId);
-
-    console.log(`[Notes Sensor] Emitting newNote for ${describeNote(detail)} after stable content confirmation.`);
-
-    emitFn?.({
-      event: 'newNote',
-      args: [],
-      payload: latestNoteSnapshot,
-      occurredAt: detail.updatedAt || detail.createdAt || new Date().toISOString(),
-    });
-  } catch (error: any) {
-    clearPendingTrigger(noteId);
-    console.error('[Notes Sensor] Error settling pending note:', error?.message || error);
+  const pendingFingerprint = fingerprintFromSnapshot(pending.snapshot);
+  const currentFingerprint = fingerprintFromSnapshot(snapshot);
+  if (!fingerprintsEqual(pendingFingerprint, currentFingerprint)) {
+      scheduleNoteTrigger(pending.kind, snapshot);
+    return;
   }
+
+  const contents = await readMarkdown(snapshot.path).catch(() => '');
+  const classification = classifyNotePage({ title: snapshot.name, id: snapshot.id }, contents);
+  knownFileStates.set(snapshot.id, {
+    fingerprint: currentFingerprint,
+    isMarkdown: true,
+  });
+  clearPendingTrigger(id);
+  await persistState();
+
+  if (!classification.emit) {
+    console.log(`[Notes Sensor] Skipping ${snapshot.relativePath} after debounce: ${classification.reason}.`);
+    return;
+  }
+
+  latestSnapshot = buildNotePayload(snapshot, contents);
+  emitFn({
+    event: pending.kind,
+    args: [],
+    payload: latestSnapshot,
+    occurredAt: snapshot.modifiedAt || snapshot.createdAt || nowIso(),
+  });
+  console.log(`[Notes Sensor] Emitted ${pending.kind} for ${snapshot.relativePath}.`);
+}
+
+async function initializeBaseline(vaultPath: string): Promise<void> {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  const persisted = await readState(vaultPath);
+  if (persisted) {
+    state = persisted;
+    knownFileStates.clear();
+    for (const [id, fileState] of Object.entries(persisted.knownFiles)) {
+      knownFileStates.set(id, fileState);
+    }
+    console.log(`[Notes Sensor] Loaded Obsidian baseline with ${knownFileStates.size} tracked file(s).`);
+    return;
+  }
+
+  const files = await scanVault(vaultPath);
+  knownFileStates.clear();
+  for (const file of files) {
+    knownFileStates.set(file.id, {
+      fingerprint: fingerprintFromSnapshot(file),
+      isMarkdown: file.isMarkdown,
+    });
+  }
+  state = {
+    version: 1,
+    vaultPath,
+    initializedAt: nowIso(),
+    knownFiles: Object.fromEntries(knownFileStates),
+  };
+  await persistState();
+  console.log(`[Notes Sensor] Baseline initialized from ${files.length} existing Obsidian vault file(s). Existing files will not emit until changed.`);
 }
 
 export async function start(emit: (event: Omit<HeartbeatSensorEvent, 'sensor'>) => void) {
   emitFn = emit;
-
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-  }
+  sensorStartedAtMs = Date.now();
+  const vaultPath = notesPath();
 
   try {
-    console.log('[Notes Sensor] Starting Google Keep polling sensor.');
-    const profile = await getActiveProfile();
-    if (!profile) {
-      console.warn('[Notes Sensor] Google Keep is not authenticated yet. Sensor will keep polling and wait for a saved profile.');
-    } else {
-      await refreshBaseline(profile);
-    }
-
-    intervalId = setInterval(checkNewNotes, POLL_INTERVAL_MS);
+    console.log(`[Notes Sensor] Starting Obsidian vault polling sensor: ${vaultPath}`);
+    await initializeBaseline(vaultPath);
+    intervalId = setInterval(checkNotesDirectory, POLL_INTERVAL_MS);
+    intervalId.unref?.();
     console.log(`[Notes Sensor] Poll interval armed for every ${Math.floor(POLL_INTERVAL_MS / 1000)} seconds.`);
   } catch (error) {
     console.error('[Notes Sensor] Failed to start:', error);
@@ -391,18 +458,19 @@ export async function stop() {
   }
   intervalId = null;
   emitFn = null;
-  latestNoteSnapshot = null;
-  baselineProfileId = null;
+  latestSnapshot = null;
   pollInFlight = false;
+  state = null;
+  sensorStartedAtMs = 0;
   clearAllPendingTriggers();
-  knownNoteStates.clear();
+  knownFileStates.clear();
 }
 
 export async function getContext(): Promise<string> {
-  if (!latestNoteSnapshot) {
-    return 'No recent Google Keep note snapshot is available.';
+  if (!latestSnapshot) {
+    return 'No recent Obsidian notes sensor snapshot is available.';
   }
-  return JSON.stringify(latestNoteSnapshot, null, 2);
+  return JSON.stringify(latestSnapshot, null, 2);
 }
 
 export async function ask(input: SensorAskInput): Promise<unknown> {
@@ -413,9 +481,9 @@ export async function ask(input: SensorAskInput): Promise<unknown> {
 
   try {
     const result = await structuredLlm([
-      'You are answering questions about the most recent Google Keep note observed by the heartbeat notes sensor.',
+      'You are answering questions about the most recent Obsidian notes event observed by the heartbeat notes sensor.',
       '',
-      'Latest note snapshot:',
+      'Latest note or attachment snapshot:',
       context,
       '',
       'User request:',
@@ -437,90 +505,108 @@ export async function ask(input: SensorAskInput): Promise<unknown> {
   }
 }
 
-async function checkNewNotes() {
+async function checkNotesDirectory() {
   if (!emitFn || pollInFlight) {
     return;
   }
 
   pollInFlight = true;
-
   try {
-    const profile = await getActiveProfile();
-    if (!profile) {
+    const vaultPath = notesPath();
+    if (!state || state.vaultPath !== vaultPath) {
+      await initializeBaseline(vaultPath);
       return;
     }
 
-    if (baselineProfileId !== profile.id) {
-      await refreshBaseline(profile);
-      return;
-    }
-
-    const latestNotes = await getLatestNotes(profile, RECENT_LIMIT);
+    const files = await scanVault(vaultPath);
+    const seen = new Set<string>();
     let queuedCount = 0;
+    let attachmentCount = 0;
+    let baselinedCount = 0;
 
-    for (const note of latestNotes) {
-      const known = knownNoteStates.get(note.id);
-      const summaryModifiedAt = noteModifiedAt(note);
-      if (known && known.modifiedAt === summaryModifiedAt && !pendingTriggers.has(note.id)) {
+    for (const file of files) {
+      seen.add(file.id);
+      const nextFingerprint = fingerprintFromSnapshot(file);
+      const previous = knownFileStates.get(file.id);
+
+      if (!previous) {
+        if (isPreexistingAtStartup(file, sensorStartedAtMs)) {
+          knownFileStates.set(file.id, { fingerprint: nextFingerprint, isMarkdown: file.isMarkdown });
+          baselinedCount += 1;
+          continue;
+        }
+
+        if (file.isMarkdown) {
+          if (scheduleNoteTrigger('newNote', file)) {
+            queuedCount += 1;
+          }
+        } else {
+          knownFileStates.set(file.id, { fingerprint: nextFingerprint, isMarkdown: false });
+          latestSnapshot = buildAttachmentPayload(file);
+          emitFn({
+            event: 'newAttachment',
+            args: [],
+            payload: latestSnapshot,
+            occurredAt: file.createdAt || nowIso(),
+          });
+          attachmentCount += 1;
+        }
         continue;
       }
 
-      const detail = await getNoteDetail(profile, note.id);
-      const text = noteText(detail);
-      const fingerprint = buildNoteFingerprint(detail, text);
-      const previous = knownNoteStates.get(detail.id);
-
-      if (!hasMeaningfulContentChange(previous, fingerprint)) {
-        knownNoteStates.set(detail.id, fingerprint);
-        clearPendingTrigger(detail.id);
-        continue;
+      if (file.isMarkdown && hasMeaningfulContentChange(previous.fingerprint, nextFingerprint)) {
+        if (scheduleNoteTrigger('noteUpdated', file)) {
+          queuedCount += 1;
+        }
+      } else if (!file.isMarkdown && hasMeaningfulContentChange(previous.fingerprint, nextFingerprint)) {
+        knownFileStates.set(file.id, { fingerprint: nextFingerprint, isMarkdown: false });
       }
-
-      if (shouldIgnoreSystemNote(detail)) {
-        knownNoteStates.set(detail.id, fingerprint);
-        clearPendingTrigger(detail.id);
-        console.log(`[Notes Sensor] Skipping ${describeNote(detail)}: system-owned note.`);
-        continue;
-      }
-
-      const classification = classifyNotePage({ title: detail.title, id: detail.id }, text);
-      if (!classification.emit) {
-        knownNoteStates.set(detail.id, fingerprint);
-        clearPendingTrigger(detail.id);
-        console.log(`[Notes Sensor] Skipping ${describeNote(detail)}: ${classification.reason}.`);
-        continue;
-      }
-
-      schedulePendingTrigger(detail, text, fingerprint);
-      queuedCount += 1;
     }
 
-    if (queuedCount > 0 || pendingTriggers.size > 0) {
-      console.log(`[Notes Sensor] Poll complete: ${latestNotes.length} note(s) scanned, ${queuedCount} note(s) queued/refreshed for stable-trigger confirmation, ${pendingTriggers.size} note(s) currently waiting.`);
+    for (const id of Array.from(knownFileStates.keys())) {
+      if (!seen.has(id)) {
+        knownFileStates.delete(id);
+        clearPendingTrigger(id);
+      }
+    }
+
+    await persistState();
+
+    if (queuedCount > 0 || attachmentCount > 0 || baselinedCount > 0 || pendingNoteTriggers.size > 0) {
+      console.log(`[Notes Sensor] Poll complete: ${files.length} file(s) scanned, ${queuedCount} note debounce(s), ${attachmentCount} attachment event(s), ${baselinedCount} pre-existing file(s) baselined, ${pendingNoteTriggers.size} note(s) waiting.`);
     }
   } catch (error: any) {
-    console.error('[Notes Sensor] Error checking notes:', error.message || error);
+    console.error('[Notes Sensor] Error checking Obsidian notes:', error.message || error);
   } finally {
     pollInFlight = false;
   }
 }
 
 export const __internals = {
-  buildNoteFingerprint,
+  buildAttachmentPayload,
+  buildNotePayload,
+  classifyNotePage,
   fallbackHomeworkClassification,
-  hasFingerprintChanged,
+  fingerprintFromSnapshot,
+  fingerprintsEqual,
   hasMeaningfulContentChange,
-  noteModifiedAt,
-  schemaHasBooleanAndReasonFields,
-  noteText,
-  shouldIgnoreSystemNote,
+  hashContent,
+  isPreexistingAtStartup,
+  isMarkdownPath,
+  isTechnicalPath,
+  normalizeRelativePath,
 };
 
 export {
-  buildNoteFingerprint,
-  hasFingerprintChanged,
+  buildAttachmentPayload,
+  buildNotePayload,
+  classifyNotePage,
+  fingerprintFromSnapshot,
+  fingerprintsEqual,
   hasMeaningfulContentChange,
-  noteModifiedAt,
-  noteText,
-  shouldIgnoreSystemNote,
+  hashContent,
+  isPreexistingAtStartup,
+  isMarkdownPath,
+  isTechnicalPath,
+  normalizeRelativePath,
 };

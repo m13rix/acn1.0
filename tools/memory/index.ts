@@ -6,6 +6,7 @@ import {
   type IngestTextInput,
   type MemoryRuntimeConfig,
 } from '../../src/memory_system/index.js';
+import { resolveProjectMemoryCategory } from '../../src/memory_system/projectCategory.js';
 import {
   list,
   find,
@@ -24,6 +25,12 @@ import {
   type NoteDetail,
   type NoteSummary,
 } from '../../src/memory_notes/index.js';
+import { getContentMemoryService, ContentMemoryService, type ContentSearchOptions } from '../../src/content_memory/service.js';
+import { CombinedMemoryHintsService, type CombinedHintsOptions } from '../../src/combined_memory_hints/service.js';
+import { AgentLoader } from '../../src/loaders/AgentLoader.js';
+import { ToolLoader } from '../../src/loaders/ToolLoader.js';
+import { getEffectiveMemoryCategories } from '../../src/core/memoryToolDocs.js';
+import { RealtimeAdvisorStore } from '../../src/interfaces/realtime-advisor/store.js';
 
 interface MemorySearchOptions {
   mode?: 'auto' | 'top-k';
@@ -31,20 +38,31 @@ interface MemorySearchOptions {
   phraseWeighting?: 'llm' | 'embedding';
 }
 
+interface MemorySearchInput extends MemorySearchOptions {
+  query?: string;
+  text?: string;
+}
+
+interface NotesSearchOptions extends ContentSearchOptions {}
+
 interface MemoryAddOptions {
-  retrievalHints?: string[];
+  retrievalHints?: string[] | string;
+  agentExclusive?: boolean;
+  projectExclusive?: boolean;
+  /** @deprecated Use agentExclusive instead. */
   exclusive?: boolean;
+}
+
+interface MemoryAddInput extends MemoryAddOptions {
+  text?: string;
+  content?: string;
+  topics?: string[];
 }
 
 interface MemorySideChannelPayload {
   searches?: Array<{
     factIds: string[];
     text: string;
-  }>;
-  noteEvents?: Array<{
-    action: 'upsert' | 'remove';
-    noteId: string;
-    sourceLabel?: string;
   }>;
 }
 
@@ -82,6 +100,13 @@ function readConfigFromEnv(): Partial<MemoryRuntimeConfig> & {
     mercuryModel: process.env.MEMORY_MERCURY_MODEL,
     mercuryTemperature: parseNumber('MEMORY_MERCURY_TEMPERATURE'),
     mercuryMaxTokens: parseNumber('MEMORY_MERCURY_MAX_TOKENS'),
+    embeddingProvider: process.env.MEMORY_EMBEDDING_PROVIDER === 'openrouter'
+      ? 'openrouter'
+      : process.env.MEMORY_EMBEDDING_PROVIDER === 'google'
+        ? 'google'
+        : process.env.MEMORY_EMBEDDING_PROVIDER === 'ollama'
+          ? 'ollama'
+          : undefined,
     embeddingModel: process.env.MEMORY_EMBEDDING_MODEL,
     linkCandidatePoolMax: parseNumber('MEMORY_LINK_CANDIDATE_POOL_MAX'),
     maxAutoLinksPerFact: parseNumber('MEMORY_MAX_AUTO_LINKS_PER_FACT'),
@@ -135,7 +160,6 @@ async function appendSideChannel(update: MemorySideChannelPayload): Promise<void
 
   const next: MemorySideChannelPayload = {
     searches: [...(current.searches || []), ...(update.searches || [])],
-    noteEvents: [...(current.noteEvents || []), ...(update.noteEvents || [])],
   };
 
   await mkdir(path.dirname(sideChannelPath), { recursive: true });
@@ -189,6 +213,23 @@ function parseIncludeUncategorizedFromEnv(): boolean | undefined {
   return undefined;
 }
 
+function resolveMemoryAddCategory(options?: MemoryAddOptions): string | null {
+  const agentExclusive = Boolean(options?.agentExclusive || options?.exclusive);
+  const projectExclusive = Boolean(options?.projectExclusive);
+  if (agentExclusive && projectExclusive) {
+    throw new Error('memory.add options cannot set both agentExclusive and projectExclusive.');
+  }
+  if (projectExclusive) {
+    const category = process.env.TELOS_MEMORY_PROJECT_CATEGORY
+      || resolveProjectMemoryCategory(true);
+    if (!category) {
+      throw new Error('memory.add({ projectExclusive: true }) could not resolve a project memory category.');
+    }
+    return category;
+  }
+  return agentExclusive ? (process.env.TELOS_AGENT_NAME || null) : null;
+}
+
 function resolveCandidateSelection(options?: MemorySearchOptions): CandidateSelectionOptions {
   const count = typeof options?.count === 'number' && Number.isFinite(options.count)
     ? Math.max(1, Math.floor(options.count))
@@ -196,14 +237,6 @@ function resolveCandidateSelection(options?: MemorySearchOptions): CandidateSele
   return options?.mode === 'top-k'
     ? { mode: 'top-k', topK: count }
     : { mode: 'auto', maxCandidates: count, topK: count };
-}
-
-function noteEventActionFromDetail(detail: NoteSummary | NoteDetail, kind: 'upsert' | 'remove'): MemorySideChannelPayload['noteEvents'][number] {
-  return {
-    action: kind,
-    noteId: detail.id,
-    sourceLabel: detail.logicalTitle || detail.title,
-  };
 }
 
 class MemoryNoteHandle {
@@ -253,61 +286,51 @@ class MemoryNoteHandle {
 
   async put(text: string): Promise<MemoryNoteHandle> {
     const detail = await put({ note: this.id, title: this.logicalTitle || this.title, text });
-    await appendSideChannel({ noteEvents: [noteEventActionFromDetail(detail, 'upsert')] });
     return MemoryNoteHandle.from(detail);
   }
 
   async append(text: string): Promise<MemoryNoteHandle> {
     const detail = await append({ note: this.id, text });
-    await appendSideChannel({ noteEvents: [noteEventActionFromDetail(detail, 'upsert')] });
     return MemoryNoteHandle.from(detail);
   }
 
   async patch(searchText: string, replace: string): Promise<MemoryNoteHandle> {
     const detail = await patch({ note: this.id, search: searchText, replace });
-    await appendSideChannel({ noteEvents: [noteEventActionFromDetail(detail, 'upsert')] });
     return MemoryNoteHandle.from(detail);
   }
 
   async remove(): Promise<MemoryNoteHandle> {
     const detail = await remove(this.id);
-    await appendSideChannel({ noteEvents: [noteEventActionFromDetail(detail, 'remove')] });
     return MemoryNoteHandle.from(detail);
   }
 
   async archive(archived = true): Promise<MemoryNoteHandle> {
     const detail = await archive(this.id, archived);
-    await appendSideChannel({ noteEvents: [noteEventActionFromDetail(detail, archived ? 'remove' : 'upsert')] });
     return MemoryNoteHandle.from(detail);
   }
 
   async pin(pinned = true): Promise<MemoryNoteHandle> {
     const detail = await pin(this.id, pinned);
-    await appendSideChannel({ noteEvents: [noteEventActionFromDetail(detail, 'upsert')] });
     return MemoryNoteHandle.from(detail);
   }
 
   async restore(): Promise<MemoryNoteHandle> {
     const detail = await restore(this.id);
-    await appendSideChannel({ noteEvents: [noteEventActionFromDetail(detail, 'upsert')] });
     return MemoryNoteHandle.from(detail);
   }
 
   async itemAdd(text: string, checked = false): Promise<MemoryNoteHandle> {
     const detail = await itemAdd(this.id, text, checked);
-    await appendSideChannel({ noteEvents: [noteEventActionFromDetail(detail, 'upsert')] });
     return MemoryNoteHandle.from(detail);
   }
 
   async itemCheck(item: string, checked = true): Promise<MemoryNoteHandle> {
     const detail = await itemCheck(this.id, item, checked);
-    await appendSideChannel({ noteEvents: [noteEventActionFromDetail(detail, 'upsert')] });
     return MemoryNoteHandle.from(detail);
   }
 
   async itemRemove(item: string): Promise<MemoryNoteHandle> {
     const detail = await itemRemove(this.id, item);
-    await appendSideChannel({ noteEvents: [noteEventActionFromDetail(detail, 'upsert')] });
     return MemoryNoteHandle.from(detail);
   }
 }
@@ -316,27 +339,51 @@ function toHandle(note: NoteSummary | NoteDetail): MemoryNoteHandle {
   return new MemoryNoteHandle(note);
 }
 
-export async function add(text: string, options?: MemoryAddOptions) {
+function normalizeRetrievalHints(options?: MemoryAddOptions & { topics?: string[] }): string[] {
+  const explicit = Array.isArray(options?.retrievalHints)
+    ? options.retrievalHints
+    : typeof options?.retrievalHints === 'string'
+      ? [options.retrievalHints]
+      : [];
+  const topics = Array.isArray(options?.topics) ? options.topics : [];
+  return [...new Set([...explicit, ...topics].map(String).map((value) => value.trim()).filter(Boolean))];
+}
+
+function normalizeMemoryAddInput(
+  input: string | MemoryAddInput,
+  options?: MemoryAddOptions,
+): { text: string; options: MemoryAddOptions & { topics?: string[] } } {
+  const merged = typeof input === 'string' ? { ...options } : { ...options, ...input };
+  const text = (typeof input === 'string' ? input : input.text ?? input.content ?? '').trim();
+  if (!text) throw new Error('memory.add requires non-empty text or content.');
+  return { text, options: merged };
+}
+
+export async function add(input: string | MemoryAddInput, options?: MemoryAddOptions) {
+  const normalized = normalizeMemoryAddInput(input, options);
   const runtime = await ensureRuntime();
-  const exclusiveToAgentName = options?.exclusive ? (process.env.TELOS_AGENT_NAME || null) : null;
+  const exclusiveToAgentName = resolveMemoryAddCategory(normalized.options);
   return runtime.queue.enqueue({
-    text,
-    retrievalHints: Array.isArray(options?.retrievalHints) ? options?.retrievalHints : [],
+    text: normalized.text,
+    retrievalHints: normalizeRetrievalHints(normalized.options),
     exclusiveToAgentName,
   });
 }
 
-export async function search(query: string, options?: MemorySearchOptions): Promise<string> {
+export async function search(input: string | MemorySearchInput, options?: MemorySearchOptions): Promise<string> {
+  const merged = typeof input === 'string' ? { ...options, query: input } : { ...options, ...input };
+  const query = String(merged.query || merged.text || '').trim();
+  if (!query) throw new Error('memory.search requires a non-empty query.');
   const runtime = await ensureRuntime();
   const result = await runtime.service.search(query, {
-    candidateSelection: resolveCandidateSelection(options),
+    candidateSelection: resolveCandidateSelection(merged),
     excludeFactIds: parseExcludedFactIds(),
     agentName: process.env.TELOS_AGENT_NAME,
     categories: parseCategoriesFromEnv(),
     includeUncategorized: parseIncludeUncategorizedFromEnv(),
     categoryMultipliers: parseCategoryMultipliersFromEnv(),
     fallbackCategory: parseFallbackCategoryFromEnv(),
-    queryPhraseWeightingMode: options?.phraseWeighting,
+    queryPhraseWeightingMode: merged.phraseWeighting,
   });
 
   if (result.surfacedFactIds.length > 0 || result.text) {
@@ -351,6 +398,106 @@ export async function search(query: string, options?: MemorySearchOptions): Prom
   return result.text || '';
 }
 
+function defaultContextOptions(agent: Awaited<ReturnType<AgentLoader['loadByName']>>): CombinedHintsOptions {
+  const memory = agent?.config.memory;
+  const topK = Math.max(1, Math.floor(memory?.autoHints?.topK ?? 5));
+  const memoryCandidateSelection: CandidateSelectionOptions = {
+    mode: 'auto',
+    topK,
+    minCandidates: 2,
+    maxCandidates: Math.max(topK, 8),
+  };
+  const contentCandidateSelection: CandidateSelectionOptions = {
+    mode: 'top-k',
+    topK: 3,
+    minCandidates: 2,
+    maxCandidates: 3,
+  };
+  const sentenceSelection: CandidateSelectionOptions = {
+    mode: 'top-k',
+    topK: 4,
+    minCandidates: 2,
+    maxCandidates: 4,
+  };
+  return {
+    queryKind: 'user',
+    maxQueryLength: 4000,
+    queryPhraseWeightingMode: 'embedding',
+    memory: {
+      weight: 1,
+      maxDepth: memory?.searchMaxDepth ?? 3,
+      beamWidth: memory?.searchBeamWidth ?? 8,
+      maxChains: memory?.searchMaxChains ?? 8,
+      overallEmbeddingWeight: memory?.overallEmbeddingWeight ?? 0.35,
+      phraseAggregationMode: memory?.searchDefaultAggregationMode ?? 'max',
+      includeUncategorized: memory?.includeUncategorized,
+      fallbackCategory: memory?.fallbackCategory,
+      candidateSelection: memoryCandidateSelection,
+    },
+    notes: {
+      weight: 0.8,
+      recencyBias: 0,
+      candidateSelection: contentCandidateSelection,
+      sentenceSelection,
+    },
+    conversations: {
+      weight: 1,
+      recencyBias: 0.5,
+      candidateSelection: contentCandidateSelection,
+      sentenceSelection,
+    },
+  };
+}
+
+/**
+ * Retrieve the same formatted combined context used by automatic memory hints,
+ * but for an agent-supplied query rather than the latest user message.
+ */
+export async function context(input: string | { query?: string; text?: string }): Promise<string> {
+  const cleanQuery = String(typeof input === 'string' ? input : input?.query || input?.text || '').trim();
+  if (!cleanQuery) throw new Error('memory.context(query) requires a non-empty query.');
+  const agentName = String(process.env.TELOS_AGENT_NAME || '').trim();
+  if (!agentName) throw new Error('memory.context(query) requires TELOS_AGENT_NAME.');
+
+  const agentLoader = new AgentLoader();
+  const agent = await agentLoader.loadByName(agentName);
+  if (!agent) throw new Error(`memory.context(query) could not load agent ${agentName}.`);
+  const toolLoader = new ToolLoader();
+  const agentTools = await toolLoader.loadByNames(agent.config.tools || []);
+  const effectiveCategories = getEffectiveMemoryCategories(agent, agentTools) || [];
+  const categoryMultipliers = Object.fromEntries(
+    effectiveCategories
+      .filter((category) => typeof category.multiplier === 'number')
+      .map((category) => [category.name, category.multiplier!]),
+  );
+  const identities = new RealtimeAdvisorStore(path.resolve(
+    process.env.TELOS_REALTIME_ADVISOR_DATA_DIR || path.join(process.env.TELOS_PROJECT_ROOT || process.cwd(), 'data', 'realtime-advisor'),
+  ));
+  await identities.initialize();
+
+  const result = await new CombinedMemoryHintsService().test({
+    query: cleanQuery,
+    agent,
+    categories: effectiveCategories.map((category) => category.name),
+    categoryMultipliers,
+    identities: identities.listSpeakers().map((identity) => ({
+      id: identity.id,
+      name: identity.name,
+      description: identity.description,
+    })),
+    options: defaultContextOptions(agent),
+  });
+  const memoryResult = result.memory as { surfacedFactIds?: unknown; text?: unknown } | undefined;
+  const factIds = Array.isArray(memoryResult?.surfacedFactIds)
+    ? memoryResult!.surfacedFactIds.map(String).filter(Boolean)
+    : [];
+  const memoryText = typeof memoryResult?.text === 'string' ? memoryResult.text : '';
+  if (factIds.length > 0 || memoryText) {
+    await appendSideChannel({ searches: [{ factIds, text: memoryText }] });
+  }
+  return typeof result.text === 'string' ? result.text : '';
+}
+
 async function listHandles(input?: NoteListInput): Promise<MemoryNoteHandle[]> {
   return (await list(input)).map(toHandle);
 }
@@ -361,21 +508,64 @@ async function findHandles(query: string, input?: number | Omit<Exclude<NoteList
 
 async function createNote(title: string, text: string): Promise<MemoryNoteHandle> {
   const detail = await put({ title, text, owner: 'system', createOnly: true });
-  await appendSideChannel({ noteEvents: [noteEventActionFromDetail(detail, 'upsert')] });
   return toHandle(detail);
 }
 
 async function createChecklist(title: string, items: CreateListItems = []): Promise<MemoryNoteHandle> {
   const detail = await createList({ title, items, owner: 'system', createOnly: true });
-  await appendSideChannel({ noteEvents: [noteEventActionFromDetail(detail, 'upsert')] });
   return toHandle(detail);
 }
 
 export const notes = {
+  path(): string {
+    return ContentMemoryService.notesPath();
+  },
+  async search(query = '', options?: NotesSearchOptions) {
+    await getContentMemoryService().settleNotesVault();
+    return getContentMemoryService().search('notes', query, {
+      ...options,
+      recencyBias: options?.recencyBias ?? 0,
+    });
+  },
+  async import(noteId: string): Promise<string> {
+    return getContentMemoryService().importNote(noteId);
+  },
+  async backup() {
+    return getContentMemoryService().settleNotesVault();
+  },
+  /** @deprecated Obsidian notes are files. Use memory.notes.path(), edit markdown files directly, then search/import archives. */
   list: listHandles,
+  /** @deprecated Use memory.notes.search(query, options?) for archived notes or search files under memory.notes.path() directly. */
   find: findHandles,
+  /** @deprecated Create a markdown file under memory.notes.path(); Telos-created note filenames must contain TELOS. */
   create: createNote,
+  /** @deprecated Create a markdown checklist file under memory.notes.path(); Telos-created note filenames must contain TELOS. */
   createList: createChecklist,
+};
+
+export const conversations = {
+  transcript: {
+    search(query = '', options?: ContentSearchOptions) {
+      return getContentMemoryService().search('conversation_transcripts', query, {
+        ...options,
+        recencyBias: options?.recencyBias ?? 0.5,
+      });
+    },
+  },
+  context: {
+    search(query = '', options?: Omit<ContentSearchOptions, 'transcriptLabel'>) {
+      return getContentMemoryService().search('advisor_context', query, {
+        ...options,
+        recencyBias: options?.recencyBias ?? 0.5,
+      });
+    },
+  },
+};
+
+export const __internals = {
+  resolveMemoryAddCategory,
+  normalizeMemoryAddInput,
+  normalizeRetrievalHints,
 };
 
 function parseFallbackCategoryFromEnv(): string | undefined {

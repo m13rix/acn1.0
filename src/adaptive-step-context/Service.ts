@@ -41,6 +41,7 @@ export interface AdaptiveSessionRecord {
   agentName: string;
   startedAt: string;
   goal: string;
+  embeddingProvider: 'google' | 'ollama' | 'openrouter';
   embeddingModel: string;
   goalEmbeddingStatus: 'pending' | 'ready' | 'error';
   goalEmbedding?: number[];
@@ -215,7 +216,7 @@ export class AdaptiveStepContextService {
     if (record.goal && !record.goalEmbedding && record.goalEmbeddingStatus === 'pending') {
       this.queueEmbedding(async () => {
         try {
-          record.goalEmbedding = await embedText(record.goal, record.embeddingModel, undefined, 'adaptive.goal');
+          record.goalEmbedding = await embedText(record.goal, record.embeddingModel, undefined, 'adaptive.goal', record.embeddingProvider);
           record.goalEmbeddingStatus = 'ready';
         } catch (error) {
           record.goalEmbeddingStatus = 'error';
@@ -290,17 +291,17 @@ export class AdaptiveStepContextService {
       try {
         const tasks: Array<Promise<void>> = [];
         if (reasoning) {
-          tasks.push(embedText(reasoning, sessionRecord.embeddingModel, undefined, 'adaptive.reasoning').then(vector => {
+          tasks.push(embedText(reasoning, sessionRecord.embeddingModel, undefined, 'adaptive.reasoning', sessionRecord.embeddingProvider).then(vector => {
             record.embeddings.reasoning = vector;
           }));
         }
         if (output) {
-          tasks.push(embedText(output, sessionRecord.embeddingModel, undefined, 'adaptive.output').then(vector => {
+          tasks.push(embedText(output, sessionRecord.embeddingModel, undefined, 'adaptive.output', sessionRecord.embeddingProvider).then(vector => {
             record.embeddings.output = vector;
           }));
         }
         if (observation) {
-          tasks.push(embedText(observation, sessionRecord.embeddingModel, undefined, 'adaptive.observation').then(vector => {
+          tasks.push(embedText(observation, sessionRecord.embeddingModel, undefined, 'adaptive.observation', sessionRecord.embeddingProvider).then(vector => {
             record.embeddings.observation = vector;
           }));
         }
@@ -439,11 +440,13 @@ export class AdaptiveStepContextService {
     if (existing) return existing;
 
     const embeddingModel = session.agent.config.memory?.embeddingModel || DEFAULT_MEMORY_CONFIG.embeddingModel;
+    const embeddingProvider = session.agent.config.memory?.embeddingProvider || DEFAULT_MEMORY_CONFIG.embeddingProvider;
     const record: AdaptiveSessionRecord = {
       id: session.id,
       agentName: session.agent.config.name,
       startedAt: new Date().toISOString(),
       goal: firstUserMessage(session),
+      embeddingProvider,
       embeddingModel,
       goalEmbeddingStatus: firstUserMessage(session) ? 'pending' : 'ready',
       steps: [],

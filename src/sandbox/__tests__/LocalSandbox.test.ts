@@ -57,6 +57,7 @@ test('generated action wrapper exits explicitly after tracked async tasks finish
   assert.match(output, /help\(\)/);
   assert.match(output, /const terminal = __telosLazyWaitableTool/);
   assert.match(output, /const code = __telosLazyWaitableTool/);
+  assert.match(output, /const computer = __telosLazyWaitableTool/);
   assert.match(output, /TELOS_SANDBOX_EXIT_GRACE_MS/);
   assert.match(output, /TELOS_SANDBOX_ERROR_EXIT_GRACE_MS/);
   assert.match(output, /process\.exit\(process\.exitCode \?\? 0\)/);
@@ -86,16 +87,59 @@ test('every injected tool exposes help()', async () => {
       'console.log(files.help().includes("files.read"));',
       'console.log(terminal.help().includes("terminal.run"));',
       'console.log(code.help().includes("code.outline"));',
+      'console.log(computer.help().includes("computer.snapshot"));',
       'console.log(helper.help().includes("Helpful test tool docs."));',
       'console.log(Object.keys(helper).includes("help"));',
     ].join('\n'));
 
     assert.equal(result.success, true, result.error);
-    assert.match(result.output, /true\ntrue\ntrue\ntrue\ntrue/);
+    assert.match(result.output, /true\ntrue\ntrue\ntrue\ntrue\ntrue/);
   } finally {
     await sandbox.cleanup();
     await rmBestEffort(tempRoot);
   }
+});
+
+test('injected lazy tool reflection handles non-configurable module flags', async () => {
+  const tempRoot = await mkdtemp(join(process.cwd(), 'sandboxes', 'test-tool-reflection-'));
+  const toolPath = join(tempRoot, 'helper.cjs');
+  const sandbox = new LocalSandbox({ baseDir: tempRoot });
+
+  await writeFile(toolPath, [
+    'Object.defineProperty(exports, "__esModule", { value: true, enumerable: true, configurable: false });',
+    'exports.answer = function answer() {',
+    '  return "ok";',
+    '};',
+  ].join('\n'));
+
+  try {
+    await sandbox.initialize([{
+      config: { name: 'helper', description: 'Helpful test tool docs.', module: toolPath },
+      directory: tempRoot,
+      absolutePath: toolPath,
+    }]);
+
+    const result = await sandbox.execute([
+      'console.log(Object.keys(helper).includes("__esModule"));',
+      'console.log(Object.getOwnPropertyDescriptor(helper, "__esModule").configurable);',
+      'console.log(helper.answer());',
+    ].join('\n'));
+
+    assert.equal(result.success, true, result.error);
+    assert.match(result.output, /true\ntrue\nok/);
+  } finally {
+    await sandbox.cleanup();
+    await rmBestEffort(tempRoot);
+  }
+});
+
+test('local sandbox description includes action tool guidance', () => {
+  const sandbox = new LocalSandbox();
+  const description = sandbox.getDescription();
+  assert.match(description, /## Code As Action/);
+  assert.match(description, /Use `files` for workspace inspection and edits/);
+  assert.match(description, /Use `computer` for native Windows apps/);
+  assert.match(description, /Every tool has `tool\.help\(\)`/);
 });
 
 test('action exposes files read/write/edit/search/list and code outline packages', async () => {
@@ -149,6 +193,68 @@ test('files search and raw read work with repo-style action snippets', async () 
     assert.match(result.output, /1 \| EVERY tool is AUTOMATICALLY IMPORTED\./);
     assert.match(result.output, /"path":"src\/LocalSandbox\.ts"/);
     assert.match(result.output, /"preview":"EVERY tool is AUTOMATICALLY IMPORTED\."/);
+  } finally {
+    await sandbox.cleanup();
+    await rmBestEffort(tempRoot);
+  }
+});
+
+test('bare require of an already injected tool is stripped before execution', async () => {
+  const tempRoot = await mkdtemp(join(process.cwd(), 'sandboxes', 'test-duplicate-tool-require-runtime-'));
+  const sandbox = new LocalSandbox({ baseDir: tempRoot });
+
+  try {
+    await sandbox.initialize([]);
+
+    const result = await sandbox.execute([
+      "const files = require('files');",
+      "console.log(JSON.stringify(await files.list('.')));",
+    ].join('\n'));
+
+    assert.equal(result.success, true, result.error);
+    assert.match(result.output, /package\.json/);
+    assert.doesNotMatch(result.output, /^\s*\{\}\s*$/m);
+  } finally {
+    await sandbox.cleanup();
+    await rmBestEffort(tempRoot);
+  }
+});
+
+test('bare destructuring from require for an already injected tool is stripped before execution', async () => {
+  const tempRoot = await mkdtemp(join(process.cwd(), 'sandboxes', 'test-duplicate-tool-destructured-require-runtime-'));
+  const sandbox = new LocalSandbox({ baseDir: tempRoot });
+
+  try {
+    await sandbox.initialize([]);
+
+    const result = await sandbox.execute([
+      "const { files } = require;",
+      "console.log(JSON.stringify(await files.list('.')));",
+    ].join('\n'));
+
+    assert.equal(result.success, true, result.error);
+    assert.match(result.output, /package\.json/);
+    assert.doesNotMatch(result.error || '', /Cannot read properties of undefined/);
+  } finally {
+    await sandbox.cleanup();
+    await rmBestEffort(tempRoot);
+  }
+});
+
+test('result variables may naturally reuse injected tool names in initializers', async () => {
+  const tempRoot = await mkdtemp(join(process.cwd(), 'sandboxes', 'test-tool-shadowing-'));
+  const sandbox = new LocalSandbox({ baseDir: tempRoot });
+
+  try {
+    await sandbox.initialize([]);
+    const result = await sandbox.execute([
+      'const files = await files.search("package.json", { path: ".", maxResults: 1 });',
+      'const moreFiles = await files.search("LocalSandbox", { path: ".", maxResults: 1 });',
+      'console.log(Array.isArray(files), Array.isArray(moreFiles));',
+    ].join('\n'));
+
+    assert.equal(result.success, true, result.error);
+    assert.match(result.output, /true/);
   } finally {
     await sandbox.cleanup();
     await rmBestEffort(tempRoot);
@@ -373,6 +479,79 @@ test('waits for unawaited agents.call chains before exiting', async () => {
   } finally {
     await sandbox.cleanup();
     await rmBestEffort(tempRoot);
+  }
+});
+
+test('attached sandbox outside the project can execute actions without local tsx dependency', async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'telos-external-sandbox-'));
+  const sandbox = new LocalSandbox({ existingPath: tempRoot });
+
+  try {
+    await sandbox.initialize([]);
+
+    const result = await sandbox.execute([
+      'const value: string = "external cwd ok";',
+      'console.log(value);',
+    ].join('\n'));
+
+    assert.equal(result.success, true, result.error);
+    assert.match(result.output, /external cwd ok/);
+  } finally {
+    await sandbox.cleanup();
+    await rmBestEffort(tempRoot);
+  }
+});
+
+test('attached sandbox outside the project can load injected built-in tools', async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'telos-external-tools-'));
+  const sandbox = new LocalSandbox({ existingPath: tempRoot });
+
+  try {
+    await sandbox.initialize([]);
+
+    const result = await sandbox.execute([
+      'console.log("files", files.help().includes("files.read"));',
+      'console.log("terminal", terminal.help().includes("terminal.run"));',
+      'console.log("listing", JSON.stringify(await files.list(".")));',
+    ].join('\n'));
+
+    assert.equal(result.success, true, result.error);
+    assert.match(result.output, /files true/);
+    assert.match(result.output, /terminal true/);
+    assert.match(result.output, /listing/);
+  } finally {
+    await sandbox.cleanup();
+    await rmBestEffort(tempRoot);
+  }
+});
+
+test('attached sandbox outside the project can load configured tools from project paths', async () => {
+  const externalRoot = await mkdtemp(join(tmpdir(), 'telos-external-configured-tools-'));
+  const projectToolRoot = await mkdtemp(join(process.cwd(), 'sandboxes', 'test-configured-tool-path-'));
+  const toolPath = join(projectToolRoot, 'helper.cjs');
+  const sandbox = new LocalSandbox({ existingPath: externalRoot });
+
+  await writeFile(toolPath, [
+    'exports.answer = function answer() {',
+    '  return "configured tool ok";',
+    '};',
+  ].join('\n'));
+
+  try {
+    await sandbox.initialize([{
+      config: { name: 'helper', description: 'configured helper tool', module: toolPath },
+      directory: projectToolRoot,
+      absolutePath: toolPath,
+    }]);
+
+    const result = await sandbox.execute('console.log(helper.answer());');
+
+    assert.equal(result.success, true, result.error);
+    assert.match(result.output, /configured tool ok/);
+  } finally {
+    await sandbox.cleanup();
+    await rmBestEffort(externalRoot);
+    await rmBestEffort(projectToolRoot);
   }
 });
 

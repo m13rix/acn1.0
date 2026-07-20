@@ -169,6 +169,6 @@ export function createTextRuntimePlaceholderProvider(name = 'ai-sdk-text') {
   return new AiSdkTextProvider(name);
 }
 
-for (const provider of ['openrouter', 'gemini', 'ollama', 'inception', 'kimi-code', 'openai-codex']) {
+for (const provider of ['openrouter', 'gemini', 'ollama', 'inception', 'kimi-code', 'openai-codex', 'opencode']) {
   registerProvider(provider, () => new AiSdkTextProvider(provider));
 }

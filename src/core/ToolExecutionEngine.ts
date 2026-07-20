@@ -48,6 +48,9 @@ export class ToolExecutionEngine {
   ) { }
 
   async executeAction(code: string): Promise<ToolExecutionResult> {
+    const preflight = this.stripDuplicateInjectedToolImports(code);
+    code = preflight.code;
+    const agentConfig = this.session.agent?.config;
     this.callbacks.onAction?.(code);
 
     const env = { ...(actionContext.getStore()?.env || {}) };
@@ -89,10 +92,15 @@ export class ToolExecutionEngine {
     env.TELOS_MEMORY_EXCLUDE_FACT_IDS = JSON.stringify(surfacedMemoryFactIds);
 
     const onStderr = (chunk: string) => process.stderr.write(chunk);
-    let result = await this.session.sandbox.execute(code, undefined, env, onStderr);
+    const actionToolPolicy = {
+      tools: this.session.tools,
+      builtins: agentConfig?.actionToolPolicy?.builtins,
+      allowImports: agentConfig?.actionToolPolicy?.allowImports,
+    };
+    let result = await this.session.sandbox.execute(code, undefined, env, onStderr, actionToolPolicy);
     let autoFixSummary: string[] = [];
 
-    if (!result.success) {
+    if (!result.success && actionToolPolicy.allowImports !== false) {
       const autoFixEngine = new ActionAutoFixEngine(this.session);
       const autoFixOutcome = await autoFixEngine.repairAndRetry({
         originalCode: code,
@@ -108,11 +116,18 @@ export class ToolExecutionEngine {
       ? result.output
       : (`Error: ${result.error}\n${result.output}`).trim();
 
-    const fullObservation = autoFixSummary.length > 0
-      ? `${autoFixSummary.join('\n')}\n${baseObservation}`.trim()
+    const summaryLines = [...preflight.summaryLines, ...autoFixSummary];
+    const fullObservation = summaryLines.length > 0
+      ? `${summaryLines.join('\n')}\n${baseObservation}`.trim()
       : baseObservation;
     const finish = this.parseFinishSignal(fullObservation);
-    const observation = await this.compactObservationForModel(fullObservation, 'action');
+    // TASK_DONE is a control signal, not an action result.  Keep it available
+    // long enough to terminate the turn, but never feed or display its raw
+    // sentinel as though it were useful tool output.
+    const observation = await this.compactObservationForModel(
+      this.removeFinishSignals(fullObservation),
+      'action',
+    );
 
     return {
       observation,
@@ -131,7 +146,10 @@ export class ToolExecutionEngine {
       ? result.output
       : (`Error: ${result.error}\n${result.output}`).trim();
     const finish = this.parseFinishSignal(fullObservation);
-    const observation = await this.compactObservationForModel(fullObservation, 'cli');
+    const observation = await this.compactObservationForModel(
+      this.removeFinishSignals(fullObservation),
+      'cli',
+    );
 
     return {
       observation,
@@ -285,6 +303,148 @@ export class ToolExecutionEngine {
     return String(name ?? '').trim().toLowerCase();
   }
 
+  private stripDuplicateInjectedToolImports(code: string): { code: string; summaryLines: string[] } {
+    const toolNames = this.getInjectedToolNames();
+    if (toolNames.size === 0 || !/\brequire\b|\bimport\b/.test(code)) {
+      return { code, summaryLines: [] };
+    }
+
+    const lines = (code || '').split('\n');
+    const result: string[] = [];
+    const aliasRewrites = new Map<string, string>();
+    const removed: string[] = [];
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+
+      // Match: const { files } = require; or const { files } = require('...');
+      const destructuredRequireMatch = trimmed.match(/^(?:const|let|var)\s+\{([^}]+)\}\s*=\s*require(?:\s*\(\s*['"]([^'"]+)['"]\s*\))?\s*;?\s*$/);
+      if (destructuredRequireMatch) {
+        const bindings = this.parseDestructuredBindings(destructuredRequireMatch[1] || '');
+        const remaining = bindings.filter((binding) => !toolNames.has(binding.imported));
+        const duplicate = bindings.filter((binding) => toolNames.has(binding.imported));
+        if (duplicate.length > 0) {
+          for (const binding of duplicate) {
+            if (binding.local !== binding.imported) {
+              aliasRewrites.set(binding.local, binding.imported);
+              removed.push(`${binding.local} -> ${binding.imported}`);
+            } else {
+              removed.push(binding.imported);
+            }
+          }
+          if (remaining.length > 0) {
+            result.push(line.replace(/\{[^}]+\}/, `{ ${remaining.map((binding) => binding.raw).join(', ')} }`));
+          }
+          continue;
+        }
+      }
+
+      const requireMatch = trimmed.match(/^(?:const|let|var)\s+(\w+)\s*=\s*require\s*\(\s*['"]([^'"]+)['"]\s*\)\s*;?\s*$/);
+      if (requireMatch) {
+        const name = requireMatch[1];
+        const moduleName = requireMatch[2];
+        if (name && toolNames.has(name)) {
+          removed.push(name);
+          continue;
+        }
+        if (name && moduleName && toolNames.has(moduleName)) {
+          aliasRewrites.set(name, moduleName);
+          removed.push(`${name} -> ${moduleName}`);
+          continue;
+        }
+      }
+
+      // Match: import { files } from '...' or import { files as f } from '...';
+      const namedImportMatch = trimmed.match(/^import\s+\{([^}]+)\}\s+from\s+['"]([^'"]+)['"]\s*;?\s*$/);
+      if (namedImportMatch) {
+        const bindings = this.parseDestructuredBindings(namedImportMatch[1] || '');
+        const remaining = bindings.filter((binding) => !toolNames.has(binding.imported));
+        const duplicate = bindings.filter((binding) => toolNames.has(binding.imported));
+        if (duplicate.length > 0) {
+          for (const binding of duplicate) {
+            if (binding.local !== binding.imported) {
+              aliasRewrites.set(binding.local, binding.imported);
+              removed.push(`${binding.local} -> ${binding.imported}`);
+            } else {
+              removed.push(binding.imported);
+            }
+          }
+          if (remaining.length > 0) {
+            result.push(line.replace(/\{[^}]+\}/, `{ ${remaining.map((binding) => binding.raw).join(', ')} }`));
+          }
+          continue;
+        }
+      }
+
+      const importMatch = trimmed.match(/^import\s+(?:\*\s+as\s+)?(\w+)\s+from\s+['"]([^'"]+)['"]\s*;?\s*$/);
+      if (importMatch) {
+        const name = importMatch[1];
+        const moduleName = importMatch[2];
+        if (name && toolNames.has(name)) {
+          removed.push(name);
+          continue;
+        }
+        if (name && moduleName && toolNames.has(moduleName)) {
+          aliasRewrites.set(name, moduleName);
+          removed.push(`${name} -> ${moduleName}`);
+          continue;
+        }
+      }
+
+      result.push(line);
+    }
+
+    let sanitized = result.join('\n');
+    for (const [alias, toolName] of aliasRewrites.entries()) {
+      sanitized = sanitized.replace(new RegExp(`\\b${this.escapeRegExp(alias)}\\.`, 'g'), `${toolName}.`);
+    }
+
+    if (removed.length === 0) {
+      return { code, summaryLines: [] };
+    }
+
+    return {
+      code: sanitized,
+      summaryLines: [`AUTO-FIX: pre-run removed duplicate import(s) for already-injected tool(s): ${removed.join(', ')}`],
+    };
+  }
+
+  private parseDestructuredBindings(rawBindings: string): Array<{ raw: string; imported: string; local: string }> {
+    return rawBindings
+      .split(',')
+      .map((raw) => raw.trim())
+      .filter(Boolean)
+      .flatMap((raw) => {
+        const withoutDefault = raw.replace(/\s*=\s*.*$/, '').trim();
+        const colonAlias = withoutDefault.match(/^(\w+)\s*:\s*(\w+)$/);
+        if (colonAlias?.[1] && colonAlias?.[2]) {
+          return [{ raw, imported: colonAlias[1], local: colonAlias[2] }];
+        }
+        const importAlias = withoutDefault.match(/^(\w+)\s+as\s+(\w+)$/);
+        if (importAlias?.[1] && importAlias?.[2]) {
+          return [{ raw, imported: importAlias[1], local: importAlias[2] }];
+        }
+        return withoutDefault ? [{ raw, imported: withoutDefault, local: withoutDefault }] : [];
+      });
+  }
+
+  private getInjectedToolNames(): Set<string> {
+    const names = new Set<string>(
+      this.session.agent?.config.actionToolPolicy?.builtins ?? ['files', 'terminal', 'code', 'computer'],
+    );
+    for (const tool of this.session.tools || []) {
+      const name = tool?.config?.name;
+      if (typeof name === 'string' && name.trim()) {
+        names.add(name.trim());
+      }
+    }
+    return names;
+  }
+
+  private escapeRegExp(value: string): string {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
   private toRecord(value: unknown): ToolArguments {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
       return {};
@@ -430,7 +590,19 @@ export class ToolExecutionEngine {
     }
   }
 
+  private removeFinishSignals(observation: string): string {
+    const withoutSignals = observation.replace(new RegExp(COMPLETION_SIGNAL_REGEX.source, 'gs'), '');
+    return withoutSignals.replace(/\n{3,}/g, '\n\n').trim();
+  }
+
   private async compactObservationForModel(observation: string, source: string): Promise<string> {
+    // `agents.run(...)` returns one terminal result object. Its `finalMessage`
+    // is an artifact for the caller, not a noisy tool observation: preserving it
+    // whole is necessary for the parent to receive the delegated work.
+    if (source === 'action' && this.isAgentRunResult(observation)) {
+      return observation;
+    }
+
     const maxChars = this.maxObservationChars();
     if (observation.length <= maxChars) {
       return observation;
@@ -446,6 +618,12 @@ export class ToolExecutionEngine {
       '',
     ].join('\n');
     return `${observation.slice(0, head)}${notice}${observation.slice(observation.length - tail)}`;
+  }
+
+  private isAgentRunResult(observation: string): boolean {
+    const hasJobName = /(?:^|[\s{,])["']?jobName["']?\s*:/.test(observation);
+    const hasFinalMessage = /(?:^|[\s{,])["']?finalMessage["']?\s*:/.test(observation);
+    return hasJobName && hasFinalMessage;
   }
 
   private maxObservationChars(): number {

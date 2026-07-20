@@ -7,9 +7,10 @@ import { fileURLToPath } from 'url';
 import { randomUUID } from 'crypto';
 import sharp from 'sharp';
 import WebSocket from 'ws';
+import { getAgentInvocationService } from '../../src/core/AgentInvocationService.js';
+import { LocalSandbox } from '../../src/sandbox/LocalSandbox.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-
 const PORT = Number.parseInt(process.env.MINECRAFT_TEXTURE_API_PORT || '3018', 10);
 const COMFYUI_URL_OVERRIDE = process.env.COMFYUI_URL?.replace(/\/+$/, '');
 const COMFYUI_URL_CANDIDATES = [
@@ -24,11 +25,16 @@ const REQUEST_TIMEOUT_MS = Number.parseInt(process.env.MINECRAFT_TEXTURE_TIMEOUT
 const INCEPTION_BASE_URL = (process.env.INCEPTION_BASE_URL || 'https://api.inceptionlabs.ai/v1').replace(/\/+$/, '');
 const BALANCE_MODEL = process.env.MINECRAFT_BALANCE_MODEL || process.env.MEMORY_MERCURY_MODEL || 'mercury-2';
 const BALANCE_TIMEOUT_MS = Number.parseInt(process.env.MINECRAFT_BALANCE_TIMEOUT_MS || '60000', 10);
+const ARTIFICER_TIMEOUT_MS = Number.parseInt(process.env.MINECRAFT_ARTIFICER_TIMEOUT_MS || '600000', 10);
 
 type Workflow = Record<string, { inputs?: Record<string, unknown>; class_type?: string }>;
 
 interface GenerateBody {
   prompt?: unknown;
+}
+
+interface CreateItemBody {
+  request?: unknown;
 }
 
 interface RecipeCell {
@@ -1037,6 +1043,49 @@ async function handleBalance(body: unknown): Promise<BalanceResponse> {
 const app = express();
 app.use(express.json({ limit: '64kb' }));
 
+let artificerBusy = false;
+
+function assertCreateItemRequest(body: CreateItemBody): string {
+  if (typeof body.request !== 'string') {
+    throw new Error('create-item requires a string "request" field.');
+  }
+  const request = body.request.trim();
+  if (!request.startsWith('Create item: ') || request.length <= 'Create item: '.length) {
+    throw new Error('create-item request must have the form "Create item: <blueprint contents>".');
+  }
+  return request;
+}
+
+async function runArtificer(request: string): Promise<void> {
+  const sandbox = new LocalSandbox();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => {
+    controller.abort(new Error(`Limitless artificer timed out after ${ARTIFICER_TIMEOUT_MS}ms.`));
+  }, ARTIFICER_TIMEOUT_MS);
+
+  try {
+    console.log('[minecraft-artificer] starting isolated limitless-artificer session');
+    await getAgentInvocationService().callAgent({
+      agent: 'limitless-artificer',
+      message: request,
+      sandbox,
+      stream: true,
+      isSubagent: true,
+      signal: controller.signal,
+    });
+    console.log('[minecraft-artificer] crafting request completed');
+  } catch (error) {
+    const message = error instanceof Error ? error.stack || error.message : String(error);
+    console.error(`[minecraft-artificer] crafting request failed: ${message}`);
+  } finally {
+    clearTimeout(timeout);
+    await sandbox.cleanup().catch(error => {
+      console.warn('[minecraft-artificer] failed to clean isolated sandbox:', error);
+    });
+    artificerBusy = false;
+  }
+}
+
 app.get('/health', async (_req, res) => {
   let comfyui: string | null = null;
   try {
@@ -1077,6 +1126,22 @@ for (const route of ['/balance', '/validate-balance']) {
     }
   });
 }
+
+app.post('/create-item', (req, res) => {
+  try {
+    const request = assertCreateItemRequest(req.body as CreateItemBody);
+    if (artificerBusy) {
+      res.status(409).json({ error: 'The limitless artificer is already creating an item.' });
+      return;
+    }
+    artificerBusy = true;
+    void runArtificer(request);
+    res.status(202).json({ accepted: true });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    res.status(400).json({ error: message });
+  }
+});
 
 app.listen(PORT, '127.0.0.1', () => {
   console.log(`[minecraft-texture] listening on http://127.0.0.1:${PORT}`);

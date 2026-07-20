@@ -40,6 +40,11 @@ function ollamaOpenAiBaseUrl(): string {
   return host.endsWith('/v1') ? host : `${host}/v1`;
 }
 
+function vllmOpenAiBaseUrl(): string {
+  const host = (process.env.VLLM_BASE_URL || 'http://localhost:8000/v1').replace(/\/+$/, '');
+  return host.endsWith('/v1') ? host : `${host}/v1`;
+}
+
 function providerOptionKey(provider: string): string {
   if (provider === 'kimi-code') return 'anthropic';
   return provider.replace(/-([a-z])/g, (_match, char: string) => char.toUpperCase());
@@ -113,6 +118,10 @@ function mergeProviderOptions(
     } else {
       nested['thinking'] = { type: 'disabled' };
     }
+  } else if (provider === 'vllm') {
+    if (typeof config.top_k === 'number') {
+      nested['top_k'] = config.top_k;
+    }
   }
 
   if (Object.keys(nested).length > 0) {
@@ -153,6 +162,14 @@ export function resolveTextLanguageModel(
       includeUsage: true,
     });
     model = ollama.chatModel(modelId);
+  } else if (provider === 'vllm') {
+    const vllm = createOpenAICompatible({
+      name: 'vllm',
+      baseURL: vllmOpenAiBaseUrl(),
+      apiKey: apiKeyOverride || process.env.VLLM_API_KEY || 'EMPTY',
+      includeUsage: true,
+    });
+    model = vllm.chatModel(modelId);
   } else if (provider === 'inception') {
     const inception = createOpenAICompatible({
       name: 'inception',
@@ -169,6 +186,14 @@ export function resolveTextLanguageModel(
     model = kimiCode.chat(modelId);
   } else if (provider === 'openai-codex') {
     model = createOpenAICodexLanguageModel(modelId);
+  } else if (provider === 'opencode') {
+    const opencode = createOpenAICompatible({
+      name: 'opencode',
+      baseURL: process.env.OPENCODE_BASE_URL || 'https://opencode.ai/zen/go/v1',
+      apiKey: apiKeyOverride || requireEnv('OPENCODE_API_KEY', 'OPENCODE_API_KEY is required for the OpenCode provider.'),
+      includeUsage: true,
+    });
+    model = opencode.chatModel(modelId);
   } else {
     throw new Error(`Unknown text provider: ${providerName}`);
   }

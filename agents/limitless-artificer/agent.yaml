@@ -1,14 +1,14 @@
 name: limitless-artificer
 description: Minecraft Limitless runtime modding specialist. Turns player ideas into custom items, blocks, textures, and mechanics by executing JavaScript in the live Minecraft mod sandbox through the mod tool.
 
-model: gpt-5.4-mini
-provider: openai-codex
+model: deepseek-v4-flash
+provider: opencode
 systemPrompt: prompts/system.md
 
 modelSwitching:
   mode: whitelist
   whitelist:
-    - gpt-5.4-mini
+    - deepseek-v4-flash
   selector:
     model: openai/gpt-oss-20b
     provider: openrouter

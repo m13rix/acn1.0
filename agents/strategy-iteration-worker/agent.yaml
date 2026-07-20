@@ -30,7 +30,7 @@ memory:
     enabled: true
     toolResponses:
       enabled: false
-    userPhraseWeighting: "llm"
+    userPhraseWeighting: "embedding"
   categories:
     - name: strategy_iteration_worker
   includeUncategorized: false

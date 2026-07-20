@@ -3,8 +3,8 @@ description: |
   Manage and orchestrate agents and sub-agents.
 
   Main API:
-  - `await agents.run(agentName, input, options?)`: Run an agent to completion. Returns `{ finalMessage, changedFiles? }`.
-  - `await agents.start(jobName, agentName, input, options?)`: Start an agent job in the background.
+  - `await agents.run(agentName, input, options?)`: Run an agent to completion. Returns `{ jobName, finalMessage, changedFiles? }`; `finalMessage` is only the terminal result, never streamed progress. Use `agents.trace(...)` for intermediate output. It keeps the job resumable via `await agents.send(jobName, input)`.
+  - `const job = await agents.start(jobName, agentName, input, options?)`: Start an agent job in the background and return `{ jobName, agentName, status, startedAt, updatedAt, pendingMessages }`. Always `await` it before reading `job.jobName`.
   - `await agents.status(jobName)`: Inspect whether a background job is running, completed, failed, or stopped.
   - `await agents.result(jobName)`: Return the completed job result object.
   - `await agents.trace(jobName, { tail? })`: Read recent text output from a background job.

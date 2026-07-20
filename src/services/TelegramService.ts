@@ -14,7 +14,7 @@ import { Executor, ExecutorCallbacks } from '../core/Executor.js';
 import { actionContext } from '../core/ActionContext.js';
 import { runWithAgentContext } from '../core/AgentContext.js';
 import { readAgentTextLog } from '../core/agentTextLog.js';
-import { resolveTextAgentRuntime } from '../core/SessionFactory.js';
+import { loadAgentTools, resolveTextAgentRuntime } from '../core/SessionFactory.js';
 import express from 'express';
 import { Server } from 'http';
 import { AddressInfo } from 'net';
@@ -48,7 +48,7 @@ const ROOT_UI_SCOPE_ID = 'root';
 const INTERNAL_API_DEFAULT_PORT = 11342;
 const INTERNAL_API_ROUTE_PREFIX = 'internal:';
 const INTERNAL_API_DEFAULT_SESSION_ID = 'default';
-const INTERNAL_API_DEFAULT_AGENT = 'core';
+const INTERNAL_API_DEFAULT_AGENT = 'Telos';
 const INTERNAL_API_IDLE_POLL_MS = 100;
 const INTERNAL_API_IDLE_TIMEOUT_MS = 60 * 60 * 1000;
 
@@ -89,6 +89,22 @@ interface PendingMessage {
     source?: 'user' | 'heartbeat';
 }
 
+interface AskMenuOption {
+    id: string;
+    label: string;
+    description?: string;
+}
+
+interface AskMenuOptions {
+    id?: string;
+    options: AskMenuOption[];
+}
+
+interface ActiveQuestionMenu {
+    token: string;
+    options: AskMenuOption[];
+}
+
 interface TelegramRoute {
     chatId: string;
     messageThreadId?: number;
@@ -127,6 +143,7 @@ interface ChatSession {
     isProcessing: boolean;
     waitingForQuestionResponse: boolean;
     questionResolver: ((response: string) => void) | null;
+    activeQuestionMenu: ActiveQuestionMenu | null;
     uiQueue: Promise<void>;
     uiScopes: Map<string, TelegramUiState>;
 }
@@ -139,6 +156,22 @@ interface TelegramApiErrorLike {
             retry_after?: number;
         };
     };
+    code?: string;
+    errno?: string;
+    cause?: unknown;
+}
+
+function normalizeAskMenu(options: AskMenuOptions | undefined): AskMenuOptions | undefined {
+    if (!options || !Array.isArray(options.options)) return undefined;
+    const normalized = options.options
+        .map((option) => ({
+            id: String(option?.id || '').trim(),
+            label: String(option?.label || '').trim(),
+            description: typeof option?.description === 'string' ? option.description.trim() || undefined : undefined,
+        }))
+        .filter((option) => option.id && option.label)
+        .slice(0, 12);
+    return normalized.length ? { ...(options.id?.trim() ? { id: options.id.trim() } : {}), options: normalized } : undefined;
 }
 
 export class TelegramService {
@@ -282,7 +315,7 @@ export class TelegramService {
         });
 
         this.app.post('/api/ask', async (req, res): Promise<void> => {
-            const { chatId, question, agentName } = req.body as { chatId?: string; question?: string; agentName?: string };
+            const { chatId, question, options, agentName } = req.body as { chatId?: string; question?: string; options?: AskMenuOptions; agentName?: string };
             if (!chatId || !question) {
                 res.status(400).json({ error: 'Missing parameters' });
                 return;
@@ -296,7 +329,7 @@ export class TelegramService {
                 this.pendingQuestions.set(questionId, entry);
 
                 // Start the ask flow (non-blocking — answer will be stored when user replies)
-                this.ask(chatId, question, agentName).then((answer) => {
+                this.ask(chatId, question, agentName, options).then((answer) => {
                     const pending = this.pendingQuestions.get(questionId);
                     if (pending) {
                         pending.answer = answer;
@@ -616,6 +649,31 @@ export class TelegramService {
             await this.handleUserActivity(routeKey, route, { text, timestamp: Date.now() });
         });
 
+        this.bot.on('callback_query', async (ctx) => {
+            const chatId = ctx.chat?.id.toString();
+            const data = 'data' in ctx.callbackQuery ? ctx.callbackQuery.data : undefined;
+            const match = typeof data === 'string' ? /^ask:([a-z0-9]+):(\d+)$/.exec(data) : null;
+            if (!chatId || !this.authorizedUsers.has(chatId) || !match) return;
+
+            const route = this.extractRouteFromContext(ctx);
+            const session = this.sessions.get(this.routeKey(route));
+            const index = Number(match[2]);
+            const active = session?.activeQuestionMenu;
+            const option = active && active.token === match[1] ? active.options[index] : undefined;
+            if (!session || !session.waitingForQuestionResponse || !session.questionResolver || !option) {
+                await ctx.answerCbQuery('This question is no longer active.').catch(() => undefined);
+                return;
+            }
+
+            const resolver = session.questionResolver;
+            session.waitingForQuestionResponse = false;
+            session.questionResolver = null;
+            session.activeQuestionMenu = null;
+            await ctx.answerCbQuery(`Selected: ${option.label}`).catch(() => undefined);
+            await ctx.editMessageReplyMarkup({ inline_keyboard: [] } as any).catch(() => undefined);
+            resolver(option.id);
+        });
+
         this.bot.on(message('voice'), async (ctx) => {
             if (!this.checkAuth(ctx)) return;
 
@@ -713,6 +771,7 @@ export class TelegramService {
             isProcessing: false,
             waitingForQuestionResponse: false,
             questionResolver: null,
+            activeQuestionMenu: null,
             uiQueue: Promise.resolve(),
             uiScopes: new Map([[ROOT_UI_SCOPE_ID, this.createUiState()]]),
         };
@@ -1063,14 +1122,7 @@ export class TelegramService {
 
         const runtime = resolveTextAgentRuntime(agent);
 
-        const toolNames = [...(agent.config.tools || [])];
-        if (!toolNames.includes('files')) toolNames.push('files');
-        if (agent.config.memory?.enabled !== false && !toolNames.includes('memory')) {
-            toolNames.push('memory');
-        }
-        if (!toolNames.includes('message')) toolNames.push('message');
-
-        const tools = await this.toolLoader.loadByNames(toolNames);
+        const tools = await loadAgentTools(agent, this.toolLoader, ['message']);
 
         existing.session = new Session({
             agent,
@@ -1335,7 +1387,7 @@ export class TelegramService {
         if (!session) {
             const persistedSelection = await this.loadPersistedRouteSelection(routeKey);
             session = this.createEmptySession(route);
-            session.agentName = persistedSelection.agentName || 'core';
+            session.agentName = persistedSelection.agentName || INTERNAL_API_DEFAULT_AGENT;
             session.runPath = persistedSelection.runPath || null;
             this.sessions.set(routeKey, session);
             this.registerRouteHandler(routeKey);
@@ -1378,6 +1430,7 @@ export class TelegramService {
                 session.waitingForQuestionResponse = false;
                 const resolver = session.questionResolver;
                 session.questionResolver = null;
+                session.activeQuestionMenu = null;
                 resolver(answerMessages.map((m) => m.text).filter(Boolean).join('\n\n'));
                 return;
             }
@@ -1471,7 +1524,11 @@ export class TelegramService {
             console.error(`Error executing agent for ${routeKey}:`, e);
             session.session?.endTurn();
             await this.persistSessionState(routeKey, session).catch(() => undefined);
-            await this.sendMessageToRoute(session.route, `Error: ${e.message}`);
+            try {
+                await this.sendMessageToRoute(session.route, `Error: ${e?.message || String(e)}`);
+            } catch (notifyError) {
+                console.warn(`[Telegram] Failed to deliver error notification for ${routeKey}:`, notifyError);
+            }
         } finally {
             session.isProcessing = false;
 
@@ -2028,7 +2085,7 @@ export class TelegramService {
         if (!session) {
             const persistedSelection = await this.loadPersistedRouteSelection(routeKey);
             session = this.createEmptySession(route);
-            session.agentName = this.normalizePreferredAgentName(preferredAgentName) || persistedSelection.agentName || 'CORE';
+            session.agentName = this.normalizePreferredAgentName(preferredAgentName) || persistedSelection.agentName || INTERNAL_API_DEFAULT_AGENT;
             session.runPath = this.normalizeRunPath(persistedSelection.runPath) || null;
             this.sessions.set(routeKey, session);
             this.registerRouteHandler(routeKey);
@@ -2102,6 +2159,38 @@ export class TelegramService {
         return 1000;
     }
 
+    private getErrorText(error: unknown, seen = new Set<unknown>()): string {
+        if (!error || seen.has(error)) {
+            return '';
+        }
+        seen.add(error);
+
+        if (typeof error === 'string') {
+            return error;
+        }
+
+        if (error instanceof Error) {
+            const cause = 'cause' in error ? this.getErrorText((error as Error & { cause?: unknown }).cause, seen) : '';
+            return `${error.name} ${error.message} ${(error as TelegramApiErrorLike).code || ''} ${(error as TelegramApiErrorLike).errno || ''} ${cause}`.trim();
+        }
+
+        if (typeof error === 'object') {
+            const apiError = error as TelegramApiErrorLike;
+            return `${apiError.code || ''} ${apiError.errno || ''} ${this.getErrorText(apiError.cause, seen)}`.trim();
+        }
+
+        return String(error);
+    }
+
+    private isTransientTelegramError(error: unknown): boolean {
+        const text = this.getErrorText(error);
+        return /ECONNRESET|UND_ERR_SOCKET|ETIMEDOUT|ECONNREFUSED|EAI_AGAIN|ENOTFOUND|socket hang up|fetch failed|network|timeout|timed out|terminated/i.test(text);
+    }
+
+    private getTransientRetryMs(attempt: number): number {
+        return Math.min(2_000, 350 * attempt);
+    }
+
     private delay(ms: number): Promise<void> {
         return new Promise((resolve) => setTimeout(resolve, ms));
     }
@@ -2129,6 +2218,13 @@ export class TelegramService {
                 if (this.isRateLimitError(error) && attempt < 3) {
                     const retryMs = this.getRetryAfterMs(error);
                     console.warn(`[Telegram] ${label} rate-limited for ${this.routeKey(effectiveRoute)}. Retrying in ${retryMs}ms`);
+                    await this.delay(retryMs);
+                    continue;
+                }
+
+                if (this.isTransientTelegramError(error) && attempt < 3) {
+                    const retryMs = this.getTransientRetryMs(attempt);
+                    console.warn(`[Telegram] ${label} transient failure for ${this.routeKey(effectiveRoute)}. Retrying in ${retryMs}ms`);
                     await this.delay(retryMs);
                     continue;
                 }
@@ -2328,21 +2424,48 @@ export class TelegramService {
         return this.draftCounter;
     }
 
-    public async ask(chatId: string, question: string, preferredAgentName?: string): Promise<string> {
+    public async ask(chatId: string, question: string, preferredAgentName?: string, options?: AskMenuOptions): Promise<string> {
         const { routeKey, route, session } = await this.resolveRouteForApi(chatId, preferredAgentName);
         if (!session) throw new Error(`No session for route "${routeKey}"`);
 
-        await this.sendMessageToRoute(route, `Question:\n${question}`);
-
-        return new Promise((resolve) => {
-            session.waitingForQuestionResponse = true;
-            session.questionResolver = resolve;
-
-            const idx = session.pendingMessages.findIndex((m) => Boolean(m.text));
-            if (idx >= 0) {
-                this.schedulePendingProcessing(routeKey);
-            }
+        const menu = normalizeAskMenu(options);
+        const token = menu ? Math.random().toString(36).slice(2, 12) : undefined;
+        let resolveAnswer: (response: string) => void = () => undefined;
+        const response = new Promise<string>((resolve) => {
+            resolveAnswer = resolve;
         });
+
+        session.waitingForQuestionResponse = true;
+        session.questionResolver = resolveAnswer;
+        session.activeQuestionMenu = menu && token ? { token, options: menu.options } : null;
+
+        const detailLines = menu?.options
+            .filter((option) => option.description)
+            .map((option) => `• ${option.label} — ${option.description}`) || [];
+        const questionText = [
+            `Question:\n${question}`,
+            ...detailLines,
+            ...(menu ? ['\nTap an option below, or reply in your own words.'] : []),
+        ].join('\n');
+
+        try {
+            await this.sendMessageToRoute(route, questionText, menu && token ? {
+                reply_markup: Markup.inlineKeyboard(menu.options.map((option, index) => [
+                    Markup.button.callback(option.label.slice(0, 64), `ask:${token}:${index}`),
+                ])).reply_markup,
+            } : {});
+        } catch (error) {
+            session.waitingForQuestionResponse = false;
+            session.questionResolver = null;
+            session.activeQuestionMenu = null;
+            throw error;
+        }
+
+        const idx = session.pendingMessages.findIndex((m) => Boolean(m.text));
+        if (idx >= 0) {
+            this.schedulePendingProcessing(routeKey);
+        }
+        return response;
     }
 
     public async sendFiles(chatId: string, files: string[], preferredAgentName?: string): Promise<void> {

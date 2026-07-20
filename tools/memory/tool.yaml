@@ -3,10 +3,13 @@ description: |
   Unified agent memory.
 
   Public API:
-  - `memory.add(text, options?)`
+  - `memory.add(text, options?)` or `memory.add({ text|content, retrievalHints?, topics?, agentExclusive?, projectExclusive? })`
+    Natural object inputs are accepted. `retrievalHints` may be a string or array; `topics` are added as retrieval hints.
     options:
     {
-      retrievalHints?: string[],
+      retrievalHints?: string[] | string,
+      agentExclusive?: boolean,
+      projectExclusive?: boolean,
       exclusive?: boolean
     }
     Returns:
@@ -16,7 +19,7 @@ description: |
       etaSeconds: number
     }
 
-  - `memory.search(query, options?)`
+  - `memory.search(query, options?)` or `memory.search({ query, mode?, count?, phraseWeighting? })`
     options:
     {
       mode?: "auto" | "top-k",
@@ -26,10 +29,54 @@ description: |
     Returns:
     string
 
-  - `memory.notes.list(input?)`
-  - `memory.notes.find(query, input?)`
-  - `memory.notes.create(title, text)`
-  - `memory.notes.createList(title, items?)`
+  - `memory.context(query)` or `memory.context({ query })`
+    Runs the same combined retrieval and formatting pipeline as automatic memory hints,
+    across graph memory, archived notes/media, and conversation transcripts. Use it when
+    you need context for a custom query rather than the current user message.
+    Returns:
+    string
+
+  - `memory.notes.path()`
+    Returns the local Obsidian vault path.
+    Notes are ordinary files, especially Markdown. You should read, search, edit, create, move, and delete files in this directory with normal file tools.
+    Obligatory naming rule: every note file created by you must contain `TELOS` in its filename.
+
+  - `memory.notes.search(query, options?)`
+    Semantic search over archived notes and files that were backed up into the content database after being unchanged for 24+ hours.
+    options:
+    {
+      count?: number,
+      recencyBias?: number
+    }
+    `recencyBias` defaults to 0 for notes. Set a high recencyBias with an empty query to retrieve recent archived notes.
+    Returns:
+    Array<{ noteId, createdAt, updatedAt, summary, author, score }>
+
+  - `memory.notes.import(noteId)`
+    Restores an archived note file back into the Obsidian vault with its original name/path.
+
+  - `memory.conversations.transcript.search(query, options?)`
+    Semantic search over realtime-advisor final transcripts. Audio content embedding is started in parallel with diarization and stored with the final labeled transcript when available.
+    options:
+    {
+      count?: number,
+      recencyBias?: number,
+      transcriptLabel?: string
+    }
+    `recencyBias` defaults to 0.5. `transcriptLabel` filters to chunks containing a speaker label such as `Subject 13`.
+    Returns:
+    Array<{ createdAt, updatedAt, summary, transcript, labels, score }>
+
+  - `memory.conversations.context.search(query, options?)`
+    Semantic search over realtime-advisor "Advisor Context" logs. Use this when you need self-contained context of what was going on.
+    options:
+    {
+      count?: number,
+      recencyBias?: number
+    }
+    `recencyBias` defaults to 0.5.
+    Returns:
+    Array<{ createdAt, updatedAt, summary, transcript, score }>
 
   `memory.notes.*` returns note handle objects with methods:
   - `get()`, `put(text)`, `append(text)`, `patch(search, replace)`, `remove()`

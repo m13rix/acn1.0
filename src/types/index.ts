@@ -134,6 +134,8 @@ export interface ProviderStreamEvent {
   toolName?: string;
   /** Parsed tool call (for tool_call.done) */
   toolCall?: ProviderToolCall;
+  /** Token usage, usually attached to done events when the provider streams it */
+  usage?: ProviderResponse['usage'];
 }
 
 /**
@@ -274,6 +276,23 @@ export interface AgentInstructionAlgorithmConfig {
   configPath?: string;
 }
 
+export type ActionBuiltinTool = 'files' | 'terminal' | 'code' | 'computer';
+
+/**
+ * Controls the actual packages available inside an agent's action() execution.
+ * Defaults preserve the historical permissive runtime. Constitutional/root
+ * agents can opt into a narrow capability boundary without constraining the
+ * Executor sessions they invoke in the same sandbox.
+ */
+export interface AgentActionToolPolicy {
+  /** Add interface/runtime convenience modules such as files, memory, and message. */
+  allowImplicitTools?: boolean;
+  /** Built-in packages injected even when they are absent from `tools`. */
+  builtins?: ActionBuiltinTool[];
+  /** Permit imports/require from model-authored action code. */
+  allowImports?: boolean;
+}
+
 export interface AgentConfig {
   name: string;
   description?: string;
@@ -315,6 +334,9 @@ export interface AgentConfig {
   requireFinish?: boolean;     // Whether the agent must call TASK_DONE/FINISH to complete a task (default: true)
   requireFinishHeartbeat?: boolean; // Optional override for heartbeat-triggered turns
   preserveSession?: boolean;   // Persist and resume route-bound chat session history across restarts
+  preserveReasoning?: boolean; // Replay saved assistant reasoning traces in future model context
+  suppressFinalOutput?: boolean; // Hide this agent's direct completion when another agent owns user-visible delivery
+  actionToolPolicy?: AgentActionToolPolicy; // Per-agent action capability boundary
   subagentPrompt?: string;     // Optional: file to use as base system prompt for sub-agents (instead of CORE)
   actionAutoFix?: ActionAutoFixConfig; // Optional: auto-heal failed action() code executions
   memoryToolDocs?: boolean; // Include compact tool docs in memory hints/search scope
@@ -368,6 +390,7 @@ export interface AgentMemoryConfig {
   mercuryModel?: string;
   mercuryTemperature?: number;
   mercuryMaxTokens?: number;
+  embeddingProvider?: 'google' | 'ollama' | 'openrouter';
   embeddingModel?: string;
   linkCandidatePoolMax?: number;
   maxAutoLinksPerFact?: number;
@@ -384,6 +407,7 @@ export interface AgentMemoryConfig {
   searchBeamWidth?: number;
   searchMaxChains?: number;
   categories?: AgentMemoryCategoryConfig[];
+  projectCategory?: boolean | string;
   includeUncategorized?: boolean;
   fallbackCategory?: string;
   memoryToolDocs?: boolean;

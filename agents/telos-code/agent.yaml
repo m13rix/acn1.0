@@ -1,7 +1,7 @@
 name: Telos-Code
 description: A coding-focused agent for this workspace.
 
-model: gpt-5.5
+model: gpt-5.6-sol
 provider: openai-codex
 systemPrompt: prompts/system.md
 runPath: ./
@@ -11,8 +11,7 @@ reasoning: low
 modelSwitching:
   mode: whitelist
   whitelist:
-    - gpt-5.4-mini
-    - gpt-5.5
+    - gpt-5.6-sol
   selector:
     model: openai/gpt-oss-20b
     provider: openrouter
@@ -28,6 +27,8 @@ memoryToolDocs: true
 
 memory:
   enabled: true
+  embeddingProvider: openrouter
+  embeddingModel: qwen/qwen3-embedding-8b
 
   memoryToolDocs: true
 
@@ -35,10 +36,11 @@ memory:
     enabled: true
     toolResponses:
       enabled: false
-    userPhraseWeighting: "llm"
+    userPhraseWeighting: "embedding"
 
   categories:
     - name: telos_code_prompt
+  projectCategory: true
 
   includeUncategorized: false
   fallbackCategory: core

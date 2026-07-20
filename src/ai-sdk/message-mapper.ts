@@ -73,7 +73,11 @@ function fileMessageToUserContent(message: Message): ModelMessage {
   };
 }
 
-export function telosMessagesToModelMessages(messages: Message[]): ModelMessage[] {
+export interface TelosMessageMappingOptions {
+  preserveReasoning?: boolean;
+}
+
+export function telosMessagesToModelMessages(messages: Message[], options: TelosMessageMappingOptions = {}): ModelMessage[] {
   const out: ModelMessage[] = [];
 
   for (const message of messages) {
@@ -102,6 +106,9 @@ export function telosMessagesToModelMessages(messages: Message[]): ModelMessage[
 
     if (message.role === 'assistant') {
       const content: any[] = [];
+      if (options.preserveReasoning && message.reasoning?.trim()) {
+        content.push({ type: 'reasoning', text: message.reasoning });
+      }
       if (message.content?.trim()) {
         content.push({ type: 'text', text: message.content });
       }

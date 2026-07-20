@@ -1,17 +1,17 @@
 name: browser-operator
 description: Browser-native agent for reliable web navigation, data extraction, form interaction, and step-by-step task execution inside a real browser session.
 
-model: gpt-5.4-mini
-provider: openai-codex
+model: deepseek-v4-flash
+provider: opencode
 systemPrompt: prompts/system.md
 
 modelSwitching:
   mode: whitelist
   whitelist:
-    - gpt-5.4-mini
+    - opencode
   selector:
-    model: openai/gpt-oss-20b
-    provider: openrouter
+    model: deepseek-v4-flash
+    provider: opencode
 
 tools: []
 
@@ -22,4 +22,5 @@ loop: provider-tools
 syntax: markdown
 sandbox: browser
 injectAgentsList: false
-requireFinish: true
+requireFinish: false
+preserveReasoning: true

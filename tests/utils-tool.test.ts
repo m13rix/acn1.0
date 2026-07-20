@@ -21,6 +21,20 @@ test('converts common zod schema shapes to json schema', () => {
   assert.equal(jsonSchema.additionalProperties, false);
 });
 
+test('accepts options object schema shape used by agents', () => {
+  const schema = {
+    type: 'object',
+    properties: {
+      ok: { type: 'boolean' },
+    },
+    required: ['ok'],
+    additionalProperties: false,
+  };
+
+  const jsonSchema = __internals.schemaToJsonSchema({ schema }) as any;
+  assert.equal(jsonSchema, schema);
+});
+
 test('keeps relative output paths inside sandbox and appends png extension', () => {
   const originalSandboxDir = process.env.SANDBOX_DIR;
   process.env.SANDBOX_DIR = 'C:\\sandbox-root';

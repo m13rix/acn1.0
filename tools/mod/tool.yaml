@@ -34,4 +34,14 @@ description: |
     The endpoint uses Inception Labs Mercury 2 with medium reasoning effort and returns the model's structured JSON:
     `{ "success": true }` for balanced items, or `{ "success": false, "message"?: string, "concept"?: string, "recipe"?: [...] }`.
   - `POST /validate-balance` is an alias for the same endpoint.
+
+  Crafting artificer API:
+
+  - `POST http://127.0.0.1:3018/create-item` with JSON
+    `{ "request": "Create item: <blueprint and quill contents>" }` starts the
+    `limitless-artificer` through the normal agent invocation pipeline.
+  - Only one artificer request runs at a time; concurrent attempts receive HTTP 409.
+  - A crafting-table job must be completed inside `mod.execute(...)` with
+    `resolveCrafting(customItemId, count)`. This places the created custom item in
+    the waiting table and permanently records its id and output count in the blueprint.
 module: index.ts

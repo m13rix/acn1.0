@@ -11,7 +11,7 @@ import { AgentLoader } from '../loaders/AgentLoader.js';
 import { ToolLoader } from '../loaders/ToolLoader.js';
 import { Session } from '../core/Session.js';
 import { Executor } from '../core/Executor.js';
-import { resolveTextAgentRuntime } from '../core/SessionFactory.js';
+import { loadAgentTools, resolveTextAgentRuntime } from '../core/SessionFactory.js';
 import { TelegramService } from '../services/TelegramService.js';
 import { HeartbeatService } from '../heartbeat/HeartbeatService.js';
 import { COLORS, SYMBOLS, StreamDisplay } from './display.js';
@@ -22,6 +22,7 @@ import { InterfaceManager, setDefaultInterfaceManager } from '../interfaces/Inte
 import { LocalVoiceInterfaceRuntime } from '../interfaces/local-voice.js';
 import { RealtimeAdvisorInterfaceRuntime } from '../interfaces/realtime-advisor/index.js';
 import { TelegramInterfaceRuntime } from '../interfaces/telegram-runtime.js';
+import { ensureMainProcessHeapLimit } from '../runtime/nodeHeap.js';
 
 // Import to register all modules
 import '../providers/index.js';
@@ -29,6 +30,7 @@ import '../syntax/index.js';
 import '../loops/index.js';
 
 config();
+ensureMainProcessHeapLimit(import.meta.url);
 
 const agentLoader = new AgentLoader();
 const toolLoader = new ToolLoader();
@@ -135,13 +137,7 @@ async function createSession(agentName: string): Promise<Session> {
   const runtime = resolveTextAgentRuntime(agent);
 
   // Load tools
-  const toolNames = [...(agent.config.tools || [])];
-  if (!toolNames.includes('files')) toolNames.push('files');
-  if (agent.config.memory?.enabled !== false && !toolNames.includes('memory')) {
-    toolNames.push('memory');
-  }
-
-  const tools = await toolLoader.loadByNames(toolNames);
+  const tools = await loadAgentTools(agent, toolLoader);
 
   console.log(COLORS.muted(`Provider: ${agent.config.provider || 'gemini'} | Tools: ${tools.map(t => t.config.name).join(', ') || 'none'}`));
 

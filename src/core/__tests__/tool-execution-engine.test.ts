@@ -33,11 +33,12 @@ class MockSandbox {
 async function withTempSandbox(
   run: (engine: ToolExecutionEngine, sandboxDir: string) => Promise<void>,
   actionFn?: (code: string) => Promise<ExecutionResult>,
+  sessionOverrides: Record<string, unknown> = {},
 ): Promise<void> {
   const sandboxDir = await mkdtemp(join(tmpdir(), 'telos-tool-engine-'));
   try {
     const sandbox = new MockSandbox(sandboxDir, actionFn);
-    const session = { id: 'test-session', sandbox } as any;
+    const session = { id: 'test-session', sandbox, ...sessionOverrides } as any;
     const engine = new ToolExecutionEngine(session);
     await run(engine, sandboxDir);
   } finally {
@@ -76,6 +77,45 @@ test('legacy provider-native file and cli tools are rejected', async () => {
   });
 });
 
+test('strips duplicate injected tool requires before first action execution', async () => {
+  let executedCode = '';
+
+  await withTempSandbox(
+    async (engine) => {
+      const result = await engine.executeProviderToolCall({
+        id: 'tool_duplicate_imports',
+        name: 'action',
+        arguments: {
+          content: [
+            "const files = require('files');",
+            "const memory = require('memory');",
+            "const { files } = require;",
+            "const { memory: mem } = require;",
+            "console.log(JSON.stringify(await files.list('.')));",
+            "console.log(JSON.stringify(await mem.search('vision')));",
+          ].join('\n'),
+        },
+      });
+
+      assert.match(result.observation, /AUTO-FIX: pre-run removed duplicate import\(s\)/);
+      assert.doesNotMatch(executedCode, /require\('files'\)/);
+      assert.doesNotMatch(executedCode, /require\('memory'\)/);
+      assert.doesNotMatch(executedCode, /const \{ files \} = require/);
+      assert.doesNotMatch(executedCode, /const \{ memory: mem \} = require/);
+      assert.match(executedCode, /files\.list/);
+      assert.match(executedCode, /memory\.search/);
+      assert.doesNotMatch(executedCode, /\bmem\.search/);
+    },
+    async (code) => {
+      executedCode = code;
+      return { success: true, output: 'ok' };
+    },
+    {
+      tools: [{ config: { name: 'memory' } }],
+    }
+  );
+});
+
 test('handles TASK_DONE pseudo-tool directly and keeps FINISH as alias for old continuations', async () => {
   await withTempSandbox(async (engine) => {
     const result = await engine.executeProviderToolCall({
@@ -95,6 +135,26 @@ test('handles TASK_DONE pseudo-tool directly and keeps FINISH as alias for old c
 
     assert.equal(legacy.finishMessage, 'legacy still works');
   });
+});
+
+test('treats an action TASK_DONE sentinel as internal control output', async () => {
+  await withTempSandbox(
+    async (engine) => {
+      const result = await engine.executeProviderToolCall({
+        id: 'tool_action_finish',
+        name: 'action',
+        arguments: { content: 'TASK_DONE("done")' },
+      });
+
+      assert.equal(result.finishMessage, 'done');
+      assert.equal(result.observation, '');
+      assert.doesNotMatch(result.observation, /TELOS_TASK_DONE|done/);
+    },
+    async () => ({
+      success: true,
+      output: '__TELOS_TASK_DONE_START__"done"__TELOS_TASK_DONE_END__',
+    }),
+  );
 });
 
 test('serializes parallel provider tool calls and returns each observation', async () => {
@@ -140,6 +200,30 @@ test('serializes parallel provider tool calls and returns each observation', asy
   assert.deepEqual(order, ['first-start', 'first-end', 'second-start', 'second-end']);
 });
 
+test('developer trace exposes raw model-authored action code', async () => {
+  const sandboxDir = await mkdtemp(join(tmpdir(), 'telos-structured-trace-'));
+  let surfacedAction = '';
+  try {
+    const sandbox = new MockSandbox(sandboxDir, async () => ({ success: true, output: 'MODE\nplanning' }));
+    const session = {
+      id: 'root-session',
+      sandbox,
+      tools: [],
+      agent: { config: { actionToolPolicy: { builtins: [], allowImports: false } } },
+    } as any;
+    const engine = new ToolExecutionEngine(session, { onAction: (code) => { surfacedAction = code; } });
+    const result = await engine.executeProviderToolCall({
+      id: 'root_action',
+      name: 'action',
+      arguments: { content: 'console.log("MODE\\nplanning")' },
+    });
+    assert.equal(surfacedAction, 'console.log("MODE\\nplanning")');
+    assert.match(result.observation, /MODE\nplanning/);
+  } finally {
+    await rm(sandboxDir, { recursive: true, force: true });
+  }
+});
+
 test('compacts oversized action observations while saving the full output', async () => {
   const previousLimit = process.env.TELOS_MAX_TOOL_OBSERVATION_CHARS;
   process.env.TELOS_MAX_TOOL_OBSERVATION_CHARS = '2000';
@@ -172,5 +256,31 @@ test('compacts oversized action observations while saving the full output', asyn
     } else {
       process.env.TELOS_MAX_TOOL_OBSERVATION_CHARS = previousLimit;
     }
+  }
+});
+
+test('does not truncate the terminal finalMessage of an agents.run result', async () => {
+  const previousLimit = process.env.TELOS_MAX_TOOL_OBSERVATION_CHARS;
+  process.env.TELOS_MAX_TOOL_OBSERVATION_CHARS = '2000';
+  const finalMessage = `EXECUTOR_EVIDENCE\n${'evidence '.repeat(1000)}`;
+  const output = `{\n  jobName: 'job-1',\n  finalMessage: ${JSON.stringify(finalMessage)}\n}`;
+
+  try {
+    await withTempSandbox(
+      async (engine) => {
+        const result = await engine.executeProviderToolCall({
+          id: 'agent_result',
+          name: 'action',
+          arguments: { content: 'agent-result' },
+        });
+
+        assert.equal(result.observation, output);
+        assert.doesNotMatch(result.observation, /observation truncated/);
+      },
+      async () => ({ success: true, output }),
+    );
+  } finally {
+    if (previousLimit === undefined) delete process.env.TELOS_MAX_TOOL_OBSERVATION_CHARS;
+    else process.env.TELOS_MAX_TOOL_OBSERVATION_CHARS = previousLimit;
   }
 });

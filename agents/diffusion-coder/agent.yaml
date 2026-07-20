@@ -1,0 +1,55 @@
+name: Diffusion-Coder
+description: High-speed local DiffusionGemma coding agent served by vLLM.
+
+model: diffusiongemma-26b-awq
+provider: vllm
+systemPrompt: ../local-coder/prompts/system.md
+runPath: ./
+
+providerOptions:
+  vllm:
+    chat_template_kwargs:
+      enable_thinking: false
+
+modelSwitching:
+  mode: whitelist
+  whitelist:
+    - diffusiongemma-26b-awq
+    - any
+  aliases:
+    local-diffusion: vllm/diffusiongemma-26b-awq
+  selector:
+    model: diffusiongemma-26b-awq
+    provider: vllm
+
+tools:
+  - search
+  - message
+  - memory
+  - agents
+  - utils
+  - telos
+
+memoryToolDocs: true
+
+memory:
+  enabled: true
+  embeddingProvider: openrouter
+  embeddingModel: qwen/qwen3-embedding-8b
+  autoHints:
+    enabled: false
+    toolResponses:
+      enabled: false
+    userPhraseWeighting: "embedding"
+  categories:
+    - name: telos_code_prompt
+  projectCategory: true
+  includeUncategorized: false
+  fallbackCategory: core
+  searchMaxChains: 8
+
+adaptiveStepContext:
+  enabled: false
+
+injectAgentsList: false
+requireFinish: false

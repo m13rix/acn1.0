@@ -1,9 +1,9 @@
 name: notes
 description: >
-  Google Keep heartbeat sensor for rich note-ingest events.
+  Obsidian vault heartbeat sensor for local Markdown notes and attachments.
 events:
   - name: newNote
-    description: Fires when a newly created or updated user-owned Google Keep note is detected.
+    description: Fires when a new Markdown note file appears in the Obsidian vault after a 5-minute retriggerable edit debounce.
     argsSchema:
       type: array
       items: []
@@ -15,55 +15,100 @@ events:
       properties:
         id:
           type: string
+        name:
+          type: string
         title:
           type: string
-        logicalTitle:
+        path:
           type: string
-        rawTitle:
+        relativePath:
           type: string
-        owner:
+        contents:
           type: string
-        kind:
-          type: string
-        text:
-          type: string
-        items:
-          type: array
-          items:
-            type: object
-            additionalProperties: false
-            properties:
-              id:
-                type: string
-              text:
-                type: string
-              checked:
-                type: boolean
-              sort:
-                type:
-                  - number
-                  - 'null'
-            required:
-              - id
-              - text
-              - checked
-              - sort
         createdAt:
-          type:
-            - string
-            - 'null'
+          type: string
         modifiedAt:
-          type:
-            - string
-            - 'null'
+          type: string
       required:
         - id
+        - name
         - title
-        - logicalTitle
-        - rawTitle
-        - owner
-        - kind
-        - text
-        - items
+        - path
+        - relativePath
+        - contents
         - createdAt
         - modifiedAt
+
+  - name: noteUpdated
+    description: Fires when an existing Markdown note file is updated after a 5-minute retriggerable edit debounce.
+    argsSchema:
+      type: array
+      items: []
+      minItems: 0
+      maxItems: 0
+    payloadSchema:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        title:
+          type: string
+        path:
+          type: string
+        relativePath:
+          type: string
+        contents:
+          type: string
+        createdAt:
+          type: string
+        modifiedAt:
+          type: string
+      required:
+        - id
+        - name
+        - title
+        - path
+        - relativePath
+        - contents
+        - createdAt
+        - modifiedAt
+
+  - name: newAttachment
+    description: Fires when a new non-Markdown file appears in the Obsidian vault.
+    argsSchema:
+      type: array
+      items: []
+      minItems: 0
+      maxItems: 0
+    payloadSchema:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        path:
+          type: string
+        relativePath:
+          type: string
+        mimeType:
+          type: string
+        createdAt:
+          type: string
+        modifiedAt:
+          type: string
+        size:
+          type: number
+      required:
+        - id
+        - name
+        - path
+        - relativePath
+        - mimeType
+        - createdAt
+        - modifiedAt
+        - size

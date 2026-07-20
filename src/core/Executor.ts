@@ -16,7 +16,6 @@ import { ToolExecutionEngine } from './ToolExecutionEngine.js';
 import { runForegroundTask } from './ExecutionGate.js';
 import { readFile, unlink } from 'fs/promises';
 import { join } from 'path';
-import { getMemoryRuntime } from '../memory_system/index.js';
 import { runAiSdkTextAgent } from '../ai-sdk/text-agent-runtime.js';
 import { getInstructionAlgorithmService } from '../instruction-algorithm/Service.js';
 
@@ -60,6 +59,7 @@ export interface ExecutorOptions {
   callbacks?: ExecutorCallbacks;
   requireFinish?: boolean;
   onCheckpoint?: (snapshot: SessionSnapshot, metadata: ExecutorCheckpointMetadata) => void | Promise<void>;
+  signal?: AbortSignal;
 }
 
 export interface ExecutorRunOptions {
@@ -80,6 +80,7 @@ export class Executor {
       callbacks: options.callbacks ?? {},
       requireFinish: options.requireFinish ?? true,
       onCheckpoint: options.onCheckpoint,
+      signal: options.signal,
     };
   }
 
@@ -172,7 +173,6 @@ export class Executor {
 
       const payload = JSON.parse(content) as {
         searches?: Array<{ factIds?: string[]; text?: string }>;
-        noteEvents?: Array<{ action?: 'upsert' | 'remove'; noteId?: string; sourceLabel?: string }>;
       };
 
       for (const search of payload.searches || []) {
@@ -181,21 +181,6 @@ export class Executor {
           : [];
         if (factIds.length > 0) {
           this.session.markMemoryFactsAsSurfaced(factIds);
-        }
-      }
-
-      if ((payload.noteEvents || []).length > 0) {
-        const runtime = await getMemoryRuntime(this.session.agent.config.memory);
-        for (const event of payload.noteEvents || []) {
-          const noteId = String(event.noteId || '').trim();
-          if (!noteId) {
-            continue;
-          }
-          if (event.action === 'remove') {
-            await runtime.notesSync.notifyNoteRemoval(noteId);
-          } else {
-            await runtime.notesSync.notifyNoteUpsert(noteId, event.sourceLabel);
-          }
         }
       }
 

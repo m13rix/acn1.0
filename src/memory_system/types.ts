@@ -28,6 +28,7 @@ export interface DeleteCategoryResult {
 export type PhraseAggregationMode = 'max' | 'sum';
 export type CandidateSelectionMode = 'top-k' | 'threshold' | 'range' | 'auto';
 export type QueryPhraseWeightingMode = 'llm' | 'embedding';
+export type EmbeddingProvider = 'google' | 'ollama' | 'openrouter';
 
 export interface CandidateSelectionOptions {
   mode?: CandidateSelectionMode;
@@ -51,6 +52,14 @@ export interface SearchOptions {
   categoryMultipliers?: Record<string, number>;
   excludeFactIds?: string[];
   queryPhraseWeightingMode?: QueryPhraseWeightingMode;
+  onQueryPrepared?: (prepared: {
+    queryPhrases: WeightedQueryPhrase[];
+    phraseAggregationMode: PhraseAggregationMode;
+    overallEmbeddingWeight: number;
+    embeddingModel: string;
+    globalEmbedding: number[];
+    phraseEmbeddings: number[][];
+  }) => void;
 }
 
 export interface SeedFactScore {
@@ -67,6 +76,15 @@ export interface SearchResult {
   phraseAggregationMode: PhraseAggregationMode;
   candidateSelection: Required<CandidateSelectionOptions>;
   overallEmbeddingWeight: number;
+  timings?: {
+    queryAnalysisMs: number;
+    queryPreparationMs: number;
+    phraseWeightingMs: number;
+    queryEmbeddingMs: number;
+    candidateScoringMs: number;
+    graphSearchMs: number;
+    totalMs: number;
+  };
 }
 
 export interface EmbeddedPhraseRecord {
@@ -154,6 +172,7 @@ export interface MemoryRuntimeConfig {
   mercuryModel: string;
   mercuryTemperature: number;
   mercuryMaxTokens: number;
+  embeddingProvider: EmbeddingProvider;
   embeddingModel: string;
   linkCandidatePoolMax: number;
   maxAutoLinksPerFact: number;
@@ -198,13 +217,14 @@ export const DEFAULT_MEMORY_CONFIG: MemoryRuntimeConfig = {
   mercuryModel: 'mercury-2',
   mercuryTemperature: 0,
   mercuryMaxTokens: 4000,
-  embeddingModel: 'qwen3-embedding:8b',
-  linkCandidatePoolMax: 40,
+  embeddingProvider: 'openrouter',
+  embeddingModel: 'qwen/qwen3-embedding-8b',
+  linkCandidatePoolMax: 7,
   maxAutoLinksPerFact: 4,
   semanticMergeThreshold: 0.92,
   overallEmbeddingWeight: 0.35,
   searchDefaultAggregationMode: 'max',
-  searchDefaultPhraseWeightingMode: 'llm',
+  searchDefaultPhraseWeightingMode: 'embedding',
   searchDefaultCandidateMode: 'top-k',
   searchDefaultTopK: 5,
   searchDefaultThreshold: 0.35,
