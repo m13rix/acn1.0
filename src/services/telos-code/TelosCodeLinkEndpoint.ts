@@ -20,6 +20,7 @@ import { ThreadService } from '../ThreadService.js';
 import { ThreadStore } from '../thread-store/ThreadStore.js';
 import type { HarnessThread } from '../thread-store/types.js';
 import { WorkspaceSnapshotService } from '../WorkspaceSnapshotService.js';
+import { TelosCodeCatalogService } from './TelosCodeCatalogService.js';
 
 const PAIRING_TTL_MS = 10 * 60 * 1000;
 const SESSION_HANDSHAKE_TIMEOUT_MS = 15_000;
@@ -54,6 +55,7 @@ export interface TelosCodeLinkEndpointOptions {
   harnessId: string;
   approveClient(request: TelosCodeClientApproval): boolean | Promise<boolean>;
   workspaceSnapshots?: WorkspaceSnapshotService;
+  catalog?: TelosCodeCatalogService;
   now?: () => Date;
 }
 
@@ -69,6 +71,7 @@ export class TelosCodeLinkEndpoint {
   private readonly pairing = new Map<string, PendingPairing>();
   private readonly activeStreams = new Map<string, Set<AppStream>>();
   private readonly now: () => Date;
+  private readonly catalog: TelosCodeCatalogService;
   private unregister: (() => Promise<void>) | null = null;
 
   public constructor(
@@ -78,6 +81,7 @@ export class TelosCodeLinkEndpoint {
     private readonly options: TelosCodeLinkEndpointOptions,
   ) {
     this.now = options.now || (() => new Date());
+    this.catalog = options.catalog || new TelosCodeCatalogService();
   }
 
   public async start(): Promise<void> {
@@ -313,6 +317,17 @@ export class TelosCodeLinkEndpoint {
     if (prior !== null) return prior;
     let result: unknown;
     switch (command._tag) {
+      case 'catalog.get':
+        result = { catalog: await this.catalog.getCatalog() };
+        break;
+      case 'catalog.models':
+        result = { page: await this.catalog.listModels({
+          providerId: command.providerId,
+          query: command.query,
+          cursor: command.cursor,
+          limit: command.limit,
+        }) };
+        break;
       case 'project.create':
         result = { project: this.store.createProject({
           id: command.projectId,
@@ -323,12 +338,12 @@ export class TelosCodeLinkEndpoint {
       case 'thread.create':
         result = { thread: await this.threads.createThread({
           threadId: command.threadId,
-          projectId: command.launchProfile.projectId,
-          worktreePath: command.launchProfile.worktreePath,
-          agentName: command.launchProfile.agentName,
-          providerId: command.launchProfile.providerId,
-          modelId: command.launchProfile.modelId,
-          reasoning: command.launchProfile.reasoning,
+          projectId: command.projectId,
+          worktreePath: command.worktreePath,
+          agentName: command.agentName,
+          providerId: command.providerId,
+          modelId: command.modelId,
+          reasoning: command.reasoning,
           parentThreadId: command.parentThreadId,
           title: command.title,
         }) };

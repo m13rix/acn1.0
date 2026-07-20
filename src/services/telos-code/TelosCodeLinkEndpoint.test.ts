@@ -103,6 +103,10 @@ test('pairs an app identity only after explicit approval and authenticates recon
       approvals.push(`${request.deviceName}:${request.fingerprint}`);
       return true;
     },
+    catalog: {
+      getCatalog: async () => ({ agents: [], providers: [] }),
+      listModels: async () => ({ items: [] }),
+    } as never,
   });
   try {
     const pairing = endpoint.beginPairing({ host: '127.0.0.1', port: 4424 });
@@ -135,9 +139,22 @@ test('pairs an app identity only after explicit approval and authenticates recon
         stream.push({
           type: 'command',
           command: {
-            _tag: 'project.create',
+            _tag: 'catalog.get',
             protocolVersion: 1,
             commandId: '01900000-0000-7000-8000-000000000101',
+            harnessId: '01900000-0000-7000-8000-000000000001',
+            issuedAt: new Date().toISOString(),
+            expiresAt: new Date(Date.now() + 60_000).toISOString(),
+          },
+        });
+      }
+      if (message.type === 'command.result' && message.commandId === '01900000-0000-7000-8000-000000000101') {
+        stream.push({
+          type: 'command',
+          command: {
+            _tag: 'project.create',
+            protocolVersion: 1,
+            commandId: '01900000-0000-7000-8000-000000000102',
             harnessId: '01900000-0000-7000-8000-000000000001',
             issuedAt: new Date().toISOString(),
             expiresAt: new Date(Date.now() + 60_000).toISOString(),
@@ -147,7 +164,28 @@ test('pairs an app identity only after explicit approval and authenticates recon
           },
         });
       }
-      if (message.type === 'command.result') stream.end();
+      if (message.type === 'command.result' && message.commandId === '01900000-0000-7000-8000-000000000102') {
+        stream.push({
+          type: 'command',
+          command: {
+            _tag: 'thread.create',
+            protocolVersion: 1,
+            commandId: '01900000-0000-7000-8000-000000000103',
+            harnessId: '01900000-0000-7000-8000-000000000001',
+            issuedAt: new Date().toISOString(),
+            expiresAt: new Date(Date.now() + 60_000).toISOString(),
+            threadId: '01900000-0000-7000-8000-000000000301',
+            parentThreadId: null,
+            projectId: '01900000-0000-7000-8000-000000000201',
+            worktreePath: null,
+            agentName: 'Telos-Code',
+            providerId: 'openai-codex',
+            modelId: 'gpt-5.5',
+            reasoning: 'high',
+          },
+        });
+      }
+      if (message.type === 'command.result' && message.commandId === '01900000-0000-7000-8000-000000000103') stream.end();
     });
     sessionStream.push({
       type: 'session.hello',
@@ -157,7 +195,14 @@ test('pairs an app identity only after explicit approval and authenticates recon
 
     assert.deepEqual(
       sessionStream.sent.map((message) => message.type),
-      ['session.challenge', 'session.ready', 'shell.snapshot', 'command.result'],
+      [
+        'session.challenge',
+        'session.ready',
+        'shell.snapshot',
+        'command.result',
+        'command.result',
+        'command.result',
+      ],
     );
     assert.equal(
       (sessionStream.sent.find((message) => message.type === 'session.ready')?.capabilities as string[])
@@ -165,6 +210,7 @@ test('pairs an app identity only after explicit approval and authenticates recon
       true,
     );
     assert.equal(store.listProjects()[0]?.displayName, 'Fixture');
+    assert.equal(store.listThreads()[0]?.launchProfile.modelId, 'gpt-5.5');
 
     await endpoint.revokeClient(localIdentity.identity.appInstanceId);
     assert.ok(node.apps.getAuthorization(localIdentity.identity.appInstanceId)?.revokedAt);
