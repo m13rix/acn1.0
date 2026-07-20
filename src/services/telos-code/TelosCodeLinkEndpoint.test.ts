@@ -3,6 +3,7 @@ import { mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { createServer } from 'node:http';
 import { v7 as uuidv7 } from 'uuid';
 
 import {
@@ -20,17 +21,20 @@ import { TelosCodeLinkEndpoint } from './TelosCodeLinkEndpoint.js';
 
 class FakeAppStream implements AppStream {
   readonly appId = 'telos-code';
-  readonly closed = Promise.resolve();
+  readonly closed: Promise<void>;
   readonly sent: Array<Record<string, unknown>> = [];
   private readonly queue: Uint8Array[] = [];
   private readonly waiters: Array<(value: IteratorResult<Uint8Array>) => void> = [];
   private ended = false;
+  private resolveClosed!: () => void;
 
   constructor(
     readonly channelId: string,
     private readonly onSend?: (message: Record<string, unknown>, stream: FakeAppStream) => void,
-    readonly channelType: 'events' | 'file-direct' = 'events',
-  ) {}
+    readonly channelType: AppStream['channelType'] = 'events',
+  ) {
+    this.closed = new Promise<void>((resolve) => { this.resolveClosed = resolve; });
+  }
 
   push(message: Record<string, unknown>): void {
     const bytes = encodeWire(message);
@@ -40,7 +44,9 @@ class FakeAppStream implements AppStream {
   }
 
   end(): void {
+    if (this.ended) return;
     this.ended = true;
+    this.resolveClosed();
     for (const waiter of this.waiters.splice(0)) waiter({ done: true, value: undefined });
   }
 
@@ -269,6 +275,44 @@ test('pairs an app identity only after explicit approval and authenticates recon
     assert.equal(Buffer.concat(fileStream.sent
       .filter((message) => message.type === 'attachment.download.chunk')
       .map((message) => Buffer.from(message.data as Uint8Array))).toString(), uploadBytes.toString());
+
+    const previewServer = createServer((_request, response) => {
+      response.writeHead(200, { 'content-type': 'text/plain' });
+      response.write('streamed ');
+      setTimeout(() => response.end('preview'), 5);
+    });
+    await new Promise<void>((resolve) => previewServer.listen(0, '127.0.0.1', resolve));
+    const previewAddress = previewServer.address();
+    if (!previewAddress || typeof previewAddress === 'string') throw new Error('Preview fixture did not bind.');
+    try {
+      const previewId = '01900000-0000-7000-8000-000000000501';
+      threads.previews.open({
+        threadId: '01900000-0000-7000-8000-000000000301',
+        previewSessionId: previewId,
+        url: `http://127.0.0.1:${previewAddress.port}/`,
+      });
+      const previewStream = new FakeAppStream(previewId, (message, stream) => {
+        if (message.type === 'session.challenge') {
+          stream.push({ type: 'session.proof', proof: createAppSessionProof(localIdentity,
+            message.challenge as Parameters<typeof createAppSessionProof>[1]) });
+        }
+        if (message.type === 'session.ready') stream.push({
+          type: 'preview.http.request',
+          threadId: '01900000-0000-7000-8000-000000000301',
+          previewSessionId: previewId,
+          method: 'GET',
+        });
+      }, 'preview-http');
+      previewStream.push({ type: 'session.hello', appInstanceId: localIdentity.identity.appInstanceId });
+      await endpoint.acceptIncoming(incoming(previewStream));
+      assert.equal(previewStream.sent.find((message) => message.type === 'preview.http.response')?.status, 200);
+      assert.equal(Buffer.concat(previewStream.sent
+        .filter((message) => message.type === 'preview.http.data')
+        .map((message) => Buffer.from(message.data as Uint8Array))).toString(), 'streamed preview');
+      assert.equal(previewStream.sent.at(-1)?.type, 'preview.http.end');
+    } finally {
+      await new Promise<void>((resolve, reject) => previewServer.close((error) => error ? reject(error) : resolve()));
+    }
 
     await endpoint.revokeClient(localIdentity.identity.appInstanceId);
     assert.ok(node.apps.getAuthorization(localIdentity.identity.appInstanceId)?.revokedAt);

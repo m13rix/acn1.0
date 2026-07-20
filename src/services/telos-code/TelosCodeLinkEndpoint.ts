@@ -156,6 +156,10 @@ export class TelosCodeLinkEndpoint {
         await this.serveTerminal(incoming, iterator);
       } else if (incoming.channelType === 'file-direct') {
         await this.serveFiles(incoming.stream, iterator);
+      } else if (incoming.channelType === 'preview-http' || incoming.channelType === 'preview-sse') {
+        await this.servePreviewHttp(incoming, iterator);
+      } else if (incoming.channelType === 'preview-websocket') {
+        await this.servePreviewWebSocket(incoming, iterator);
       } else {
         throw new Error(`Channel is not implemented yet: ${incoming.channelType}`);
       }
@@ -167,6 +171,115 @@ export class TelosCodeLinkEndpoint {
       await incoming.stream.cancel('Telos Code session failed').catch(() => undefined);
     } finally {
       if (appInstanceId) this.untrackStream(appInstanceId, incoming.stream);
+    }
+  }
+
+  private async servePreviewHttp(
+    incoming: IncomingAppStream,
+    iterator: AsyncIterator<Uint8Array>,
+  ): Promise<void> {
+    const request = await this.nextMessage(iterator);
+    if (
+      request.type !== 'preview.http.request'
+      || typeof request.threadId !== 'string'
+      || typeof request.previewSessionId !== 'string'
+      || request.previewSessionId !== incoming.channelId
+    ) {
+      throw new Error('Expected a preview HTTP request matching the channel session.');
+    }
+    const abort = new AbortController();
+    void incoming.stream.closed.then(() => abort.abort()).catch(() => abort.abort());
+    const response = await this.threads.previews.request({
+      threadId: request.threadId,
+      previewSessionId: request.previewSessionId,
+      url: typeof request.url === 'string' ? request.url : undefined,
+      method: typeof request.method === 'string' ? request.method : undefined,
+      headers: isStringHeaders(request.headers) ? request.headers : undefined,
+      body: request.body instanceof Uint8Array ? request.body : undefined,
+      signal: abort.signal,
+    });
+    await this.send(incoming.stream, {
+      type: 'preview.http.response',
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+      finalUrl: response.finalUrl,
+    });
+    for await (const data of response.body) {
+      await this.send(incoming.stream, { type: 'preview.http.data', data });
+    }
+    await this.send(incoming.stream, { type: 'preview.http.end' });
+    await incoming.stream.halfClose();
+  }
+
+  private async servePreviewWebSocket(
+    incoming: IncomingAppStream,
+    iterator: AsyncIterator<Uint8Array>,
+  ): Promise<void> {
+    const request = await this.nextMessage(iterator);
+    if (
+      request.type !== 'preview.websocket.open'
+      || typeof request.threadId !== 'string'
+      || typeof request.previewSessionId !== 'string'
+      || request.previewSessionId !== incoming.channelId
+    ) {
+      throw new Error('Expected a preview WebSocket request matching the channel session.');
+    }
+    const socket = this.threads.previews.openWebSocket({
+      threadId: request.threadId,
+      previewSessionId: request.previewSessionId,
+      url: typeof request.url === 'string' ? request.url : undefined,
+      protocols: Array.isArray(request.protocols)
+        ? request.protocols.filter((item): item is string => typeof item === 'string')
+        : undefined,
+      headers: isStringHeaders(request.headers) ? request.headers : undefined,
+    });
+    let writes = Promise.resolve();
+    const publish = (message: ProtocolMessage) => {
+      writes = writes.then(() => this.send(incoming.stream, message));
+      return writes;
+    };
+    let finish!: () => void;
+    const closed = new Promise<void>((resolve) => { finish = resolve; });
+    socket.on('open', () => void publish({
+      type: 'preview.websocket.opened',
+      protocol: socket.protocol,
+      extensions: socket.extensions,
+    }).catch(() => undefined));
+    socket.on('message', (data, binary) => void publish({
+      type: 'preview.websocket.data',
+      binary,
+      data: new Uint8Array(Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer)),
+    }).catch(() => undefined));
+    socket.on('close', (code, reason) => {
+      void publish({ type: 'preview.websocket.closed', code, reason: reason.toString() })
+        .finally(finish);
+    });
+    socket.on('error', (error) => void publish({
+      type: 'preview.websocket.error',
+      error: error.message,
+    }).catch(() => undefined));
+    try {
+      for (;;) {
+        const next = await Promise.race([
+          iterator.next().then((value) => ({ kind: 'message' as const, value })),
+          closed.then(() => ({ kind: 'closed' as const })),
+        ]);
+        if (next.kind === 'closed' || next.value.done) return;
+        const message = decodeProtocolMessage(next.value.value);
+        if (message.type === 'preview.websocket.data' && message.data instanceof Uint8Array) {
+          socket.send(message.data, { binary: message.binary === true });
+        } else if (message.type === 'preview.websocket.close') {
+          socket.close(Number(message.code || 1000), String(message.reason || ''));
+        } else if (message.type === 'preview.websocket.ping') {
+          socket.ping(message.data instanceof Uint8Array ? message.data : undefined);
+        } else {
+          throw new Error(`Unsupported preview WebSocket message: ${message.type}`);
+        }
+      }
+    } finally {
+      if (socket.readyState === socket.OPEN || socket.readyState === socket.CONNECTING) socket.close();
+      await writes.catch(() => undefined);
     }
   }
 
@@ -669,6 +782,29 @@ export class TelosCodeLinkEndpoint {
       case 'project.ports':
         result = { ports: await this.threads.scripts.discoverPorts(command.threadId) };
         break;
+      case 'preview.open':
+        result = { preview: this.threads.previews.open({
+          threadId: command.threadId,
+          previewSessionId: command.previewSessionId,
+          url: command.url,
+        }) };
+        break;
+      case 'preview.navigate':
+        result = { preview: this.threads.previews.navigate({
+          threadId: command.threadId,
+          previewSessionId: command.previewSessionId,
+          url: command.url,
+        }) };
+        break;
+      case 'preview.close':
+        result = { preview: this.threads.previews.close({
+          threadId: command.threadId,
+          previewSessionId: command.previewSessionId,
+        }) };
+        break;
+      case 'preview.list':
+        result = { previews: this.threads.previews.list(command.threadId) };
+        break;
       case 'app-client.revoke':
         if (command.appClientId !== appInstanceId) throw new Error('A client may revoke only itself.');
         result = { revoked: true };
@@ -746,6 +882,12 @@ function publicAttachment(attachment: import('../thread-store/types.js').StoredA
   return { id: attachment.id, threadId: attachment.threadId, name: attachment.name,
     mimeType: attachment.mimeType, size: attachment.size, sha256: attachment.sha256,
     createdAt: attachment.createdAt };
+}
+
+function isStringHeaders(value: unknown): value is Record<string, string | string[]> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  return Object.values(value).every((item) => typeof item === 'string'
+    || (Array.isArray(item) && item.every((part) => typeof part === 'string')));
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {

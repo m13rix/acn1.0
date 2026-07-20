@@ -19,6 +19,7 @@ import { GitService } from './GitService.js';
 import { AttachmentService } from './AttachmentService.js';
 import { WorkspaceSnapshotService } from './WorkspaceSnapshotService.js';
 import { ProjectScriptService } from './ProjectScriptService.js';
+import { PreviewService } from './PreviewService.js';
 
 export interface ThreadExecutionCallbacks extends ExecutorCallbacks {
   onCheckpoint(snapshot: SessionSnapshot, reason: string): void | Promise<void>;
@@ -101,6 +102,7 @@ export class ThreadService {
   readonly git: GitService;
   readonly attachments: AttachmentService;
   readonly scripts: ProjectScriptService;
+  readonly previews: PreviewService;
 
   constructor(
     readonly store: ThreadStore,
@@ -122,6 +124,15 @@ export class ThreadService {
         activityType: 'terminal',
         state,
         script: payload,
+        final: true,
+      });
+    });
+    this.previews = new PreviewService(store, (threadId, state, payload) => {
+      this.emit(threadId, 'activity', {
+        turnId: null,
+        activityType: 'preview',
+        state,
+        preview: payload,
         final: true,
       });
     });
