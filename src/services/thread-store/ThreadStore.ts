@@ -17,6 +17,8 @@ import type {
   StoredAppClient,
   StoredAttachment,
   StoredTerminalSession,
+  StoredProjectScript,
+  StoredPreviewSession,
   ThreadProject,
   WorkspaceCheckpoint,
   WorkspaceCheckpointFile,
@@ -154,8 +156,48 @@ interface TerminalSessionRow {
   updated_at: string;
 }
 
+interface ProjectScriptRow {
+  id: string;
+  project_id: string;
+  name: string;
+  command: string;
+  preview_url: string | null;
+  auto_open_preview: number;
+}
+
+interface PreviewSessionRow {
+  id: string;
+  thread_id: string;
+  url: string;
+  state: StoredPreviewSession['state'];
+  created_at: string;
+  updated_at: string;
+}
+
 function parseJson<T>(value: string): T {
   return JSON.parse(value) as T;
+}
+
+function projectScriptFromRow(row: ProjectScriptRow): StoredProjectScript {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    name: row.name,
+    command: row.command,
+    previewUrl: row.preview_url,
+    autoOpenPreview: row.auto_open_preview === 1,
+  };
+}
+
+function previewSessionFromRow(row: PreviewSessionRow): StoredPreviewSession {
+  return {
+    id: row.id,
+    threadId: row.thread_id,
+    url: row.url,
+    state: row.state,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
 }
 
 function interactionFromRow(row: InteractionRow): StoredInteraction {
@@ -740,6 +782,88 @@ export class ThreadStore {
 
   public deleteTerminalSession(id: string): void {
     this.database.prepare('DELETE FROM terminal_sessions WHERE id = ?').run(id);
+  }
+
+  public listProjectScripts(projectId: string): StoredProjectScript[] {
+    return (this.database
+      .prepare('SELECT * FROM project_scripts WHERE project_id = ? ORDER BY name COLLATE NOCASE, id')
+      .all(projectId) as ProjectScriptRow[]).map(projectScriptFromRow);
+  }
+
+  public getProjectScript(id: string): StoredProjectScript | null {
+    const row = this.database.prepare('SELECT * FROM project_scripts WHERE id = ?').get(id) as
+      | ProjectScriptRow
+      | undefined;
+    return row ? projectScriptFromRow(row) : null;
+  }
+
+  public saveProjectScript(input: {
+    id?: string;
+    projectId: string;
+    name: string;
+    command: string;
+    previewUrl?: string | null;
+    autoOpenPreview?: boolean;
+  }): StoredProjectScript {
+    if (!this.getProject(input.projectId)) throw new Error(`Project not found: ${input.projectId}`);
+    const id = input.id || this.id();
+    this.database.prepare(
+      `INSERT INTO project_scripts (id, project_id, name, command, preview_url, auto_open_preview)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         project_id = excluded.project_id,
+         name = excluded.name,
+         command = excluded.command,
+         preview_url = excluded.preview_url,
+         auto_open_preview = excluded.auto_open_preview`,
+    ).run(
+      id,
+      input.projectId,
+      input.name.trim(),
+      input.command.trim(),
+      input.previewUrl?.trim() || null,
+      input.autoOpenPreview ? 1 : 0,
+    );
+    return this.getProjectScript(id)!;
+  }
+
+  public deleteProjectScript(projectId: string, id: string): boolean {
+    return this.database
+      .prepare('DELETE FROM project_scripts WHERE id = ? AND project_id = ?')
+      .run(id, projectId).changes > 0;
+  }
+
+  public savePreviewSession(input: {
+    id?: string;
+    threadId: string;
+    url: string;
+    state: StoredPreviewSession['state'];
+  }): StoredPreviewSession {
+    if (!this.getThread(input.threadId)) throw new Error(`Thread not found: ${input.threadId}`);
+    const id = input.id || this.id();
+    const now = this.now().toISOString();
+    this.database.prepare(
+      `INSERT INTO preview_sessions (id, thread_id, url, state, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         url = excluded.url,
+         state = excluded.state,
+         updated_at = excluded.updated_at`,
+    ).run(id, input.threadId, input.url, input.state, now, now);
+    return this.getPreviewSession(id)!;
+  }
+
+  public getPreviewSession(id: string): StoredPreviewSession | null {
+    const row = this.database.prepare('SELECT * FROM preview_sessions WHERE id = ?').get(id) as
+      | PreviewSessionRow
+      | undefined;
+    return row ? previewSessionFromRow(row) : null;
+  }
+
+  public listPreviewSessions(threadId: string): StoredPreviewSession[] {
+    return (this.database
+      .prepare('SELECT * FROM preview_sessions WHERE thread_id = ? ORDER BY updated_at DESC')
+      .all(threadId) as PreviewSessionRow[]).map(previewSessionFromRow);
   }
 
   public markLiveTerminalsExited(): void {

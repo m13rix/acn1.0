@@ -97,6 +97,13 @@ export class TerminalService {
     const cols = clamp(input.cols, 20, 1_000, DEFAULT_COLS);
     const rows = clamp(input.rows, 5, 500, DEFAULT_ROWS);
     const command = input.command?.trim() || '';
+    if (command && this.workspaceSnapshots) {
+      await this.workspaceSnapshots.snapshot({
+        workspacePath: thread.launchProfile.worktreePath || thread.launchProfile.workspacePath,
+        threadId: thread.id,
+        name: `Before terminal command: ${command.slice(0, 80)}`,
+      });
+    }
     const process = this.spawn(cwd, cols, rows, command, input.keepOpen === true);
     const snapshot = this.store.saveTerminalSession({
       id: terminalId,

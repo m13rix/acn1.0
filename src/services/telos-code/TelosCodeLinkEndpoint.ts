@@ -639,6 +639,36 @@ export class TelosCodeLinkEndpoint {
         });
         break;
       }
+      case 'project-script.list':
+        result = { scripts: this.threads.scripts.list(command.projectId) };
+        break;
+      case 'project-script.save':
+        result = { script: this.threads.scripts.save({
+          id: command.scriptId,
+          projectId: command.projectId,
+          name: command.name,
+          command: command.command,
+          previewUrl: command.previewUrl,
+          autoOpenPreview: command.autoOpenPreview,
+        }) };
+        break;
+      case 'project-script.delete':
+        result = { deleted: this.threads.scripts.delete(command.projectId, command.scriptId) };
+        break;
+      case 'project-script.start':
+        result = await this.threads.scripts.start({
+          threadId: command.threadId,
+          scriptId: command.scriptId,
+          terminalId: command.terminalId,
+        });
+        break;
+      case 'project-script.stop':
+        await this.threads.scripts.stop(command.threadId, command.terminalId);
+        result = { stopped: true };
+        break;
+      case 'project.ports':
+        result = { ports: await this.threads.scripts.discoverPorts(command.threadId) };
+        break;
       case 'app-client.revoke':
         if (command.appClientId !== appInstanceId) throw new Error('A client may revoke only itself.');
         result = { revoked: true };

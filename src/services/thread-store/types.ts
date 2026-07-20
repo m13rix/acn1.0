@@ -129,6 +129,24 @@ export interface StoredTerminalSession {
   updatedAt: string;
 }
 
+export interface StoredProjectScript {
+  id: string;
+  projectId: string;
+  name: string;
+  command: string;
+  previewUrl: string | null;
+  autoOpenPreview: boolean;
+}
+
+export interface StoredPreviewSession {
+  id: string;
+  threadId: string;
+  url: string;
+  state: 'open' | 'closed' | 'disconnected' | 'failed';
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface LegacyMigrationIssue {
   file: string;
   reason: string;

@@ -18,6 +18,7 @@ import { TerminalService } from './TerminalService.js';
 import { GitService } from './GitService.js';
 import { AttachmentService } from './AttachmentService.js';
 import { WorkspaceSnapshotService } from './WorkspaceSnapshotService.js';
+import { ProjectScriptService } from './ProjectScriptService.js';
 
 export interface ThreadExecutionCallbacks extends ExecutorCallbacks {
   onCheckpoint(snapshot: SessionSnapshot, reason: string): void | Promise<void>;
@@ -99,6 +100,7 @@ export class ThreadService {
   readonly terminals: TerminalService;
   readonly git: GitService;
   readonly attachments: AttachmentService;
+  readonly scripts: ProjectScriptService;
 
   constructor(
     readonly store: ThreadStore,
@@ -114,6 +116,15 @@ export class ThreadService {
     this.terminals = options.terminalService || new TerminalService(store, options.workspaceSnapshots);
     this.attachments = options.attachmentService
       || new AttachmentService(store, options.attachmentStoragePath || resolve('data', 'telos-code', 'attachments'));
+    this.scripts = new ProjectScriptService(store, this.terminals, (threadId, state, payload) => {
+      this.emit(threadId, 'activity', {
+        turnId: null,
+        activityType: 'terminal',
+        state,
+        script: payload,
+        final: true,
+      });
+    });
     this.git = new GitService(store, options.workspaceSnapshots, (event) => {
       this.emit(event.threadId, 'activity', {
         turnId: null,
