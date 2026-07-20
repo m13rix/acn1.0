@@ -70,6 +70,20 @@ interface InteractionWaiter {
   timer?: ReturnType<typeof setTimeout>;
 }
 
+interface ManagedChildJob {
+  jobName: string;
+  parentThreadId: string;
+  childThreadId: string;
+  agentName: string;
+  status: 'running' | 'completed' | 'failed' | 'stopping' | 'stopped';
+  startedAt: string;
+  updatedAt: string;
+  pendingMessages: number;
+  promise: Promise<void>;
+  finalMessage?: string;
+  error?: string;
+}
+
 export type ThreadEventSubscriber = (event: StoredThreadEvent) => void;
 
 export class ThreadService {
@@ -79,6 +93,8 @@ export class ThreadService {
   private readonly runningByThread = new Map<string, RunningTurn>();
   private readonly interactionWaiters = new Map<string, InteractionWaiter>();
   private readonly subscribers = new Map<string, Set<ThreadEventSubscriber>>();
+  private readonly managedChildJobs = new Map<string, ManagedChildJob>();
+  private readonly sharedChildrenByWorkspace = new Map<string, Set<Promise<void>>>();
   private readonly workspaceSnapshots: WorkspaceSnapshotService | undefined;
   readonly terminals: TerminalService;
   readonly git: GitService;
@@ -435,6 +451,8 @@ export class ThreadService {
         try {
           const completed = await this.executeJob(workspaceKey, job);
           job.resolve(completed);
+          const sharedChildren = this.sharedChildrenByWorkspace.get(workspaceKey);
+          if (sharedChildren?.size) await Promise.allSettled([...sharedChildren]);
         } catch (error) {
           job.reject(error instanceof Error ? error : new Error(String(error)));
         }
@@ -644,6 +662,9 @@ export class ThreadService {
     if (type.startsWith('terminal.')) {
       return this.handleTerminalServiceRequest(job, type, body);
     }
+    if (type.startsWith('agents.')) {
+      return this.handleAgentServiceRequest(job, signal, type, body);
+    }
     if (type === 'message.publish') {
       const text = typeof body.text === 'string' ? body.text.trim() : '';
       if (!text) throw new Error('message.publish requires non-empty text.');
@@ -724,6 +745,179 @@ export class ThreadService {
         originalResolve(answer);
       };
       this.interactionWaiters.set(interaction.id, waiter);
+    });
+  }
+
+  private async handleAgentServiceRequest(
+    parentJob: TurnJob,
+    signal: AbortSignal,
+    type: string,
+    body: Record<string, unknown>,
+  ): Promise<unknown> {
+    const jobName = typeof body.jobName === 'string' ? body.jobName : '';
+    if (!jobName) throw new Error(`${type} requires jobName.`);
+    if (type === 'agents.run' || type === 'agents.start') {
+      const existing = this.managedChildJobs.get(jobName);
+      if (existing) return type === 'agents.run' ? this.childResult(existing) : this.childSummary(existing);
+      const agentName = typeof body.agentName === 'string' ? body.agentName : '';
+      const input = typeof body.input === 'string' ? body.input : '';
+      if (!agentName || !input) throw new Error(`${type} requires agentName and input.`);
+      const managed = await this.startManagedChild(parentJob, signal, { jobName, agentName, input });
+      if (type === 'agents.start') return this.childSummary(managed);
+      await managed.promise;
+      return this.childResult(managed);
+    }
+    const managed = this.managedChildJobs.get(jobName);
+    if (!managed) throw new Error(`agents job "${jobName}" does not exist.`);
+    if (type === 'agents.status') return this.childSummary(managed);
+    if (type === 'agents.result') {
+      if (managed.status === 'running' || managed.status === 'stopping') {
+        throw new Error(`agents job "${jobName}" is still ${managed.status}`);
+      }
+      return this.childResult(managed);
+    }
+    if (type === 'agents.trace') {
+      const tail = typeof body.tail === 'number' ? Math.max(1, Math.floor(body.tail)) : undefined;
+      const trace = this.store.replayEvents(managed.childThreadId, 0, 1_000).map((event) => {
+        const payload = event.payload as Record<string, unknown>;
+        const text = typeof payload.text === 'string' ? payload.text
+          : typeof payload.delta === 'string' ? payload.delta
+          : `${String(payload.activityType || event.type)}: ${String(payload.state || '')}`;
+        return `[${event.type}] ${text}`;
+      });
+      return { trace: (tail ? trace.slice(-tail) : trace).join('\n') || '(no trace yet)' };
+    }
+    if (type === 'agents.send') {
+      const input = typeof body.input === 'string' ? body.input.trim() : '';
+      if (!input) throw new Error('agents.send requires input.');
+      managed.pendingMessages += 1;
+      managed.status = 'running';
+      managed.updatedAt = new Date().toISOString();
+      const followup = this.enqueueSharedChildTurn(
+        this.requireThread(managed.childThreadId), input, managed.parentThreadId);
+      managed.promise = this.finishManagedChild(managed, followup);
+      this.trackSharedChild(managed.childThreadId, managed.promise);
+      return { message: `Queued message for agent job "${jobName}".` };
+    }
+    if (type === 'agents.stop') {
+      managed.status = 'stopping';
+      managed.updatedAt = new Date().toISOString();
+      const stopping = this.stop(managed.childThreadId);
+      return { message: stopping ? `Stopping agent job "${jobName}".`
+        : `Agent job "${jobName}" is ${managed.status}.` };
+    }
+    throw new Error(`Unsupported thread service request: ${type}`);
+  }
+
+  private async startManagedChild(
+    parentJob: TurnJob,
+    signal: AbortSignal,
+    input: { jobName: string; agentName: string; input: string },
+  ): Promise<ManagedChildJob> {
+    const loaded = await new AgentLoader().loadByName(input.agentName);
+    if (!loaded) throw new Error(`Agent not found: ${input.agentName}`);
+    const providerId = String(loaded.config.provider || '');
+    const modelId = String(loaded.config.model || '');
+    if (!providerId || !modelId) throw new Error(`Agent ${input.agentName} has no executable provider/model.`);
+    const reasoning = normalizeReasoningEffort(loaded.config.reasoning);
+    const child = await this.createThread({
+      projectId: parentJob.thread.projectId,
+      worktreePath: parentJob.thread.launchProfile.worktreePath,
+      agentName: input.agentName,
+      providerId,
+      modelId,
+      reasoning,
+      parentThreadId: parentJob.thread.id,
+      title: input.input.trim().slice(0, 80) || input.agentName,
+    });
+    const now = new Date().toISOString();
+    const managed: ManagedChildJob = {
+      jobName: input.jobName, parentThreadId: parentJob.thread.id, childThreadId: child.id,
+      agentName: input.agentName, status: 'running', startedAt: now, updatedAt: now,
+      pendingMessages: 0, promise: Promise.resolve(),
+    };
+    this.managedChildJobs.set(input.jobName, managed);
+    this.emit(parentJob.thread.id, 'activity', {
+      turnId: parentJob.turn.id, activityType: 'child-thread', state: 'created',
+      childThreadId: child.id, jobName: input.jobName, agentName: input.agentName,
+      providerId, modelId, reasoning, final: true,
+    });
+    const completed = this.enqueueSharedChildTurn(child, input.input, parentJob.thread.id);
+    managed.promise = this.finishManagedChild(managed, completed);
+    this.trackSharedChild(child.id, managed.promise);
+    signal.addEventListener('abort', () => this.stop(child.id), { once: true });
+    return managed;
+  }
+
+  private enqueueSharedChildTurn(
+    thread: HarnessThread,
+    text: string,
+    parentThreadId: string,
+  ): Promise<StoredTurn> {
+    const turn = this.store.createTurn({
+      threadId: thread.id, text, requestedEffort: thread.launchProfile.reasoning,
+      effectiveEffort: effectiveEffort(thread.launchProfile.providerId, thread.launchProfile.reasoning),
+    });
+    this.emit(thread.id, 'message', { turnId: turn.id, role: 'user', text, attachmentIds: [], final: true });
+    this.emit(thread.id, 'activity', { turnId: turn.id, activityType: 'turn', state: 'queued', final: true });
+    this.store.setThreadStatus(thread.id, 'queued');
+    return new Promise<StoredTurn>((resolveTurn, rejectTurn) => {
+      const workspaceKey = this.workspaceKey(thread.launchProfile.worktreePath || thread.launchProfile.workspacePath);
+      void this.executeJob(workspaceKey, { thread, turn, resolve: resolveTurn, reject: rejectTurn })
+        .then(resolveTurn, rejectTurn);
+    });
+  }
+
+  private async finishManagedChild(managed: ManagedChildJob, completed: Promise<StoredTurn>): Promise<void> {
+    try {
+      const turn = await completed;
+      managed.status = turn.status === 'completed' ? 'completed' : turn.status === 'stopped' ? 'stopped' : 'failed';
+      managed.error = turn.error || undefined;
+      managed.finalMessage = this.latestAssistantMessage(managed.childThreadId, turn.id);
+      managed.pendingMessages = Math.max(0, managed.pendingMessages - 1);
+      managed.updatedAt = new Date().toISOString();
+      this.emit(managed.parentThreadId, 'activity', {
+        turnId: null, activityType: 'child-thread', state: managed.status,
+        childThreadId: managed.childThreadId, jobName: managed.jobName,
+        result: managed.finalMessage, error: managed.error, final: true,
+      });
+    } catch (error) {
+      managed.status = 'failed';
+      managed.error = error instanceof Error ? error.message : String(error);
+      managed.updatedAt = new Date().toISOString();
+    }
+  }
+
+  private childSummary(job: ManagedChildJob): Record<string, unknown> {
+    return { jobName: job.jobName, childThreadId: job.childThreadId, agentName: job.agentName,
+      status: job.status, startedAt: job.startedAt, updatedAt: job.updatedAt,
+      pendingMessages: job.pendingMessages, ...(job.error ? { error: job.error } : {}) };
+  }
+
+  private childResult(job: ManagedChildJob): Record<string, unknown> {
+    return { jobName: job.jobName, childThreadId: job.childThreadId,
+      finalMessage: job.finalMessage || job.error || '', changedFiles: [] };
+  }
+
+  private latestAssistantMessage(threadId: string, turnId: string): string {
+    const event = this.store.replayEvents(threadId, 0, 1_000).reverse().find((candidate) => {
+      const payload = candidate.payload as Record<string, unknown>;
+      return candidate.type === 'message' && payload.turnId === turnId && payload.role === 'assistant';
+    });
+    if (!event) return '';
+    const payload = event.payload as Record<string, unknown>;
+    return typeof payload.text === 'string' ? payload.text : '';
+  }
+
+  private trackSharedChild(childThreadId: string, promise: Promise<void>): void {
+    const child = this.requireThread(childThreadId);
+    const key = this.workspaceKey(child.launchProfile.worktreePath || child.launchProfile.workspacePath);
+    const active = this.sharedChildrenByWorkspace.get(key) || new Set<Promise<void>>();
+    active.add(promise);
+    this.sharedChildrenByWorkspace.set(key, active);
+    void promise.finally(() => {
+      active.delete(promise);
+      if (!active.size) this.sharedChildrenByWorkspace.delete(key);
     });
   }
 
@@ -988,7 +1182,8 @@ export class HarnessThreadExecutionAdapter implements ThreadExecutionAdapter {
   ): Promise<unknown> {
     const { type, payload } = request;
     if (type === 'interaction.create' || type === 'message.publish'
-      || type === 'attachment.publish' || type === 'voice.publish' || type.startsWith('terminal.')) {
+      || type === 'attachment.publish' || type === 'voice.publish'
+      || type.startsWith('agents.') || type.startsWith('terminal.')) {
       if (!input.callbacks.onServiceRequest) throw new Error(`Unsupported harness service request: ${type}`);
       return input.callbacks.onServiceRequest(type, payload, request.ephemeralPaths);
     }
@@ -1073,6 +1268,12 @@ export class HarnessThreadExecutionAdapter implements ThreadExecutionAdapter {
 function effectiveEffort(providerId: string, requested: ReasoningEffort): ReasoningEffort {
   if (requested !== 'xhigh') return requested;
   return providerId.toLowerCase() === 'openai-codex' ? 'xhigh' : 'high';
+}
+
+function normalizeReasoningEffort(value: unknown): ReasoningEffort {
+  return value === 'off' || value === 'low' || value === 'medium' || value === 'high' || value === 'xhigh'
+    ? value
+    : 'high';
 }
 
 function sha256(bytes: Uint8Array): string {

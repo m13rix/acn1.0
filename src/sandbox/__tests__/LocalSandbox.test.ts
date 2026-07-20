@@ -228,6 +228,39 @@ test('terminal operations use the shared harness terminal service through worker
   }
 });
 
+test('subagent runs use durable child-thread service IPC in managed sessions', async () => {
+  const tempRoot = await mkdtemp(join(process.cwd(), 'sandboxes', 'test-agents-service-ipc-'));
+  const requests: Array<{ type: string; payload: unknown; ephemeralPaths: string[] }> = [];
+  const agentsPath = join(process.cwd(), 'tools', 'agents', 'index.ts');
+  const sandbox = new LocalSandbox({
+    baseDir: tempRoot,
+    serviceHandler: (request) => {
+      requests.push(request);
+      if (request.type === 'agents.run') {
+        return { jobName: 'child-job', childThreadId: 'child-thread', finalMessage: 'child-ok' };
+      }
+      throw new Error(`Unexpected service request: ${request.type}`);
+    },
+  });
+  try {
+    await sandbox.initialize([{
+      config: { name: 'agents', description: 'Delegate work.', module: agentsPath },
+      directory: join(process.cwd(), 'tools', 'agents'),
+      absolutePath: agentsPath,
+    }]);
+    const result = await sandbox.execute([
+      'const child = await agents.run("Telos-Code", "inspect");',
+      'console.log(child.finalMessage);',
+    ].join('\n'));
+    assert.equal(result.success, true, result.error);
+    assert.match(result.output, /child-ok/);
+    assert.deepEqual(requests.map((request) => request.type), ['agents.run']);
+  } finally {
+    await sandbox.cleanup();
+    await rmBestEffort(tempRoot);
+  }
+});
+
 test('injected lazy tool reflection handles non-configurable module flags', async () => {
   const tempRoot = await mkdtemp(join(process.cwd(), 'sandboxes', 'test-tool-reflection-'));
   const toolPath = join(tempRoot, 'helper.cjs');

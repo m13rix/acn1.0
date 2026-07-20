@@ -319,6 +319,14 @@ export class TelosCodeLinkEndpoint {
       if (subscriptions.has(thread.id)) return;
       subscriptions.set(thread.id, this.threads.subscribe(thread.id, (event) => {
         void this.send(stream, { type: 'thread.event', event }).catch(() => undefined);
+        const childThreadId = (event.payload as Record<string, unknown>).childThreadId;
+        if (typeof childThreadId === 'string') {
+          const child = this.store.getThread(childThreadId);
+          if (child) {
+            subscribe(child);
+            void this.send(stream, { type: 'shell.thread-upsert', thread: child }).catch(() => undefined);
+          }
+        }
       }));
     };
     this.store.listThreads({ includeArchived: true }).forEach(subscribe);

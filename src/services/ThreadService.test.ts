@@ -237,6 +237,39 @@ test('publishes immutable action-worker file attachments as durable thread event
   });
 });
 
+test('runs blocking managed subagents as durable child threads sharing the active lease', async () => {
+  const adapter: ThreadExecutionAdapter = {
+    async execute(input) {
+      if (input.thread.parentThreadId) {
+        input.callbacks.onTextDone?.('child completed');
+        return { response: 'child completed', snapshot: { messages: [], contextFiles: [],
+          surfacedMemoryFactIds: [], injectedMemoryHints: [] } };
+      }
+      const result = await input.callbacks.onServiceRequest?.('agents.run', {
+        jobName: 'research', agentName: 'Telos-Code', input: 'Inspect the workspace', options: {},
+      }, []) as Record<string, unknown>;
+      input.callbacks.onTextDone?.(`Parent received: ${String(result.finalMessage)}`);
+      return { response: 'parent completed', snapshot: { messages: [], contextFiles: [],
+        surfacedMemoryFactIds: [], injectedMemoryHints: [] } };
+    },
+  };
+  await fixture(adapter, async (service, store, directory) => {
+    const project = store.createProject({ path: directory });
+    const parent = store.createThread({ launchProfile: profile(project.id, directory) });
+    const completed = await service.enqueueTurn({ threadId: parent.id, text: 'delegate' }).completed;
+    assert.equal(completed.status, 'completed');
+    const children = store.listThreads({ includeArchived: true }).filter((thread) => thread.parentThreadId === parent.id);
+    assert.equal(children.length, 1);
+    assert.equal(children[0]?.status, 'idle');
+    assert.equal(children[0]?.launchProfile.agentName, 'Telos-Code');
+    assert.ok(store.replayEvents(children[0]!.id, 0).some((event) => event.type === 'message'
+      && (event.payload as Record<string, unknown>).text === 'child completed'));
+    assert.ok(store.replayEvents(parent.id, 0).some((event) => event.type === 'activity'
+      && (event.payload as Record<string, unknown>).activityType === 'child-thread'
+      && (event.payload as Record<string, unknown>).state === 'completed'));
+  });
+});
+
 test('rewinds workspace checkpoint and executor context without deleting later history', async () => {
   const directory = join(tmpdir(), `telos-thread-rewind-${uuidv7()}`);
   const workspace = join(directory, 'workspace');

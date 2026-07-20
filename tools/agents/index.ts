@@ -198,6 +198,15 @@ interface AgentJob {
 
 const agentJobs = new Map<string, AgentJob>();
 
+type HarnessRequest = (type: string, payload: unknown) => Promise<unknown>;
+
+function getHarnessRequest(): HarnessRequest | undefined {
+    if (process.env.TELOS_HARNESS_SERVICES !== '1') return undefined;
+    return (globalThis as typeof globalThis & {
+        __TELOS_ACTION_WORKER_REQUEST__?: HarnessRequest;
+    }).__TELOS_ACTION_WORKER_REQUEST__;
+}
+
 async function resolveActiveSandbox(): Promise<LocalSandbox | undefined> {
     let sandbox = getAgentSandbox();
 
@@ -778,6 +787,15 @@ async function runAgentFinalMessage(name: string, request: unknown, options?: Ag
 export async function run(agentName: string, input: unknown, options?: AgentRunOptions): Promise<AgentRunResult> {
     const jobName = createUniqueJobName('job');
     const normalizedInput = normalizeAgentRequest(input, 'run');
+    const harnessRequest = getHarnessRequest();
+    if (harnessRequest) {
+        return await harnessRequest('agents.run', {
+            jobName,
+            agentName,
+            input: normalizedInput,
+            options: options || {},
+        }) as AgentRunResult;
+    }
     const sandbox = await resolveSandboxForOptions(options);
     if (!sandbox) {
         return formatAgentRunResult(jobName, `Error: No sandbox available. Cannot run agent "${agentName}" outside of an active session.`, []);
@@ -857,12 +875,21 @@ export async function start(jobName: string, agentName: string, input: unknown, 
     if (typeof jobName !== 'string' || !/^[A-Za-z0-9_.-]+$/.test(jobName)) {
         throw new Error('agents.start(jobName, agentName, input): jobName must contain only letters, numbers, dots, underscores, or hyphens');
     }
+    const normalizedInput = normalizeAgentRequest(input, 'start');
+    const harnessRequest = getHarnessRequest();
+    if (harnessRequest) {
+        return await harnessRequest('agents.start', {
+            jobName,
+            agentName,
+            input: normalizedInput,
+            options: options || {},
+        }) as AgentJobSummary;
+    }
     const existing = agentJobs.get(jobName);
     if (existing) {
         return summarizeJob(existing, `Agent job "${jobName}" already exists; returning existing job status.`);
     }
 
-    const normalizedInput = normalizeAgentRequest(input, 'start');
     const sandbox = await resolveSandboxForOptions(options);
     const job = createAgentJob(jobName, agentName, normalizedInput, options, sandbox);
     agentJobs.set(jobName, job);
@@ -872,11 +899,15 @@ export async function start(jobName: string, agentName: string, input: unknown, 
 }
 
 export async function status(jobName: string): Promise<AgentJobSummary> {
+    const harnessRequest = getHarnessRequest();
+    if (harnessRequest) return await harnessRequest('agents.status', { jobName }) as AgentJobSummary;
     const job = getAgentJob(jobName);
     return summarizeJob(job);
 }
 
 export async function result(jobName: string): Promise<AgentRunResult> {
+    const harnessRequest = getHarnessRequest();
+    if (harnessRequest) return await harnessRequest('agents.result', { jobName }) as AgentRunResult;
     const job = getAgentJob(jobName);
     if (job.status === 'running' || job.status === 'stopping') {
         throw new Error(`agents job "${jobName}" is still ${job.status}`);
@@ -888,6 +919,11 @@ export async function result(jobName: string): Promise<AgentRunResult> {
 }
 
 export async function trace(jobName: string, options?: { tail?: number }): Promise<string> {
+    const harnessRequest = getHarnessRequest();
+    if (harnessRequest) {
+        const response = await harnessRequest('agents.trace', { jobName, tail: options?.tail }) as { trace: string };
+        return response.trace;
+    }
     const job = getAgentJob(jobName);
     const text = job.trace.join('');
     const tail = options?.tail === undefined ? undefined : Math.max(1, Math.floor(options.tail));
@@ -898,6 +934,14 @@ export async function trace(jobName: string, options?: { tail?: number }): Promi
 }
 
 export async function send(jobName: string, input: unknown): Promise<string> {
+    const harnessRequest = getHarnessRequest();
+    if (harnessRequest) {
+        const response = await harnessRequest('agents.send', {
+            jobName,
+            input: normalizeAgentRequest(input, 'send'),
+        }) as { message: string };
+        return response.message;
+    }
     const job = getAgentJob(jobName);
     if (job.status === 'failed' || job.status === 'stopped' || job.status === 'stopping') {
         throw new Error(`agents job "${jobName}" is ${job.status} and cannot receive messages`);
@@ -917,6 +961,11 @@ export async function send(jobName: string, input: unknown): Promise<string> {
 }
 
 export async function stop(jobName: string): Promise<string> {
+    const harnessRequest = getHarnessRequest();
+    if (harnessRequest) {
+        const response = await harnessRequest('agents.stop', { jobName }) as { message: string };
+        return response.message;
+    }
     const job = getAgentJob(jobName);
     if (job.status !== 'running') {
         return `Agent job "${jobName}" is ${job.status}.`;
