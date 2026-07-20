@@ -189,6 +189,11 @@ export class TelegramService {
     private draftCounter = Date.now();
     private syntheticMessageCounter = Date.now();
     private pendingQuestions = new Map<string, { answer?: string; resolver?: (response: string) => void }>();
+    private pendingTelosCodeApprovals = new Map<string, {
+        resolve: (approved: boolean) => void;
+        timer: NodeJS.Timeout;
+    }>();
+    private telosCodePairingProvider: (() => Promise<string>) | null = null;
     private questionCounter = 0;
 
     constructor() {
@@ -583,6 +588,19 @@ export class TelegramService {
             }
         });
 
+        this.bot.command('teloscode', async (ctx) => {
+            if (!this.checkAuth(ctx)) return;
+            if (!this.telosCodePairingProvider) {
+                await ctx.reply('Telos Code is not available on this harness.');
+                return;
+            }
+            try {
+                await ctx.reply(await this.telosCodePairingProvider());
+            } catch (error) {
+                await ctx.reply(`Unable to create a Telos Code pairing code: ${error instanceof Error ? error.message : String(error)}`);
+            }
+        });
+
         this.bot.command('new_session', async (ctx) => {
             if (!this.checkAuth(ctx)) return;
 
@@ -652,6 +670,23 @@ export class TelegramService {
         this.bot.on('callback_query', async (ctx) => {
             const chatId = ctx.chat?.id.toString();
             const data = 'data' in ctx.callbackQuery ? ctx.callbackQuery.data : undefined;
+            const approvalMatch = typeof data === 'string'
+                ? /^telos-code-approval:([a-z0-9]+):(approve|deny)$/.exec(data)
+                : null;
+            if (chatId && this.authorizedUsers.has(chatId) && approvalMatch) {
+                const pending = this.pendingTelosCodeApprovals.get(approvalMatch[1]!);
+                if (!pending) {
+                    await ctx.answerCbQuery('This approval request has expired.').catch(() => undefined);
+                    return;
+                }
+                this.pendingTelosCodeApprovals.delete(approvalMatch[1]!);
+                clearTimeout(pending.timer);
+                const approved = approvalMatch[2] === 'approve';
+                await ctx.answerCbQuery(approved ? 'Telos Code approved' : 'Telos Code denied').catch(() => undefined);
+                await ctx.editMessageReplyMarkup({ inline_keyboard: [] } as any).catch(() => undefined);
+                pending.resolve(approved);
+                return;
+            }
             const match = typeof data === 'string' ? /^ask:([a-z0-9]+):(\d+)$/.exec(data) : null;
             if (!chatId || !this.authorizedUsers.has(chatId) || !match) return;
 
@@ -2544,6 +2579,58 @@ export class TelegramService {
         }
     }
 
+    public registerTelosCodePairingProvider(provider: (() => Promise<string>) | null): void {
+        this.telosCodePairingProvider = provider;
+    }
+
+    public async requestTelosCodeApproval(input: {
+        deviceName: string;
+        fingerprint: string;
+        expiresAt: string;
+    }): Promise<boolean> {
+        if (this.authorizedUsers.size === 0 || readBooleanEnv('TELOS_DISABLE_TELEGRAM_BOT')) {
+            return false;
+        }
+        const token = Math.random().toString(36).slice(2, 12);
+        const answer = new Promise<boolean>((resolve) => {
+            const timer = setTimeout(() => {
+                this.pendingTelosCodeApprovals.delete(token);
+                resolve(false);
+            }, 2 * 60 * 1000);
+            timer.unref?.();
+            this.pendingTelosCodeApprovals.set(token, { resolve, timer });
+        });
+        const text = [
+            'Telos Code wants to connect to this harness.',
+            '',
+            `Device: ${input.deviceName}`,
+            `Fingerprint: ${input.fingerprint}`,
+            `Request expires: ${input.expiresAt}`,
+            '',
+            'Approve only if this fingerprint matches the laptop in front of you.',
+        ].join('\n');
+        const keyboard = Markup.inlineKeyboard([[
+            Markup.button.callback('Approve', `telos-code-approval:${token}:approve`),
+            Markup.button.callback('Deny', `telos-code-approval:${token}:deny`),
+        ]]).reply_markup;
+        let delivered = 0;
+        for (const chatId of this.authorizedUsers) {
+            try {
+                await this.bot.telegram.sendMessage(chatId, text, { reply_markup: keyboard });
+                delivered += 1;
+            } catch (error) {
+                console.error(`Failed to send Telos Code approval to ${chatId}:`, error);
+            }
+        }
+        if (delivered === 0) {
+            const pending = this.pendingTelosCodeApprovals.get(token);
+            if (pending) clearTimeout(pending.timer);
+            this.pendingTelosCodeApprovals.delete(token);
+            return false;
+        }
+        return answer;
+    }
+
     public async start(): Promise<void> {
         console.log(chalk.blue('Starting Telegram Bot Service...'));
         console.log(chalk.gray(`Access Code: ${chalk.bold(this.accessCode)}`));
@@ -2580,6 +2667,12 @@ export class TelegramService {
     }
 
     public async stop(): Promise<void> {
+        this.telosCodePairingProvider = null;
+        for (const pending of this.pendingTelosCodeApprovals.values()) {
+            clearTimeout(pending.timer);
+            pending.resolve(false);
+        }
+        this.pendingTelosCodeApprovals.clear();
         if (!readBooleanEnv('TELOS_DISABLE_TELEGRAM_BOT')) {
             try {
                 this.bot.stop('shutdown');

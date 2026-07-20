@@ -23,6 +23,7 @@ import { LocalVoiceInterfaceRuntime } from '../interfaces/local-voice.js';
 import { RealtimeAdvisorInterfaceRuntime } from '../interfaces/realtime-advisor/index.js';
 import { TelegramInterfaceRuntime } from '../interfaces/telegram-runtime.js';
 import { ensureMainProcessHeapLimit } from '../runtime/nodeHeap.js';
+import { TelosCodeRuntime } from '../services/telos-code/index.js';
 
 // Import to register all modules
 import '../providers/index.js';
@@ -53,6 +54,9 @@ if (isTestInstance) {
   }
   if (!process.env.TELOS_DISABLE_CONFIGURED_INTERFACES) {
     process.env.TELOS_DISABLE_CONFIGURED_INTERFACES = '1';
+  }
+  if (!process.env.TELOS_DISABLE_TELOS_CODE) {
+    process.env.TELOS_DISABLE_TELOS_CODE = '1';
   }
 }
 
@@ -198,7 +202,12 @@ function installTerminalVoiceToggle(interfaceManager: InterfaceManager): (() => 
   };
 }
 
-async function runChat(session: Session, interfaceManager: InterfaceManager, telegramService?: TelegramService): Promise<void> {
+async function runChat(
+  session: Session,
+  interfaceManager: InterfaceManager,
+  telegramService?: TelegramService,
+  onShutdown?: () => Promise<void>,
+): Promise<void> {
   const display = new StreamDisplay();
   const cleanupTerminalVoiceToggle = installTerminalVoiceToggle(interfaceManager);
 
@@ -558,6 +567,7 @@ async function runChat(session: Session, interfaceManager: InterfaceManager, tel
       console.log(COLORS.muted('\n\nSession ended.'));
       cleanupTerminalVoiceToggle?.();
       await session.cleanup();
+      await onShutdown?.();
       process.exit(0);
     });
   }
@@ -569,6 +579,7 @@ async function main(): Promise<void> {
   console.log('');
   const disableConfiguredInterfaces = readBooleanEnv('TELOS_DISABLE_CONFIGURED_INTERFACES');
   const disableHeartbeat = readBooleanEnv('TELOS_DISABLE_HEARTBEAT');
+  const disableTelosCode = readBooleanEnv('TELOS_DISABLE_TELOS_CODE');
 
   // Check for API keys
   if (!process.env['GEMINI_KEY'] && !process.env['OPENROUTER_API_KEY']) {
@@ -577,6 +588,7 @@ async function main(): Promise<void> {
   }
 
   let telegramService: TelegramService | undefined;
+  let telosCodeRuntime: TelosCodeRuntime | undefined;
   const bridgeServer = new InterfaceBridgeServer();
   const interfaceManager = new InterfaceManager(agentLoader);
   interfaceManager.registerRuntime(new TelegramInterfaceRuntime());
@@ -597,6 +609,22 @@ async function main(): Promise<void> {
     await telegramService.start();
   } catch (error) {
     console.error(COLORS.error('Failed to start Telegram Service:'), error);
+  }
+
+  if (!disableTelosCode) {
+    try {
+      telosCodeRuntime = await TelosCodeRuntime.start({
+        approveClient: (request) => telegramService?.requestTelosCodeApproval(request) ?? false,
+      });
+      telegramService?.registerTelosCodePairingProvider(async () => telosCodeRuntime!.formatPairingMessage());
+      const pairingMessage = telosCodeRuntime.formatPairingMessage();
+      console.log(COLORS.muted(`\n${pairingMessage}\n`));
+      await telegramService?.broadcast(`${pairingMessage}\n\nUse /teloscode whenever you need a fresh code.`);
+    } catch (error) {
+      console.error(COLORS.error('Failed to start Telos Code transport:'), error);
+    }
+  } else {
+    console.log(COLORS.muted('Telos Code transport disabled by TELOS_DISABLE_TELOS_CODE.'));
   }
 
   if (!disableConfiguredInterfaces) {
@@ -629,6 +657,8 @@ async function main(): Promise<void> {
       heartbeatEnabled: !disableHeartbeat,
       configuredInterfacesEnabled: !disableConfiguredInterfaces,
       telegramBotEnabled: !readBooleanEnv('TELOS_DISABLE_TELEGRAM_BOT'),
+      telosCodeEnabled: !!telosCodeRuntime,
+      telosCodePort: telosCodeRuntime?.listenPort,
       mode: 'test-instance',
     };
     console.log(`TELOS_TEST_INSTANCE_READY ${JSON.stringify(readyPayload)}`);
@@ -639,6 +669,7 @@ async function main(): Promise<void> {
         interfaceManager.stopAll(),
         heartbeat.stop(),
         telegramService?.stop() || Promise.resolve(),
+        telosCodeRuntime?.close() || Promise.resolve(),
       ]);
     });
     return;
@@ -647,12 +678,29 @@ async function main(): Promise<void> {
   try {
     const agentName = await selectAgent();
     const session = await createSession(agentName);
-    await runChat(session, interfaceManager, telegramService);
+    await runChat(session, interfaceManager, telegramService, async () => {
+      telegramService?.registerTelosCodePairingProvider(null);
+      await Promise.allSettled([
+        bridgeServer.stop(),
+        interfaceManager.stopAll(),
+        heartbeat.stop(),
+        telegramService?.stop() || Promise.resolve(),
+        telosCodeRuntime?.close() || Promise.resolve(),
+      ]);
+    });
   } catch (error) {
     console.error(COLORS.error(`\nFatal error: ${error instanceof Error ? error.message : 'Unknown error'}`));
     if (error instanceof Error && error.stack) {
       console.error(COLORS.muted(error.stack));
     }
+    telegramService?.registerTelosCodePairingProvider(null);
+    await Promise.allSettled([
+      bridgeServer.stop(),
+      interfaceManager.stopAll(),
+      heartbeat.stop(),
+      telegramService?.stop() || Promise.resolve(),
+      telosCodeRuntime?.close() || Promise.resolve(),
+    ]);
     process.exit(1);
   }
 }
