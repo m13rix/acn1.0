@@ -52,6 +52,29 @@ export interface StoredTurn {
   error: string | null;
 }
 
+export type WorkspaceEntryKind = 'file' | 'directory' | 'symlink';
+
+export interface WorkspaceCheckpointFile {
+  relativePath: string;
+  contentHash: string | null;
+  kind: WorkspaceEntryKind;
+  size: number;
+  mode: number | null;
+  symlinkTarget: string | null;
+  mtimeMs: number | null;
+}
+
+export interface WorkspaceCheckpoint {
+  id: string;
+  timelineId: string;
+  workspacePath: string;
+  threadId: string | null;
+  turnId: string | null;
+  name: string | null;
+  manifestHash: string;
+  createdAt: string;
+}
+
 export interface LegacyMigrationIssue {
   file: string;
   reason: string;

@@ -7,12 +7,15 @@ import { loadAgentTools, resolveTextAgentRuntime } from '../core/SessionFactory.
 import { Session, type SessionSnapshot } from '../core/Session.js';
 import { AgentLoader } from '../loaders/AgentLoader.js';
 import { ToolLoader } from '../loaders/ToolLoader.js';
+import { LocalSandbox } from '../sandbox/LocalSandbox.js';
 import type { AgentConfig, LoadedAgent } from '../types/index.js';
 import { ThreadStore } from './thread-store/ThreadStore.js';
 import type { HarnessThread, StoredThreadEvent, StoredTurn } from './thread-store/types.js';
+import { WorkspaceSnapshotService } from './WorkspaceSnapshotService.js';
 
 export interface ThreadExecutionCallbacks extends ExecutorCallbacks {
   onCheckpoint(snapshot: SessionSnapshot, reason: string): void | Promise<void>;
+  onWorkspaceActivity?(state: string, detail: Record<string, unknown>): void;
 }
 
 export interface ThreadExecutionResult {
@@ -57,12 +60,18 @@ export class ThreadService {
   private readonly runningWorkspaces = new Set<string>();
   private readonly runningByThread = new Map<string, RunningTurn>();
   private readonly subscribers = new Map<string, Set<ThreadEventSubscriber>>();
+  private readonly workspaceSnapshots: WorkspaceSnapshotService | undefined;
 
   constructor(
     readonly store: ThreadStore,
-    options: { executionAdapter?: ThreadExecutionAdapter } = {},
+    options: {
+      executionAdapter?: ThreadExecutionAdapter;
+      workspaceSnapshots?: WorkspaceSnapshotService;
+    } = {},
   ) {
-    this.executionAdapter = options.executionAdapter || new HarnessThreadExecutionAdapter();
+    this.workspaceSnapshots = options.workspaceSnapshots;
+    this.executionAdapter = options.executionAdapter
+      || new HarnessThreadExecutionAdapter(options.workspaceSnapshots);
   }
 
   async createThread(input: {
@@ -104,11 +113,20 @@ export class ThreadService {
       modelId: input.modelId,
       reasoning: input.reasoning,
     };
-    return this.store.createThread({
+    const thread = this.store.createThread({
       parentThreadId: input.parentThreadId,
       launchProfile,
       title: input.title,
     });
+    if (this.workspaceSnapshots) {
+      try {
+        await this.createAutomaticCheckpoint(thread, null, 'Thread baseline');
+      } catch (error) {
+        this.store.deleteThread(thread.id);
+        throw error;
+      }
+    }
+    return thread;
   }
 
   subscribe(threadId: string, subscriber: ThreadEventSubscriber): () => void {
@@ -242,6 +260,7 @@ export class ThreadService {
     const previous = this.store.getExecutorSnapshot(job.thread.id);
 
     try {
+      await this.createAutomaticCheckpoint(job.thread, job.turn.id, 'Before turn');
       const result = await this.executionAdapter.execute({
         thread: job.thread,
         turn: job.turn,
@@ -298,6 +317,15 @@ export class ThreadService {
               final: true,
             });
           },
+          onWorkspaceActivity: (state, detail) => {
+            this.emit(job.thread.id, 'activity', {
+              turnId: job.turn.id,
+              activityType: 'checkpoint',
+              state,
+              ...detail,
+              final: true,
+            });
+          },
         },
       });
       reasoning.flush();
@@ -312,6 +340,7 @@ export class ThreadService {
         });
       }
       this.store.saveExecutorSnapshot(job.thread.id, result.snapshot, job.turn.id);
+      await this.createAutomaticCheckpoint(job.thread, job.turn.id, 'After completed turn');
       const completed = this.store.updateTurn(job.turn.id, 'completed');
       this.store.setThreadStatus(job.thread.id, 'idle', job.turn.id);
       this.emit(job.thread.id, 'activity', {
@@ -335,6 +364,19 @@ export class ThreadService {
         });
       }
       const message = error instanceof Error ? error.message : String(error);
+      await this.createAutomaticCheckpoint(
+        job.thread,
+        job.turn.id,
+        stopped ? 'After stopped turn' : 'After failed turn',
+      ).catch((checkpointError) => {
+        this.emit(job.thread.id, 'activity', {
+          turnId: job.turn.id,
+          activityType: 'checkpoint',
+          state: 'failed',
+          error: checkpointError instanceof Error ? checkpointError.message : String(checkpointError),
+          final: true,
+        });
+      });
       const completed = this.store.updateTurn(job.turn.id, stopped ? 'stopped' : 'failed', {
         error: stopped ? null : message,
       });
@@ -365,6 +407,28 @@ export class ThreadService {
     });
   }
 
+  private async createAutomaticCheckpoint(
+    thread: HarnessThread,
+    turnId: string | null,
+    name: string,
+  ): Promise<void> {
+    if (!this.workspaceSnapshots) return;
+    const checkpoint = await this.workspaceSnapshots.snapshot({
+      workspacePath: thread.launchProfile.worktreePath || thread.launchProfile.workspacePath,
+      threadId: thread.id,
+      turnId,
+      name,
+    });
+    this.emit(thread.id, 'activity', {
+      turnId,
+      activityType: 'checkpoint',
+      state: 'created',
+      checkpointId: checkpoint.id,
+      name,
+      final: true,
+    });
+  }
+
   private emit(threadId: string, type: string, payload: Record<string, unknown>): StoredThreadEvent {
     const event = this.store.appendEvent(threadId, type, payload);
     for (const subscriber of this.subscribers.get(threadId) || []) subscriber(event);
@@ -379,6 +443,7 @@ export class ThreadService {
 
 export class HarnessThreadExecutionAdapter implements ThreadExecutionAdapter {
   constructor(
+    private readonly workspaceSnapshots?: WorkspaceSnapshotService,
     private readonly agentLoader = new AgentLoader(),
     private readonly toolLoader = new ToolLoader(),
   ) {}
@@ -395,32 +460,110 @@ export class HarnessThreadExecutionAdapter implements ThreadExecutionAdapter {
     const agent = this.resolveAgent(source, input.thread.launchProfile);
     const runtime = resolveTextAgentRuntime(agent);
     const tools = await loadAgentTools(agent, this.toolLoader, ['message']);
+    const workspacePath = input.thread.launchProfile.worktreePath
+      || input.thread.launchProfile.workspacePath;
+    const sandbox = new LocalSandbox({
+      existingPath: workspacePath,
+      serviceHandler: (request) => this.handleServiceRequest(request, input),
+    });
     const session = new Session({
       agent,
       provider: runtime.provider,
       syntax: runtime.syntax,
       loop: runtime.loop,
       tools,
-      runPath: input.thread.launchProfile.worktreePath || input.thread.launchProfile.workspacePath,
+      sandbox,
     });
     await session.initialize();
-    if (input.previousSnapshot) session.applySnapshot(input.previousSnapshot);
-    const callbacks: ExecutorCallbacks = {
-      ...input.callbacks,
-      onTextDone: (fullText) => {
-        session.recordVisibleAssistantOutput(fullText);
-        input.callbacks.onTextDone?.(fullText);
-      },
-    };
-    const executor = new Executor(session, {
-      stream: true,
-      callbacks,
-      requireFinish: agent.config.requireFinish,
-      signal: input.signal,
-      onCheckpoint: (snapshot, metadata) => input.callbacks.onCheckpoint(snapshot, metadata.reason),
-    });
-    const response = await executor.execute(input.turn.inputText);
-    return { response, snapshot: session.exportSnapshot() };
+    try {
+      if (input.previousSnapshot) session.applySnapshot(input.previousSnapshot);
+      const callbacks: ExecutorCallbacks = {
+        ...input.callbacks,
+        onTextDone: (fullText) => {
+          session.recordVisibleAssistantOutput(fullText);
+          input.callbacks.onTextDone?.(fullText);
+        },
+      };
+      const executor = new Executor(session, {
+        stream: true,
+        callbacks,
+        requireFinish: agent.config.requireFinish,
+        signal: input.signal,
+        onCheckpoint: (snapshot, metadata) => input.callbacks.onCheckpoint(snapshot, metadata.reason),
+      });
+      const response = await executor.execute(input.turn.inputText);
+      return { response, snapshot: session.exportSnapshot() };
+    } finally {
+      await session.cleanup();
+    }
+  }
+
+  private async handleServiceRequest(
+    request: { type: string; payload: unknown; ephemeralPaths: string[] },
+    input: {
+      thread: HarnessThread;
+      turn: StoredTurn;
+      callbacks: ThreadExecutionCallbacks;
+    },
+  ): Promise<unknown> {
+    const { type, payload } = request;
+    if (!this.workspaceSnapshots || !type.startsWith('code.')) {
+      throw new Error(`Unsupported harness service request: ${type}`);
+    }
+    const body = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
+    const workspacePath = input.thread.launchProfile.worktreePath
+      || input.thread.launchProfile.workspacePath;
+    if (type === 'code.snapshot') {
+      const checkpoint = await this.workspaceSnapshots.snapshot({
+        workspacePath,
+        threadId: input.thread.id,
+        turnId: input.turn.id,
+        name: typeof body.name === 'string' ? body.name : undefined,
+        ignorePatterns: request.ephemeralPaths,
+      });
+      input.callbacks.onWorkspaceActivity?.('created', { checkpointId: checkpoint.id, source: 'agent' });
+      return checkpoint;
+    }
+    if (type === 'code.listSnapshots') {
+      return this.workspaceSnapshots.listSnapshots({ threadId: input.thread.id });
+    }
+    const snapshotId = typeof body.snapshotId === 'string' ? body.snapshotId : '';
+    if (!snapshotId) throw new Error(`${type} requires snapshotId.`);
+    const checkpoint = this.workspaceSnapshots
+      .listSnapshots({ workspacePath })
+      .find((candidate) => candidate.id === snapshotId);
+    if (!checkpoint || (checkpoint.threadId !== null && checkpoint.threadId !== input.thread.id)) {
+      throw new Error(`Checkpoint is not available to this thread: ${snapshotId}`);
+    }
+    const files = Array.isArray(body.files)
+      ? body.files.filter((file): file is string => typeof file === 'string')
+      : undefined;
+    if (type === 'code.diff') {
+      return this.workspaceSnapshots.diff(snapshotId, {
+        files,
+        ignorePatterns: request.ephemeralPaths,
+      });
+    }
+    if (type === 'code.rollback') {
+      const result = await this.workspaceSnapshots.rollback(snapshotId, {
+        files,
+        threadId: input.thread.id,
+        turnId: input.turn.id,
+        ignorePatterns: request.ephemeralPaths,
+      });
+      input.callbacks.onWorkspaceActivity?.('restored', {
+        checkpointId: snapshotId,
+        safetyCheckpointId: result.safetyCheckpoint.id,
+        source: 'agent',
+      });
+      return result;
+    }
+    if (type === 'code.deleteSnapshot') {
+      await this.workspaceSnapshots.deleteSnapshot(snapshotId);
+      input.callbacks.onWorkspaceActivity?.('deleted', { checkpointId: snapshotId, source: 'agent' });
+      return undefined;
+    }
+    throw new Error(`Unsupported harness service request: ${type}`);
   }
 
   private resolveAgent(source: LoadedAgent, profile: ThreadLaunchProfile): LoadedAgent {

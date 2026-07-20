@@ -100,6 +100,43 @@ test('every injected tool exposes help()', async () => {
   }
 });
 
+test('code snapshot operations use bound action-worker service IPC', async () => {
+  const tempRoot = await mkdtemp(join(process.cwd(), 'sandboxes', 'test-code-service-ipc-'));
+  const requests: Array<{ type: string; payload: unknown; ephemeralPaths: string[] }> = [];
+  const sandbox = new LocalSandbox({
+    baseDir: tempRoot,
+    serviceHandler: (request) => {
+      requests.push(request);
+      if (request.type === 'code.snapshot') {
+        return { id: 'checkpoint-1', name: 'manual' };
+      }
+      if (request.type === 'code.listSnapshots') {
+        return [{ id: 'checkpoint-1', name: 'manual' }];
+      }
+      throw new Error(`Unexpected service request: ${request.type}`);
+    },
+  });
+
+  try {
+    await sandbox.initialize([]);
+    const result = await sandbox.execute([
+      'const created = await code.snapshot("manual");',
+      'const snapshots = await code.listSnapshots();',
+      'console.log(created.id, snapshots.length);',
+    ].join('\n'));
+
+    assert.equal(result.success, true, result.error);
+    assert.match(result.output, /checkpoint-1 1/);
+    assert.deepEqual(requests, [
+      { type: 'code.snapshot', payload: { name: 'manual' }, ephemeralPaths: ['exec_0.cts'] },
+      { type: 'code.listSnapshots', payload: {}, ephemeralPaths: ['exec_0.cts'] },
+    ]);
+  } finally {
+    await sandbox.cleanup();
+    await rmBestEffort(tempRoot);
+  }
+});
+
 test('injected lazy tool reflection handles non-configurable module flags', async () => {
   const tempRoot = await mkdtemp(join(process.cwd(), 'sandboxes', 'test-tool-reflection-'));
   const toolPath = join(tempRoot, 'helper.cjs');

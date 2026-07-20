@@ -8,6 +8,7 @@ import { v7 as uuidv7 } from 'uuid';
 import type { ThreadLaunchProfile } from '@telos/code-contracts/telos';
 import { ThreadService, type ThreadExecutionAdapter } from './ThreadService.js';
 import { ThreadStore } from './thread-store/ThreadStore.js';
+import { WorkspaceSnapshotService } from './WorkspaceSnapshotService.js';
 
 async function fixture(
   adapter: ThreadExecutionAdapter,
@@ -114,4 +115,46 @@ test('stop records partial output and lets the queued follow-up continue', async
     assert.ok(events.some((event) => (event.payload as Record<string, unknown>)['partial'] === true));
     assert.equal(store.getThread(thread.id)?.status, 'idle');
   });
+});
+
+test('creates authoritative before and after workspace checkpoints for a root turn', async () => {
+  const directory = join(tmpdir(), `telos-thread-checkpoints-${uuidv7()}`);
+  const snapshotRoot = join(tmpdir(), `telos-snapshot-cas-${uuidv7()}`);
+  await mkdir(directory, { recursive: true });
+  const store = await ThreadStore.open({ databasePath: join(directory, 'threads.db') });
+  const snapshots = new WorkspaceSnapshotService(store, snapshotRoot);
+  const adapter: ThreadExecutionAdapter = {
+    async execute(input) {
+      input.callbacks.onTextDone?.('done');
+      return {
+        response: 'done',
+        snapshot: {
+          messages: [],
+          contextFiles: [],
+          surfacedMemoryFactIds: [],
+          injectedMemoryHints: [],
+        },
+      };
+    },
+  };
+  const service = new ThreadService(store, { executionAdapter: adapter, workspaceSnapshots: snapshots });
+  try {
+    const project = store.createProject({ path: directory });
+    const thread = store.createThread({ launchProfile: profile(project.id, directory) });
+    await service.enqueueTurn({ threadId: thread.id, text: 'checkpoint this' }).completed;
+
+    assert.deepEqual(
+      snapshots.listSnapshots({ threadId: thread.id }).map((checkpoint) => checkpoint.name).sort(),
+      ['After completed turn', 'Before turn'],
+    );
+    assert.equal(
+      store.replayEvents(thread.id, 0).filter((event) => event.type === 'activity'
+        && (event.payload as Record<string, unknown>)['activityType'] === 'checkpoint').length,
+      2,
+    );
+  } finally {
+    store.close();
+    await rm(directory, { recursive: true, force: true });
+    await rm(snapshotRoot, { recursive: true, force: true });
+  }
 });

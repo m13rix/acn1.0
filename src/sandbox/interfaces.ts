@@ -7,6 +7,15 @@ export interface SandboxActionExecutionPolicy {
     allowImports?: boolean;
 }
 
+export interface SandboxServiceRequest {
+    type: string;
+    payload: unknown;
+    /** Parent-derived runtime files that must not become workspace state. */
+    ephemeralPaths: string[];
+}
+
+export type SandboxServiceHandler = (request: SandboxServiceRequest) => unknown | Promise<unknown>;
+
 export interface ISandbox {
     readonly id: string;
     readonly directory: string;

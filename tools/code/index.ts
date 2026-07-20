@@ -8,6 +8,47 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import ts from 'typescript';
 
+interface SnapshotSummary {
+    id: string;
+    workspacePath: string;
+    threadId: string | null;
+    turnId: string | null;
+    name: string | null;
+    manifestHash: string;
+    createdAt: string;
+}
+
+interface SnapshotFileOptions {
+    files?: string[];
+}
+
+type HarnessRequest = (type: string, payload: unknown) => Promise<unknown>;
+
+function harnessRequest<T>(type: string, payload: unknown): Promise<T> {
+    const request = (globalThis as typeof globalThis & {
+        __TELOS_ACTION_WORKER_REQUEST__?: HarnessRequest;
+    }).__TELOS_ACTION_WORKER_REQUEST__;
+    if (!request) {
+        throw new Error(`${type} requires the harness action-worker IPC runtime.`);
+    }
+    return request(type, payload) as Promise<T>;
+}
+
+function validateSnapshotId(snapshotId: string): string {
+    if (typeof snapshotId !== 'string' || !snapshotId.trim()) {
+        throw new Error('snapshotId must be a non-empty string');
+    }
+    return snapshotId.trim();
+}
+
+function validateFileOptions(options: SnapshotFileOptions | undefined): SnapshotFileOptions {
+    if (!options?.files) return {};
+    if (!Array.isArray(options.files) || options.files.some((file) => typeof file !== 'string' || !file.trim())) {
+        throw new Error('options.files must contain non-empty workspace-relative paths');
+    }
+    return { files: options.files };
+}
+
 function sandboxRoot(): string {
     return path.resolve(process.env.SANDBOX_DIR || process.cwd());
 }
@@ -113,6 +154,42 @@ export async function outline(filePath: string): Promise<string> {
     return lines.join('\n');
 }
 
+export function snapshot(name?: string): Promise<SnapshotSummary> {
+    if (name !== undefined && (typeof name !== 'string' || !name.trim())) {
+        throw new Error('name must be a non-empty string when provided');
+    }
+    return harnessRequest<SnapshotSummary>('code.snapshot', { name: name?.trim() });
+}
+
+export function diff(snapshotId: string, options?: SnapshotFileOptions): Promise<unknown> {
+    return harnessRequest('code.diff', {
+        snapshotId: validateSnapshotId(snapshotId),
+        ...validateFileOptions(options),
+    });
+}
+
+export function rollback(snapshotId: string, options?: SnapshotFileOptions): Promise<unknown> {
+    return harnessRequest('code.rollback', {
+        snapshotId: validateSnapshotId(snapshotId),
+        ...validateFileOptions(options),
+    });
+}
+
+export function listSnapshots(): Promise<SnapshotSummary[]> {
+    return harnessRequest<SnapshotSummary[]>('code.listSnapshots', {});
+}
+
+export function deleteSnapshot(snapshotId: string): Promise<void> {
+    return harnessRequest<void>('code.deleteSnapshot', {
+        snapshotId: validateSnapshotId(snapshotId),
+    });
+}
+
 export default {
     outline,
+    snapshot,
+    diff,
+    rollback,
+    listSnapshots,
+    deleteSnapshot,
 };

@@ -1,4 +1,4 @@
-export const THREAD_STORE_SCHEMA_VERSION = 2;
+export const THREAD_STORE_SCHEMA_VERSION = 3;
 
 export const THREAD_STORE_MIGRATIONS: ReadonlyArray<{ version: number; sql: string }> = [
   {
@@ -175,6 +175,14 @@ export const THREAD_STORE_MIGRATIONS: ReadonlyArray<{ version: number; sql: stri
     sql: `
       ALTER TABLE turns ADD COLUMN input_text TEXT NOT NULL DEFAULT '';
       ALTER TABLE turns ADD COLUMN attachment_ids_json TEXT NOT NULL DEFAULT '[]';
+    `,
+  },
+  {
+    version: 3,
+    sql: `
+      ALTER TABLE checkpoint_files ADD COLUMN mtime_ms REAL;
+      CREATE INDEX IF NOT EXISTS checkpoints_thread_idx ON checkpoints(thread_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS checkpoint_files_hash_idx ON checkpoint_files(content_hash);
     `,
   },
 ];

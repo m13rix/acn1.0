@@ -14,6 +14,8 @@ import type {
   StoredThreadEvent,
   StoredTurn,
   ThreadProject,
+  WorkspaceCheckpoint,
+  WorkspaceCheckpointFile,
 } from './types.js';
 
 const LEGACY_MIGRATION_VERSION = 10_001;
@@ -73,6 +75,27 @@ interface TurnRow {
   error: string | null;
 }
 
+interface CheckpointRow {
+  id: string;
+  timeline_id: string;
+  workspace_path: string;
+  thread_id: string | null;
+  turn_id: string | null;
+  name: string | null;
+  manifest_hash: string;
+  created_at: string;
+}
+
+interface CheckpointFileRow {
+  relative_path: string;
+  content_hash: string | null;
+  kind: WorkspaceCheckpointFile['kind'];
+  size: number;
+  mode: number | null;
+  symlink_target: string | null;
+  mtime_ms: number | null;
+}
+
 function parseJson<T>(value: string): T {
   return JSON.parse(value) as T;
 }
@@ -108,6 +131,31 @@ function threadFromRow(row: ThreadRow): HarnessThread {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     version: row.version,
+  };
+}
+
+function checkpointFromRow(row: CheckpointRow): WorkspaceCheckpoint {
+  return {
+    id: row.id,
+    timelineId: row.timeline_id,
+    workspacePath: row.workspace_path,
+    threadId: row.thread_id,
+    turnId: row.turn_id,
+    name: row.name,
+    manifestHash: row.manifest_hash,
+    createdAt: row.created_at,
+  };
+}
+
+function checkpointFileFromRow(row: CheckpointFileRow): WorkspaceCheckpointFile {
+  return {
+    relativePath: row.relative_path,
+    contentHash: row.content_hash,
+    kind: row.kind,
+    size: row.size,
+    mode: row.mode,
+    symlinkTarget: row.symlink_target,
+    mtimeMs: row.mtime_ms,
   };
 }
 
@@ -406,6 +454,7 @@ export class ThreadStore {
           title: thread.title,
         });
       }
+      this.database.prepare('DELETE FROM checkpoints WHERE thread_id = ?').run(threadId);
       this.database.prepare('DELETE FROM threads WHERE id = ?').run(threadId);
     })();
   }
@@ -517,6 +566,123 @@ export class ThreadStore {
           snapshot: parseJson<unknown>(row.snapshot_json),
         }
       : null;
+  }
+
+  public createWorkspaceCheckpoint(input: {
+    id?: string;
+    workspacePath: string;
+    threadId?: string | null;
+    turnId?: string | null;
+    name?: string | null;
+    manifestHash: string;
+    files: WorkspaceCheckpointFile[];
+  }): WorkspaceCheckpoint {
+    const workspacePath = resolve(input.workspacePath);
+    const checkpointId = input.id || this.id();
+    const createdAt = this.now().toISOString();
+    this.database.transaction(() => {
+      let timeline = this.database
+        .prepare('SELECT id FROM workspace_timelines WHERE workspace_path = ?')
+        .get(workspacePath) as { id: string } | undefined;
+      if (!timeline) {
+        timeline = { id: this.id() };
+        this.database
+          .prepare('INSERT INTO workspace_timelines (id, workspace_path, created_at) VALUES (?, ?, ?)')
+          .run(timeline.id, workspacePath, createdAt);
+      }
+      this.database
+        .prepare(
+          `INSERT INTO checkpoints
+            (id, timeline_id, thread_id, turn_id, name, manifest_hash, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          checkpointId,
+          timeline.id,
+          input.threadId || null,
+          input.turnId || null,
+          input.name?.trim() || null,
+          input.manifestHash,
+          createdAt,
+        );
+      const insertFile = this.database.prepare(
+        `INSERT INTO checkpoint_files
+          (checkpoint_id, relative_path, content_hash, kind, size, mode, symlink_target, mtime_ms)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      );
+      for (const file of input.files) {
+        insertFile.run(
+          checkpointId,
+          file.relativePath,
+          file.contentHash,
+          file.kind,
+          file.size,
+          file.mode,
+          file.symlinkTarget,
+          file.mtimeMs,
+        );
+      }
+    })();
+    return this.getCheckpoint(checkpointId)!;
+  }
+
+  public getCheckpoint(checkpointId: string): WorkspaceCheckpoint | null {
+    const row = this.database
+      .prepare(
+        `SELECT c.*, t.workspace_path
+         FROM checkpoints c JOIN workspace_timelines t ON t.id = c.timeline_id
+         WHERE c.id = ?`,
+      )
+      .get(checkpointId) as CheckpointRow | undefined;
+    return row ? checkpointFromRow(row) : null;
+  }
+
+  public listCheckpoints(input: { threadId?: string; workspacePath?: string } = {}): WorkspaceCheckpoint[] {
+    const clauses: string[] = [];
+    const parameters: unknown[] = [];
+    if (input.threadId) {
+      clauses.push('c.thread_id = ?');
+      parameters.push(input.threadId);
+    }
+    if (input.workspacePath) {
+      clauses.push('t.workspace_path = ?');
+      parameters.push(resolve(input.workspacePath));
+    }
+    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+    return (
+      this.database
+        .prepare(
+          `SELECT c.*, t.workspace_path
+           FROM checkpoints c JOIN workspace_timelines t ON t.id = c.timeline_id
+           ${where} ORDER BY c.created_at DESC, c.id DESC`,
+        )
+        .all(...parameters) as CheckpointRow[]
+    ).map(checkpointFromRow);
+  }
+
+  public getCheckpointFiles(checkpointId: string): WorkspaceCheckpointFile[] {
+    return (
+      this.database
+        .prepare('SELECT * FROM checkpoint_files WHERE checkpoint_id = ? ORDER BY relative_path ASC')
+        .all(checkpointId) as CheckpointFileRow[]
+    ).map(checkpointFileFromRow);
+  }
+
+  public deleteCheckpoint(checkpointId: string): string[] {
+    return this.database.transaction(() => {
+      const candidates = (
+        this.database
+          .prepare(
+            'SELECT DISTINCT content_hash FROM checkpoint_files WHERE checkpoint_id = ? AND content_hash IS NOT NULL',
+          )
+          .all(checkpointId) as Array<{ content_hash: string }>
+      ).map((row) => row.content_hash);
+      this.database.prepare('DELETE FROM checkpoints WHERE id = ?').run(checkpointId);
+      const referenced = this.database.prepare(
+        'SELECT 1 FROM checkpoint_files WHERE content_hash = ? LIMIT 1',
+      );
+      return candidates.filter((hash) => !referenced.get(hash));
+    })();
   }
 
   public executeIdempotently<T>(commandId: string, commandType: string, execute: () => T): T {

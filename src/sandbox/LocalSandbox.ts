@@ -13,7 +13,7 @@ import { join, dirname, resolve, relative, isAbsolute } from 'path';
 import { randomUUID } from 'crypto';
 import { fileURLToPath, pathToFileURL } from 'url';
 import type { ActionBuiltinTool, AgentActionToolPolicy, AgentMemoryConfig, ExecutionResult, LoadedTool } from '../types/index.js';
-import type { ISandbox, SandboxActionExecutionPolicy } from './interfaces.js';
+import type { ISandbox, SandboxActionExecutionPolicy, SandboxServiceHandler } from './interfaces.js';
 import { resolveProjectMemoryCategory } from '../memory_system/projectCategory.js';
 import {
     COMPLETION_SIGNAL_END,
@@ -44,6 +44,10 @@ const ACTION_WORKER_PATH = existsSync(ACTION_WORKER_JS_PATH) ? ACTION_WORKER_JS_
 const DEFAULT_ACTION_WORKER_OLD_SPACE_MB = 8192;
 const DEFAULT_BUILTIN_TOOLS: ActionBuiltinTool[] = ['files', 'terminal', 'code', 'computer'];
 
+function portableRelativePath(root: string, target: string): string {
+    return relative(root, target).split('\\').join('/');
+}
+
 function resolveActionWorkerOldSpaceMb(): number {
     const raw = process.env.TELOS_ACTION_WORKER_OLD_SPACE_MB || process.env.TELOS_NODE_MAX_OLD_SPACE_MB;
     if (!raw || !raw.trim()) {
@@ -73,13 +77,20 @@ export class LocalSandbox implements ISandbox {
         resolve: (result: ExecutionResult) => void;
         onStderr?: (data: string) => void;
         keepAlive: NodeJS.Timeout;
+        filePath: string;
     }>();
     private actionWorkerQueue: Promise<void> = Promise.resolve();
+    private readonly serviceHandler: SandboxServiceHandler | undefined;
 
     private executionCounter: number = 0; // Counter for execution files, starts at 0
     private executedFiles: Map<string, string> = new Map(); // filename -> filePath mapping for diff support
 
-    constructor(optionsOrBaseDir?: string | { baseDir?: string; existingPath?: string }) {
+    constructor(optionsOrBaseDir?: string | {
+        baseDir?: string;
+        existingPath?: string;
+        serviceHandler?: SandboxServiceHandler;
+    }) {
+        this.serviceHandler = typeof optionsOrBaseDir === 'object' ? optionsOrBaseDir.serviceHandler : undefined;
         if (typeof optionsOrBaseDir === 'object' && optionsOrBaseDir.existingPath) {
             this.id = 'attached'; // Special ID for attached sandboxes
             this.directory = resolve(optionsOrBaseDir.existingPath);
@@ -162,7 +173,11 @@ For absolute paths outside the project, pass \`allowExternal: true\` in the rele
 Read relevant code before editing it. Prefer \`files.edit\` over whole-file rewrites.
 `);
         if (builtins.includes('code')) primaryTools.push(`Use \`code\` for code structure:
-- \`code.outline(path)\` returns functions, classes, and methods with line ranges.`);
+- \`code.outline(path)\` returns functions, classes, and methods with line ranges.
+- \`code.snapshot(name?)\` creates a Git-independent workspace checkpoint.
+- \`code.diff(snapshotId, { files? }?)\` compares the current workspace with a checkpoint.
+- \`code.rollback(snapshotId, { files? }?)\` restores workspace content after creating a safety checkpoint.
+- \`code.listSnapshots()\` and \`code.deleteSnapshot(snapshotId)\` manage retained checkpoints.`);
         if (builtins.includes('terminal')) primaryTools.push(`Use \`terminal\` for execution:
 - \`terminal.run(command, options?)\` runs a finite command. Pass \`allowExternal: true\` when \`cwd\` is intentionally outside the project.
 - \`terminal.start(name, command, options?)\` starts a persistent named session.
@@ -789,6 +804,11 @@ async function __telosWaitForTrackedAsyncTasks() {
             'Use for code-aware helpers.',
             'API:',
             '- await code.outline(path)',
+            '- await code.snapshot(name?)',
+            '- await code.diff(snapshotId, { files? }?)',
+            '- await code.rollback(snapshotId, { files? }?)',
+            '- await code.listSnapshots()',
+            '- await code.deleteSnapshot(snapshotId)',
         ].join('\n');
 
         return [
@@ -1515,7 +1535,7 @@ declare global {
             const keepAlive = setInterval(() => {
                 // Keeps the parent event loop alive while this unrefed worker request is pending.
             }, 1000);
-            this.actionWorkerPending.set(id, { resolve, onStderr, keepAlive });
+            this.actionWorkerPending.set(id, { resolve, onStderr, keepAlive, filePath });
             this.refActionWorker(worker);
             worker.send?.({ type: 'run', id, filePath, env }, (error) => {
                 if (!error) {
@@ -1563,6 +1583,43 @@ declare global {
 
         worker.on('message', (message: any) => {
             if (!message || typeof message !== 'object') {
+                return;
+            }
+            if (message.type === 'service-request') {
+                const runId = String(message.runId || '');
+                const requestId = String(message.requestId || '');
+                const activeRequest = this.actionWorkerPending.get(runId);
+                if (!requestId || !activeRequest) {
+                    worker.send?.({
+                        type: 'service-response',
+                        requestId,
+                        success: false,
+                        error: 'The action context is no longer active.',
+                    });
+                    return;
+                }
+                if (!this.serviceHandler) {
+                    worker.send?.({
+                        type: 'service-response',
+                        requestId,
+                        success: false,
+                        error: `Harness service is unavailable for ${String(message.serviceType || 'unknown request')}.`,
+                    });
+                    return;
+                }
+                Promise.resolve(this.serviceHandler({
+                    type: String(message.serviceType || ''),
+                    payload: message.payload,
+                    ephemeralPaths: [portableRelativePath(this.directory, activeRequest.filePath)],
+                })).then(
+                    (result) => worker.send?.({ type: 'service-response', requestId, success: true, result }),
+                    (error) => worker.send?.({
+                        type: 'service-response',
+                        requestId,
+                        success: false,
+                        error: error instanceof Error ? error.message : String(error),
+                    }),
+                );
                 return;
             }
             const id = String(message.id || '');
