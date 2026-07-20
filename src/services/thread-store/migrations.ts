@@ -1,4 +1,4 @@
-export const THREAD_STORE_SCHEMA_VERSION = 5;
+export const THREAD_STORE_SCHEMA_VERSION = 6;
 
 export const THREAD_STORE_MIGRATIONS: ReadonlyArray<{ version: number; sql: string }> = [
   {
@@ -214,6 +214,21 @@ export const THREAD_STORE_MIGRATIONS: ReadonlyArray<{ version: number; sql: stri
       ALTER TABLE terminal_sessions ADD COLUMN has_running_subprocess INTEGER NOT NULL DEFAULT 0;
       CREATE INDEX IF NOT EXISTS terminal_sessions_thread_idx
         ON terminal_sessions(thread_id, updated_at DESC);
+    `,
+  },
+  {
+    version: 6,
+    sql: `
+      ALTER TABLE projects ADD COLUMN unregistered_at TEXT;
+      CREATE TABLE IF NOT EXISTS shell_events (
+        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+        event_id TEXT NOT NULL UNIQUE,
+        type TEXT NOT NULL,
+        occurred_at TEXT NOT NULL,
+        payload_json TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS shell_events_occurred_idx
+        ON shell_events(occurred_at);
     `,
   },
 ];

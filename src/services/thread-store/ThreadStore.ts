@@ -22,6 +22,7 @@ import type {
   ThreadProject,
   WorkspaceCheckpoint,
   WorkspaceCheckpointFile,
+  StoredShellEvent,
 } from './types.js';
 
 const LEGACY_MIGRATION_VERSION = 10_001;
@@ -42,6 +43,15 @@ interface ProjectRow {
   snapshot_ignore_json: string;
   created_at: string;
   updated_at: string;
+  unregistered_at: string | null;
+}
+
+interface ShellEventRow {
+  sequence: number;
+  event_id: string;
+  type: StoredShellEvent['type'];
+  occurred_at: string;
+  payload_json: string;
 }
 
 interface ThreadRow {
@@ -241,6 +251,7 @@ function projectFromRow(row: ProjectRow): ThreadProject {
     snapshotIgnore: parseJson<string[]>(row.snapshot_ignore_json),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    unregisteredAt: row.unregistered_at,
   };
 }
 
@@ -327,6 +338,7 @@ export class ThreadStore {
   private readonly defaultWorkspacePath: string;
   private readonly now: () => Date;
   private readonly id: () => string;
+  private readonly shellSubscribers = new Set<(event: StoredShellEvent) => void>();
 
   private constructor(options: ThreadStoreOptions) {
     this.database = new Database(options.databasePath);
@@ -381,21 +393,27 @@ export class ThreadStore {
     const path = resolve(input.path);
     const timestamp = this.now().toISOString();
     const id = input.id || this.id();
-    this.database
-      .prepare(
-        `INSERT INTO projects
-          (id, path, display_name, repository_identity, snapshot_ignore_json, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        id,
-        path,
-        input.displayName?.trim() || basename(path),
-        input.repositoryIdentity || null,
-        JSON.stringify(input.snapshotIgnore || []),
-        timestamp,
-        timestamp,
-      );
+    let event!: StoredShellEvent;
+    this.database.transaction(() => {
+      this.database
+        .prepare(
+          `INSERT INTO projects
+            (id, path, display_name, repository_identity, snapshot_ignore_json, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          id,
+          path,
+          input.displayName?.trim() || basename(path),
+          input.repositoryIdentity || null,
+          JSON.stringify(input.snapshotIgnore || []),
+          timestamp,
+          timestamp,
+        );
+      const project = this.getProject(id)!;
+      event = this.appendShellEventInTransaction('project.upsert', { project });
+    })();
+    this.publishShellEvent(event);
     return this.getProject(id)!;
   }
 
@@ -406,10 +424,49 @@ export class ThreadStore {
     return row ? projectFromRow(row) : null;
   }
 
-  public listProjects(): ThreadProject[] {
-    return (this.database.prepare('SELECT * FROM projects ORDER BY updated_at DESC').all() as ProjectRow[]).map(
+  public listProjects(options: { includeUnregistered?: boolean } = {}): ThreadProject[] {
+    const where = options.includeUnregistered ? '' : 'WHERE unregistered_at IS NULL';
+    return (this.database.prepare(`SELECT * FROM projects ${where} ORDER BY updated_at DESC`).all() as ProjectRow[]).map(
       projectFromRow,
     );
+  }
+
+  public updateProject(input: {
+    id: string;
+    displayName?: string;
+    snapshotIgnore?: string[];
+  }): ThreadProject {
+    const current = this.getProject(input.id);
+    if (!current) throw new Error(`Project not found: ${input.id}`);
+    const displayName = input.displayName?.trim() || current.displayName;
+    const snapshotIgnore = input.snapshotIgnore || current.snapshotIgnore;
+    let event!: StoredShellEvent;
+    this.database.transaction(() => {
+      const result = this.database.prepare(
+        `UPDATE projects SET display_name = ?, snapshot_ignore_json = ?, updated_at = ?,
+         unregistered_at = NULL WHERE id = ?`,
+      ).run(displayName, JSON.stringify(snapshotIgnore), this.now().toISOString(), input.id);
+      if (result.changes === 0) throw new Error(`Project not found: ${input.id}`);
+      event = this.appendShellEventInTransaction('project.upsert', { project: this.getProject(input.id)! });
+    })();
+    this.publishShellEvent(event);
+    return this.getProject(input.id)!;
+  }
+
+  public unregisterProject(projectId: string): ThreadProject {
+    let project!: ThreadProject;
+    let event!: StoredShellEvent;
+    this.database.transaction(() => {
+      const timestamp = this.now().toISOString();
+      const result = this.database.prepare(
+        'UPDATE projects SET unregistered_at = ?, updated_at = ? WHERE id = ?',
+      ).run(timestamp, timestamp, projectId);
+      if (result.changes === 0) throw new Error(`Project not found: ${projectId}`);
+      project = this.getProject(projectId)!;
+      event = this.appendShellEventInTransaction('project.unregister', { projectId });
+    })();
+    this.publishShellEvent(event);
+    return project;
   }
 
   public createThread(input: {
@@ -421,6 +478,7 @@ export class ThreadStore {
     const id = input.id || this.id();
     const timestamp = this.now().toISOString();
     const title = input.title?.trim() || 'New thread';
+    let shellEvent!: StoredShellEvent;
     this.database.transaction(() => {
       this.database
         .prepare(
@@ -442,7 +500,11 @@ export class ThreadStore {
         operation: 'created',
         title,
       });
+      shellEvent = this.appendShellEventInTransaction('thread.upsert', {
+        thread: this.getThread(id)!,
+      });
     })();
+    this.publishShellEvent(shellEvent);
     return this.getThread(id)!;
   }
 
@@ -469,9 +531,11 @@ export class ThreadStore {
   }
 
   public renameThread(threadId: string, title: string, expectedVersion?: number): HarnessThread {
-    return this.updateThreadProjection(threadId, expectedVersion, 'title = ?', [title.trim()], 'renamed', {
+    const thread = this.updateThreadProjection(threadId, expectedVersion, 'title = ?', [title.trim()], 'renamed', {
       title: title.trim(),
     });
+    this.emitShellEvent('thread.upsert', { thread });
+    return thread;
   }
 
   public archiveThread(threadId: string, archived: boolean, expectedVersion?: number): HarnessThread {
@@ -497,6 +561,10 @@ export class ThreadStore {
         });
       }
     })();
+    for (const id of ids) {
+      const thread = this.getThread(id);
+      if (thread) this.emitShellEvent('thread.upsert', { thread });
+    }
     return this.getThread(threadId)!;
   }
 
@@ -879,6 +947,18 @@ export class ThreadStore {
   }
 
   public deleteThread(threadId: string): void {
+    const deletedIds = [
+      threadId,
+      ...(this.database
+        .prepare(
+          `WITH RECURSIVE children(id) AS (
+             SELECT id FROM threads WHERE parent_thread_id = ?
+             UNION ALL SELECT t.id FROM threads t JOIN children c ON t.parent_thread_id = c.id
+           ) SELECT id FROM children`,
+        )
+        .all(threadId) as Array<{ id: string }>).map((row) => row.id),
+    ];
+    let shellEvent: StoredShellEvent | undefined;
     this.database.transaction(() => {
       const thread = this.getThread(threadId);
       if (!thread) return;
@@ -892,7 +972,61 @@ export class ThreadStore {
       }
       this.database.prepare('DELETE FROM checkpoints WHERE thread_id = ?').run(threadId);
       this.database.prepare('DELETE FROM threads WHERE id = ?').run(threadId);
+      shellEvent = this.appendShellEventInTransaction('thread.delete', { threadIds: deletedIds });
     })();
+    if (shellEvent) this.publishShellEvent(shellEvent);
+  }
+
+  public shellSequence(): number {
+    const row = this.database.prepare('SELECT COALESCE(MAX(sequence), 0) AS sequence FROM shell_events').get() as {
+      sequence: number;
+    };
+    return row.sequence;
+  }
+
+  public replayShellEvents(afterSequence: number, limit = 500): StoredShellEvent[] {
+    return (this.database.prepare(
+      `SELECT * FROM shell_events WHERE sequence > ? ORDER BY sequence ASC LIMIT ?`,
+    ).all(afterSequence, Math.max(1, Math.min(limit, 1_000))) as ShellEventRow[]).map((row) => ({
+      sequence: row.sequence,
+      eventId: row.event_id,
+      type: row.type,
+      occurredAt: row.occurred_at,
+      payload: parseJson<Record<string, unknown>>(row.payload_json),
+    }));
+  }
+
+  public subscribeShell(subscriber: (event: StoredShellEvent) => void): () => void {
+    this.shellSubscribers.add(subscriber);
+    return () => this.shellSubscribers.delete(subscriber);
+  }
+
+  private emitShellEvent(type: StoredShellEvent['type'], payload: Record<string, unknown>): StoredShellEvent {
+    const event = this.database.transaction(() => this.appendShellEventInTransaction(type, payload))();
+    this.publishShellEvent(event);
+    return event;
+  }
+
+  private appendShellEventInTransaction(
+    type: StoredShellEvent['type'],
+    payload: Record<string, unknown>,
+  ): StoredShellEvent {
+    const eventId = this.id();
+    const occurredAt = this.now().toISOString();
+    const result = this.database.prepare(
+      `INSERT INTO shell_events (event_id, type, occurred_at, payload_json) VALUES (?, ?, ?, ?)`,
+    ).run(eventId, type, occurredAt, JSON.stringify(payload));
+    return {
+      sequence: Number(result.lastInsertRowid),
+      eventId,
+      type,
+      occurredAt,
+      payload,
+    };
+  }
+
+  private publishShellEvent(event: StoredShellEvent): void {
+    for (const subscriber of this.shellSubscribers) subscriber(event);
   }
 
   private updateThreadProjection(

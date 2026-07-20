@@ -449,9 +449,17 @@ export class TelosCodeLinkEndpoint {
       }));
     };
     this.store.listThreads({ includeArchived: true }).forEach(subscribe);
+    const unsubscribeShell = this.store.subscribeShell((event) => {
+      const thread = event.payload.thread;
+      if (thread && typeof thread === 'object' && typeof (thread as { id?: unknown }).id === 'string') {
+        subscribe(thread as HarnessThread);
+      }
+      void this.send(stream, { type: 'shell.event', event }).catch(() => undefined);
+    });
     await this.send(stream, {
       type: 'shell.snapshot',
       harnessId: this.options.harnessId,
+      sequence: this.store.shellSequence(),
       projects: this.store.listProjects(),
       threads: this.store.listThreads({ includeArchived: true }),
       appClients: this.store.listAppClients().map(publicAppClient),
@@ -470,6 +478,16 @@ export class TelosCodeLinkEndpoint {
             threadId,
             afterSequence,
             events: this.store.replayEvents(threadId, afterSequence, limit),
+          });
+          continue;
+        }
+        if (message.type === 'shell.replay.request') {
+          const afterSequence = Number(message.afterSequence || 0);
+          const limit = Math.max(1, Math.min(Number(message.limit || 500), 1_000));
+          await this.send(stream, {
+            type: 'shell.replay',
+            afterSequence,
+            events: this.store.replayShellEvents(afterSequence, limit),
           });
           continue;
         }
@@ -501,6 +519,7 @@ export class TelosCodeLinkEndpoint {
         }
       }
     } finally {
+      unsubscribeShell();
       for (const unsubscribe of subscriptions.values()) unsubscribe();
     }
   }
@@ -596,6 +615,18 @@ export class TelosCodeLinkEndpoint {
           path: command.path,
           displayName: command.displayName,
         }) };
+        break;
+      case 'project.update':
+        result = { project: this.store.updateProject({
+          id: command.projectId,
+          ...(command.displayName === undefined ? {} : { displayName: command.displayName }),
+          ...(command.snapshotIgnore === undefined
+            ? {}
+            : { snapshotIgnore: [...command.snapshotIgnore] }),
+        }) };
+        break;
+      case 'project.unregister':
+        result = { project: this.store.unregisterProject(command.projectId) };
         break;
       case 'thread.create':
         result = { thread: await this.threads.createThread({

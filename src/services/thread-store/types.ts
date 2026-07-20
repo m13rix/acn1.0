@@ -13,6 +13,15 @@ export interface ThreadProject {
   snapshotIgnore: string[];
   createdAt: string;
   updatedAt: string;
+  unregisteredAt: string | null;
+}
+
+export interface StoredShellEvent {
+  sequence: number;
+  eventId: string;
+  type: 'project.upsert' | 'project.unregister' | 'thread.upsert' | 'thread.delete';
+  occurredAt: string;
+  payload: Record<string, unknown>;
 }
 
 export interface HarnessThread {

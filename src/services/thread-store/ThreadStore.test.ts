@@ -82,6 +82,41 @@ test('deduplicates commands and enforces projection versions', async () => {
   });
 });
 
+test('publishes and replays a globally ordered shell projection', async () => {
+  await withStore((store, directory) => {
+    const live: Array<{ sequence: number; type: string }> = [];
+    const unsubscribe = store.subscribeShell((event) => {
+      live.push({ sequence: event.sequence, type: event.type });
+    });
+    const project = store.createProject({ path: directory, displayName: 'Fixture' });
+    const thread = store.createThread({ launchProfile: launchProfile(project.id, directory) });
+    store.renameThread(thread.id, 'Live rename');
+    store.archiveThread(thread.id, true);
+    store.unregisterProject(project.id);
+    store.deleteThread(thread.id);
+    unsubscribe();
+
+    assert.deepEqual(
+      live.map((event) => event.type),
+      [
+        'project.upsert',
+        'thread.upsert',
+        'thread.upsert',
+        'thread.upsert',
+        'project.unregister',
+        'thread.delete',
+      ],
+    );
+    assert.deepEqual(
+      store.replayShellEvents(2).map((event) => event.sequence),
+      [3, 4, 5, 6],
+    );
+    assert.equal(store.shellSequence(), 6);
+    assert.equal(store.listProjects().length, 0);
+    assert.equal(store.listProjects({ includeUnregistered: true })[0]?.unregisteredAt !== null, true);
+  });
+});
+
 test('imports legacy JSON once and leaves source files untouched', async () => {
   await withStore(async (store, directory) => {
     const legacyDirectory = join(directory, 'legacy');
