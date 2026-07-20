@@ -1,4 +1,4 @@
-export const THREAD_STORE_SCHEMA_VERSION = 4;
+export const THREAD_STORE_SCHEMA_VERSION = 5;
 
 export const THREAD_STORE_MIGRATIONS: ReadonlyArray<{ version: number; sql: string }> = [
   {
@@ -197,6 +197,23 @@ export const THREAD_STORE_MIGRATIONS: ReadonlyArray<{ version: number; sql: stri
       );
       CREATE INDEX IF NOT EXISTS executor_snapshot_history_turn_idx
         ON executor_snapshot_history(turn_id);
+    `,
+  },
+  {
+    version: 5,
+    sql: `
+      ALTER TABLE terminal_sessions ADD COLUMN command TEXT NOT NULL DEFAULT '';
+      ALTER TABLE terminal_sessions ADD COLUMN history TEXT NOT NULL DEFAULT '';
+      ALTER TABLE terminal_sessions ADD COLUMN cols INTEGER NOT NULL DEFAULT 120;
+      ALTER TABLE terminal_sessions ADD COLUMN rows INTEGER NOT NULL DEFAULT 30;
+      ALTER TABLE terminal_sessions ADD COLUMN pid INTEGER;
+      ALTER TABLE terminal_sessions ADD COLUMN exit_code INTEGER;
+      ALTER TABLE terminal_sessions ADD COLUMN exit_signal INTEGER;
+      ALTER TABLE terminal_sessions ADD COLUMN label TEXT NOT NULL DEFAULT 'Shell';
+      ALTER TABLE terminal_sessions ADD COLUMN sequence INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE terminal_sessions ADD COLUMN has_running_subprocess INTEGER NOT NULL DEFAULT 0;
+      CREATE INDEX IF NOT EXISTS terminal_sessions_thread_idx
+        ON terminal_sessions(thread_id, updated_at DESC);
     `,
   },
 ];

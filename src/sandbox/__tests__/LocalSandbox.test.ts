@@ -175,6 +175,56 @@ test('message questions and text publish through bound action-worker service IPC
   }
 });
 
+test('terminal operations use the shared harness terminal service through worker IPC', async () => {
+  const tempRoot = await mkdtemp(join(process.cwd(), 'sandboxes', 'test-terminal-service-ipc-'));
+  const requests: Array<{ type: string; payload: unknown; ephemeralPaths: string[] }> = [];
+  const terminalPath = join(process.cwd(), 'tools', 'terminal', 'index.ts');
+  const sandbox = new LocalSandbox({
+    baseDir: tempRoot,
+    serviceHandler: (request) => {
+      requests.push(request);
+      if (request.type === 'terminal.run') {
+        return { success: true, code: 0, output: 'run-ok', stdout: 'run-ok', stderr: '', timedOut: false };
+      }
+      if (request.type === 'terminal.start') return { terminalId: 'thread:agent:dev' };
+      if (request.type === 'terminal.read') return { output: 'read-ok' };
+      if (request.type === 'terminal.list') return [{ name: 'dev', command: 'npm run dev', startedAt: 'now', running: true }];
+      if (request.type === 'terminal.send' || request.type === 'terminal.stopAll') return undefined;
+      throw new Error(`Unexpected service request: ${request.type}`);
+    },
+  });
+
+  try {
+    await sandbox.initialize([{
+      config: { name: 'terminal', description: 'Shared terminal.', module: terminalPath },
+      directory: join(process.cwd(), 'tools', 'terminal'),
+      absolutePath: terminalPath,
+    }]);
+    const result = await sandbox.execute([
+      'console.log((await terminal.run("git status")).output);',
+      'console.log(await terminal.start("dev", "npm run dev"));',
+      'console.log(await terminal.read("dev"));',
+      'await terminal.send("dev", "r\\n");',
+      'console.log((await terminal.list())[0].name);',
+      'await terminal.stopAll();',
+    ].join('\n'));
+
+    assert.equal(result.success, true, result.error);
+    assert.match(result.output, /run-ok[\s\S]*Started terminal "dev"[\s\S]*read-ok[\s\S]*dev/u);
+    assert.deepEqual(requests.map((request) => request.type), [
+      'terminal.run',
+      'terminal.start',
+      'terminal.read',
+      'terminal.send',
+      'terminal.list',
+      'terminal.stopAll',
+    ]);
+  } finally {
+    await sandbox.cleanup();
+    await rmBestEffort(tempRoot);
+  }
+});
+
 test('injected lazy tool reflection handles non-configurable module flags', async () => {
   const tempRoot = await mkdtemp(join(process.cwd(), 'sandboxes', 'test-tool-reflection-'));
   const toolPath = join(tempRoot, 'helper.cjs');

@@ -149,10 +149,13 @@ export class TelosCodeLinkEndpoint {
     try {
       appInstanceId = await this.authenticate(incoming.stream, iterator);
       this.trackStream(appInstanceId, incoming.stream);
-      if (incoming.channelType !== 'events') {
+      if (incoming.channelType === 'events') {
+        await this.serveEvents(incoming.stream, iterator, appInstanceId);
+      } else if (incoming.channelType === 'terminal') {
+        await this.serveTerminal(incoming, iterator);
+      } else {
         throw new Error(`Channel is not implemented yet: ${incoming.channelType}`);
       }
-      await this.serveEvents(incoming.stream, iterator, appInstanceId);
     } catch (error) {
       await this.send(incoming.stream, {
         type: 'session.error',
@@ -308,6 +311,71 @@ export class TelosCodeLinkEndpoint {
     }
   }
 
+  private async serveTerminal(
+    incoming: IncomingAppStream,
+    iterator: AsyncIterator<Uint8Array>,
+  ): Promise<void> {
+    const request = await this.nextMessage(iterator);
+    if (
+      request.type !== 'terminal.subscribe'
+      || typeof request.threadId !== 'string'
+      || typeof request.terminalId !== 'string'
+    ) {
+      throw new Error('Expected a terminal subscription request.');
+    }
+    if (incoming.channelId !== request.terminalId) {
+      throw new Error('Terminal stream channel does not match the requested terminal.');
+    }
+    const terminal = this.threads.terminals.get(request.threadId, request.terminalId);
+    let writes = Promise.resolve();
+    const publish = (message: ProtocolMessage) => {
+      writes = writes.then(() => this.send(incoming.stream, message));
+      return writes;
+    };
+    const unsubscribe = this.threads.terminals.subscribe(request.threadId, (event) => {
+      if ('terminalId' in event && event.terminalId !== request.terminalId) return;
+      if ('terminal' in event && event.terminal.id !== request.terminalId) return;
+      void publish({ type: 'terminal.event', event }).catch(() => undefined);
+    });
+    try {
+      await publish({ type: 'terminal.snapshot', terminal });
+      while (true) {
+        const next = await iterator.next();
+        if (next.done) return;
+        const message = decodeProtocolMessage(next.value);
+        if (message.type === 'terminal.ping') {
+          await publish({ type: 'terminal.pong' });
+          continue;
+        }
+        if (message.type === 'terminal.input' && typeof message.data === 'string') {
+          await this.threads.terminals.write({
+            threadId: request.threadId,
+            terminalId: request.terminalId,
+            data: message.data,
+          });
+          continue;
+        }
+        if (
+          message.type === 'terminal.resize'
+          && typeof message.cols === 'number'
+          && typeof message.rows === 'number'
+        ) {
+          await this.threads.terminals.resize({
+            threadId: request.threadId,
+            terminalId: request.terminalId,
+            cols: message.cols,
+            rows: message.rows,
+          });
+          continue;
+        }
+        throw new Error(`Unsupported terminal stream message: ${message.type}`);
+      }
+    } finally {
+      unsubscribe();
+      await writes.catch(() => undefined);
+    }
+  }
+
   private async executeCommand(command: TelosCodeCommand, appInstanceId: string): Promise<unknown> {
     if (!command || command.protocolVersion !== 1) throw new Error('Unsupported Telos Code command version.');
     if (command.harnessId !== this.options.harnessId) throw new Error('Command targets another harness.');
@@ -426,6 +494,62 @@ export class TelosCodeLinkEndpoint {
         });
         break;
       }
+      case 'terminal.open':
+        result = { terminal: await this.threads.terminals.open({
+          threadId: command.threadId,
+          terminalId: command.terminalId,
+          cwd: command.cwd,
+          cols: command.cols,
+          rows: command.rows,
+        }) };
+        break;
+      case 'terminal.attach':
+        result = { terminal: await this.threads.terminals.attach({
+          threadId: command.threadId,
+          terminalId: command.terminalId,
+          cols: command.cols,
+          rows: command.rows,
+          restartIfNotRunning: command.restartIfNotRunning,
+        }) };
+        break;
+      case 'terminal.write':
+        await this.threads.terminals.write({
+          threadId: command.threadId,
+          terminalId: command.terminalId,
+          data: command.data,
+        });
+        result = { written: true };
+        break;
+      case 'terminal.resize':
+        result = { terminal: await this.threads.terminals.resize({
+          threadId: command.threadId,
+          terminalId: command.terminalId,
+          cols: command.cols,
+          rows: command.rows,
+        }) };
+        break;
+      case 'terminal.clear':
+        result = { terminal: this.threads.terminals.clear(command.threadId, command.terminalId) };
+        break;
+      case 'terminal.restart':
+        result = { terminal: await this.threads.terminals.restart({
+          threadId: command.threadId,
+          terminalId: command.terminalId,
+          cols: command.cols,
+          rows: command.rows,
+        }) };
+        break;
+      case 'terminal.close':
+        await this.threads.terminals.closeTerminal({
+          threadId: command.threadId,
+          terminalId: command.terminalId,
+          deleteHistory: command.deleteHistory,
+        });
+        result = { closed: true };
+        break;
+      case 'terminal.list':
+        result = { terminals: this.threads.terminals.list(command.threadId) };
+        break;
       case 'app-client.revoke':
         if (command.appClientId !== appInstanceId) throw new Error('A client may revoke only itself.');
         result = { revoked: true };

@@ -99,6 +99,25 @@ export interface StoredAppClient {
   revokedAt: string | null;
 }
 
+export interface StoredTerminalSession {
+  id: string;
+  threadId: string;
+  cwd: string;
+  command: string;
+  status: 'starting' | 'running' | 'exited' | 'error';
+  history: string;
+  cols: number;
+  rows: number;
+  pid: number | null;
+  exitCode: number | null;
+  exitSignal: number | null;
+  label: string;
+  sequence: number;
+  hasRunningSubprocess: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface LegacyMigrationIssue {
   file: string;
   reason: string;

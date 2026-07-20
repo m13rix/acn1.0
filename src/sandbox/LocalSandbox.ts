@@ -1527,6 +1527,7 @@ declare global {
             env.SANDBOX_DIR = this.directory;
             env.PROJECT_ROOT = this.directory;
             env.TELOS_PROJECT_ROOT = PROJECT_ROOT || process.cwd();
+            env.TELOS_HARNESS_SERVICES = this.serviceHandler ? '1' : '0';
             if (process.env.PATH) {
                 env.PATH = process.env.PATH;
             }

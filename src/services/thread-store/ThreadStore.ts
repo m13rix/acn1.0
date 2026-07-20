@@ -15,6 +15,7 @@ import type {
   StoredInteraction,
   StoredTurn,
   StoredAppClient,
+  StoredTerminalSession,
   ThreadProject,
   WorkspaceCheckpoint,
   WorkspaceCheckpointFile,
@@ -122,6 +123,25 @@ interface AppClientRow {
   revoked_at: string | null;
 }
 
+interface TerminalSessionRow {
+  id: string;
+  thread_id: string;
+  cwd: string;
+  command: string;
+  status: StoredTerminalSession['status'];
+  history: string;
+  cols: number;
+  rows: number;
+  pid: number | null;
+  exit_code: number | null;
+  exit_signal: number | null;
+  label: string;
+  sequence: number;
+  has_running_subprocess: number;
+  created_at: string;
+  updated_at: string;
+}
+
 function parseJson<T>(value: string): T {
   return JSON.parse(value) as T;
 }
@@ -210,6 +230,27 @@ function appClientFromRow(row: AppClientRow): StoredAppClient {
     createdAt: row.created_at,
     lastSeenAt: row.last_seen_at,
     revokedAt: row.revoked_at,
+  };
+}
+
+function terminalSessionFromRow(row: TerminalSessionRow): StoredTerminalSession {
+  return {
+    id: row.id,
+    threadId: row.thread_id,
+    cwd: row.cwd,
+    command: row.command,
+    status: row.status,
+    history: row.history,
+    cols: row.cols,
+    rows: row.rows,
+    pid: row.pid,
+    exitCode: row.exit_code,
+    exitSignal: row.exit_signal,
+    label: row.label,
+    sequence: row.sequence,
+    hasRunningSubprocess: row.has_running_subprocess === 1,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   };
 }
 
@@ -557,6 +598,95 @@ export class ThreadStore {
     const interaction = this.getInteraction(id);
     if (!interaction) throw new Error(`Interaction not found: ${id}`);
     return interaction;
+  }
+
+  public saveTerminalSession(input: {
+    id: string;
+    threadId: string;
+    cwd: string;
+    command?: string;
+    status: StoredTerminalSession['status'];
+    history?: string;
+    cols: number;
+    rows: number;
+    pid?: number | null;
+    exitCode?: number | null;
+    exitSignal?: number | null;
+    label?: string;
+    sequence?: number;
+    hasRunningSubprocess?: boolean;
+  }): StoredTerminalSession {
+    const timestamp = this.now().toISOString();
+    this.database
+      .prepare(
+        `INSERT INTO terminal_sessions
+          (id, thread_id, cwd, status, history_path, created_at, updated_at, command, history,
+           cols, rows, pid, exit_code, exit_signal, label, sequence, has_running_subprocess)
+         VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           thread_id = excluded.thread_id,
+           cwd = excluded.cwd,
+           status = excluded.status,
+           updated_at = excluded.updated_at,
+           command = excluded.command,
+           history = excluded.history,
+           cols = excluded.cols,
+           rows = excluded.rows,
+           pid = excluded.pid,
+           exit_code = excluded.exit_code,
+           exit_signal = excluded.exit_signal,
+           label = excluded.label,
+           sequence = excluded.sequence,
+           has_running_subprocess = excluded.has_running_subprocess`,
+      )
+      .run(
+        input.id,
+        input.threadId,
+        input.cwd,
+        input.status,
+        timestamp,
+        timestamp,
+        input.command || '',
+        input.history || '',
+        input.cols,
+        input.rows,
+        input.pid ?? null,
+        input.exitCode ?? null,
+        input.exitSignal ?? null,
+        input.label || 'Shell',
+        input.sequence || 0,
+        input.hasRunningSubprocess ? 1 : 0,
+      );
+    return this.getTerminalSession(input.id)!;
+  }
+
+  public getTerminalSession(id: string): StoredTerminalSession | null {
+    const row = this.database.prepare('SELECT * FROM terminal_sessions WHERE id = ?').get(id) as
+      | TerminalSessionRow
+      | undefined;
+    return row ? terminalSessionFromRow(row) : null;
+  }
+
+  public listTerminalSessions(threadId: string): StoredTerminalSession[] {
+    return (this.database
+      .prepare('SELECT * FROM terminal_sessions WHERE thread_id = ? ORDER BY created_at ASC')
+      .all(threadId) as TerminalSessionRow[]).map(terminalSessionFromRow);
+  }
+
+  public deleteTerminalSession(id: string): void {
+    this.database.prepare('DELETE FROM terminal_sessions WHERE id = ?').run(id);
+  }
+
+  public markLiveTerminalsExited(): void {
+    const timestamp = this.now().toISOString();
+    this.database
+      .prepare(
+        `UPDATE terminal_sessions SET
+           status = 'exited', pid = NULL, has_running_subprocess = 0,
+           history = history || ?, sequence = sequence + 1, updated_at = ?
+         WHERE status IN ('starting', 'running')`,
+      )
+      .run('\n[Harness restarted; the terminal process is no longer running.]\n', timestamp);
   }
 
   public deleteThread(threadId: string): void {

@@ -48,6 +48,12 @@ const MAX_BUFFER_CHARS = 200_000;
 const sessions = new Map<string, TerminalSession>();
 const requireFromHere = createRequire(import.meta.url);
 
+function harnessRequest<T>(type: string, payload: unknown): Promise<T> | null {
+    if (process.env.TELOS_HARNESS_SERVICES !== '1') return null;
+    const request = (globalThis as any).__TELOS_ACTION_WORKER_REQUEST__;
+    return typeof request === 'function' ? request(type, payload) as Promise<T> : null;
+}
+
 function sandboxRoot(): string {
     return path.resolve(process.env.SANDBOX_DIR || process.cwd());
 }
@@ -118,6 +124,16 @@ export async function run(command: string, options: RunOptions = {}): Promise<{
     if (typeof command !== 'string' || command.trim().length === 0) {
         throw new Error('terminal.run(command): command must be a non-empty string');
     }
+
+    const managed = harnessRequest<{
+        success: boolean;
+        code: number | null;
+        output: string;
+        stdout: string;
+        stderr: string;
+        timedOut: boolean;
+    }>('terminal.run', { command, options });
+    if (managed) return managed;
 
     const timeoutMs = options.timeoutMs === undefined ? 60_000 : Math.max(1, Math.floor(options.timeoutMs));
     const shellCommand = commandForShell(command);
@@ -190,6 +206,12 @@ export async function start(name: string, command: string, options: StartOptions
         throw new Error('terminal.start(name, command): command must be a non-empty string');
     }
 
+    const managed = harnessRequest<{ terminalId: string }>('terminal.start', { name, command, options });
+    if (managed) {
+        const result = await managed;
+        return `Started terminal "${name}" (${result.terminalId}).`;
+    }
+
     const pty = requireNodePty();
     const shellCommand = commandForShell(command);
     const term = pty.spawn(shellCommand.file, shellCommand.args, {
@@ -220,6 +242,8 @@ export async function start(name: string, command: string, options: StartOptions
 }
 
 export async function read(name: string, options: ReadOptions = {}): Promise<string> {
+    const managed = harnessRequest<{ output: string }>('terminal.read', { name, options });
+    if (managed) return (await managed).output;
     const session = sessions.get(name);
     if (!session) {
         throw new Error(`terminal session "${name}" does not exist`);
@@ -234,6 +258,11 @@ export async function read(name: string, options: ReadOptions = {}): Promise<str
 }
 
 export async function send(name: string, text: string): Promise<string> {
+    const managed = harnessRequest<void>('terminal.send', { name, text });
+    if (managed) {
+        await managed;
+        return `Sent input to terminal "${name}".`;
+    }
     const session = sessions.get(name);
     if (!session) {
         throw new Error(`terminal session "${name}" does not exist`);
@@ -243,6 +272,11 @@ export async function send(name: string, text: string): Promise<string> {
 }
 
 export async function stop(name: string): Promise<string> {
+    const managed = harnessRequest<void>('terminal.stop', { name });
+    if (managed) {
+        await managed;
+        return `Stopped terminal "${name}".`;
+    }
     const session = sessions.get(name);
     if (!session) {
         throw new Error(`terminal session "${name}" does not exist`);
@@ -260,6 +294,15 @@ export async function list(): Promise<Array<{
     pid?: number;
     exitCode?: number;
 }>> {
+    const managed = harnessRequest<Array<{
+        name: string;
+        command: string;
+        startedAt: string;
+        running: boolean;
+        pid?: number;
+        exitCode?: number;
+    }>>('terminal.list', {});
+    if (managed) return managed;
     return Array.from(sessions.values()).map((session) => ({
         name: session.name,
         command: session.command,
@@ -271,6 +314,11 @@ export async function list(): Promise<Array<{
 }
 
 export async function stopAll(): Promise<void> {
+    const managed = harnessRequest<void>('terminal.stopAll', {});
+    if (managed) {
+        await managed;
+        return;
+    }
     for (const name of Array.from(sessions.keys())) {
         await stop(name).catch(() => undefined);
     }

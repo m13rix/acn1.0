@@ -13,6 +13,7 @@ import { LocalSandbox } from '../sandbox/LocalSandbox.js';
 import type { AgentConfig, LoadedAgent } from '../types/index.js';
 import { ThreadStore } from './thread-store/ThreadStore.js';
 import type { HarnessThread, StoredInteraction, StoredThreadEvent, StoredTurn } from './thread-store/types.js';
+import { TerminalService } from './TerminalService.js';
 import { WorkspaceSnapshotService } from './WorkspaceSnapshotService.js';
 
 export interface ThreadExecutionCallbacks extends ExecutorCallbacks {
@@ -76,15 +77,18 @@ export class ThreadService {
   private readonly interactionWaiters = new Map<string, InteractionWaiter>();
   private readonly subscribers = new Map<string, Set<ThreadEventSubscriber>>();
   private readonly workspaceSnapshots: WorkspaceSnapshotService | undefined;
+  readonly terminals: TerminalService;
 
   constructor(
     readonly store: ThreadStore,
     options: {
       executionAdapter?: ThreadExecutionAdapter;
       workspaceSnapshots?: WorkspaceSnapshotService;
+      terminalService?: TerminalService;
     } = {},
   ) {
     this.workspaceSnapshots = options.workspaceSnapshots;
+    this.terminals = options.terminalService || new TerminalService(store, options.workspaceSnapshots);
     this.executionAdapter = options.executionAdapter
       || new HarnessThreadExecutionAdapter(options.workspaceSnapshots);
   }
@@ -596,6 +600,9 @@ export class ThreadService {
     payload: unknown,
   ): unknown | Promise<unknown> {
     const body = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
+    if (type.startsWith('terminal.')) {
+      return this.handleTerminalServiceRequest(job, type, body);
+    }
     if (type === 'message.publish') {
       const text = typeof body.text === 'string' ? body.text.trim() : '';
       if (!text) throw new Error('message.publish requires non-empty text.');
@@ -674,6 +681,86 @@ export class ThreadService {
       };
       this.interactionWaiters.set(interaction.id, waiter);
     });
+  }
+
+  private async handleTerminalServiceRequest(
+    job: TurnJob,
+    type: string,
+    body: Record<string, unknown>,
+  ): Promise<unknown> {
+    const options = body.options && typeof body.options === 'object'
+      ? body.options as Record<string, unknown>
+      : {};
+    const name = typeof body.name === 'string' ? body.name : '';
+    const terminalId = name ? this.agentTerminalId(job.thread.id, name) : '';
+    if (type === 'terminal.run') {
+      return this.terminals.run({
+        threadId: job.thread.id,
+        command: String(body.command || ''),
+        cwd: typeof options.cwd === 'string' ? options.cwd : undefined,
+        timeoutMs: typeof options.timeoutMs === 'number' ? options.timeoutMs : undefined,
+      });
+    }
+    if (type === 'terminal.start') {
+      const terminal = await this.terminals.open({
+        threadId: job.thread.id,
+        terminalId,
+        command: String(body.command || ''),
+        cwd: typeof options.cwd === 'string' ? options.cwd : undefined,
+        cols: typeof options.cols === 'number' ? options.cols : undefined,
+        rows: typeof options.rows === 'number' ? options.rows : undefined,
+        keepOpen: true,
+      });
+      return { terminalId: terminal.id };
+    }
+    if (!name && type !== 'terminal.list' && type !== 'terminal.stopAll') {
+      throw new Error(`${type} requires a terminal name.`);
+    }
+    if (type === 'terminal.read') {
+      const terminal = this.terminals.get(job.thread.id, terminalId);
+      const tail = typeof options.tail === 'number' ? Math.max(1, Math.floor(options.tail)) : undefined;
+      const output = tail
+        ? terminal.history.split(/\r?\n/u).slice(-tail).join('\n')
+        : terminal.history;
+      return { output: output || '(no output yet)' };
+    }
+    if (type === 'terminal.send') {
+      await this.terminals.write({
+        threadId: job.thread.id,
+        terminalId,
+        data: String(body.text || ''),
+      });
+      return undefined;
+    }
+    if (type === 'terminal.stop') {
+      await this.terminals.closeTerminal({ threadId: job.thread.id, terminalId });
+      return undefined;
+    }
+    if (type === 'terminal.stopAll') {
+      const ids = this.terminals.list(job.thread.id)
+        .filter((terminal) => terminal.id.startsWith(`${job.thread.id}:agent:`))
+        .map((terminal) => terminal.id);
+      for (const id of ids) await this.terminals.closeTerminal({ threadId: job.thread.id, terminalId: id });
+      return undefined;
+    }
+    if (type === 'terminal.list') {
+      return this.terminals.list(job.thread.id)
+        .filter((terminal) => terminal.id.startsWith(`${job.thread.id}:agent:`))
+        .map((terminal) => ({
+          name: terminal.id.slice(`${job.thread.id}:agent:`.length),
+          command: terminal.command,
+          startedAt: terminal.createdAt,
+          running: terminal.status === 'running',
+          pid: terminal.pid || undefined,
+          exitCode: terminal.exitCode ?? undefined,
+        }));
+    }
+    throw new Error(`Unsupported terminal service request: ${type}`);
+  }
+
+  private agentTerminalId(threadId: string, name: string): string {
+    if (!/^[A-Za-z0-9_.-]+$/u.test(name)) throw new Error(`Invalid terminal name: ${name}`);
+    return `${threadId}:agent:${name}`;
   }
 
   private async createAutomaticCheckpoint(
@@ -818,7 +905,7 @@ export class HarnessThreadExecutionAdapter implements ThreadExecutionAdapter {
     },
   ): Promise<unknown> {
     const { type, payload } = request;
-    if (type === 'interaction.create' || type === 'message.publish') {
+    if (type === 'interaction.create' || type === 'message.publish' || type.startsWith('terminal.')) {
       if (!input.callbacks.onServiceRequest) throw new Error(`Unsupported harness service request: ${type}`);
       return input.callbacks.onServiceRequest(type, payload, request.ephemeralPaths);
     }

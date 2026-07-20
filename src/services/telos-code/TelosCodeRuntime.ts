@@ -30,6 +30,7 @@ export class TelosCodeRuntime {
     private readonly created: CreatedLibp2pTelosLinkNode,
     private readonly endpoint: TelosCodeLinkEndpoint,
     private readonly store: ThreadStore,
+    private readonly threads: ThreadService,
     readonly harnessId: string,
     readonly pairingHost: string,
     readonly listenPort: number,
@@ -75,9 +76,10 @@ export class TelosCodeRuntime {
       await created.node.start();
       const listenPort = readListenPort(created);
       const pairingHost = options.pairingHost || process.env.TELOS_CODE_PAIR_HOST || firstLanIpv4();
-      return new TelosCodeRuntime(created, endpoint, store, harnessId, pairingHost, listenPort);
+      return new TelosCodeRuntime(created, endpoint, store, threads, harnessId, pairingHost, listenPort);
     } catch (error) {
       await endpoint.close().catch(() => undefined);
+      await threads.terminals.close().catch(() => undefined);
       await created.node.stop().catch(() => undefined);
       store.close();
       throw error;
@@ -105,6 +107,7 @@ export class TelosCodeRuntime {
 
   public async close(): Promise<void> {
     await this.endpoint.close();
+    await this.threads.terminals.close();
     await this.created.node.stop();
     this.store.close();
   }
