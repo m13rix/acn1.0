@@ -10,12 +10,17 @@ import { ToolLoader } from '../loaders/ToolLoader.js';
 import { LocalSandbox } from '../sandbox/LocalSandbox.js';
 import type { AgentConfig, LoadedAgent } from '../types/index.js';
 import { ThreadStore } from './thread-store/ThreadStore.js';
-import type { HarnessThread, StoredThreadEvent, StoredTurn } from './thread-store/types.js';
+import type { HarnessThread, StoredInteraction, StoredThreadEvent, StoredTurn } from './thread-store/types.js';
 import { WorkspaceSnapshotService } from './WorkspaceSnapshotService.js';
 
 export interface ThreadExecutionCallbacks extends ExecutorCallbacks {
   onCheckpoint(snapshot: SessionSnapshot, reason: string): void | Promise<void>;
   onWorkspaceActivity?(state: string, detail: Record<string, unknown>): void;
+  onServiceRequest?(
+    type: string,
+    payload: unknown,
+    ephemeralPaths: string[],
+  ): unknown | Promise<unknown>;
 }
 
 export interface ThreadExecutionResult {
@@ -52,6 +57,13 @@ interface RunningTurn {
   abortController: AbortController;
 }
 
+interface InteractionWaiter {
+  threadId: string;
+  resolve: (answer: Record<string, unknown>) => void;
+  reject: (error: Error) => void;
+  timer?: ReturnType<typeof setTimeout>;
+}
+
 export type ThreadEventSubscriber = (event: StoredThreadEvent) => void;
 
 export class ThreadService {
@@ -59,6 +71,7 @@ export class ThreadService {
   private readonly workspaceQueues = new Map<string, TurnJob[]>();
   private readonly runningWorkspaces = new Set<string>();
   private readonly runningByThread = new Map<string, RunningTurn>();
+  private readonly interactionWaiters = new Map<string, InteractionWaiter>();
   private readonly subscribers = new Map<string, Set<ThreadEventSubscriber>>();
   private readonly workspaceSnapshots: WorkspaceSnapshotService | undefined;
 
@@ -203,6 +216,30 @@ export class ThreadService {
     return this.enqueueTurn(input);
   }
 
+  answerInteraction(input: {
+    interactionId: string;
+    answers: Record<string, unknown>;
+  }): { accepted: boolean; interaction: StoredInteraction } {
+    const result = this.store.answerInteraction(input.interactionId, input.answers);
+    if (!result.accepted) return result;
+    this.emit(result.interaction.threadId, 'interaction', {
+      interactionId: result.interaction.id,
+      turnId: result.interaction.turnId,
+      state: 'answered',
+      answers: input.answers,
+      final: true,
+    });
+    const waiter = this.interactionWaiters.get(input.interactionId);
+    if (waiter) {
+      if (waiter.timer) clearTimeout(waiter.timer);
+      this.interactionWaiters.delete(input.interactionId);
+      waiter.resolve(input.answers);
+    }
+    const thread = this.store.getThread(result.interaction.threadId);
+    if (thread?.status === 'waiting-input') this.store.setThreadStatus(thread.id, 'running');
+    return result;
+  }
+
   private async drainWorkspace(workspaceKey: string): Promise<void> {
     if (this.runningWorkspaces.has(workspaceKey)) return;
     this.runningWorkspaces.add(workspaceKey);
@@ -328,6 +365,8 @@ export class ThreadService {
               final: true,
             });
           },
+          onServiceRequest: (type, payload) =>
+            this.handleExecutionServiceRequest(job, abortController.signal, type, payload),
         },
       });
       reasoning.flush();
@@ -406,6 +445,93 @@ export class ThreadService {
       tool,
       detail,
       final: true,
+    });
+  }
+
+  private handleExecutionServiceRequest(
+    job: TurnJob,
+    signal: AbortSignal,
+    type: string,
+    payload: unknown,
+  ): unknown | Promise<unknown> {
+    const body = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
+    if (type === 'message.publish') {
+      const text = typeof body.text === 'string' ? body.text.trim() : '';
+      if (!text) throw new Error('message.publish requires non-empty text.');
+      this.emit(job.thread.id, 'message', {
+        turnId: job.turn.id,
+        role: 'assistant',
+        text,
+        source: 'message-tool',
+        final: true,
+      });
+      return { published: true };
+    }
+    if (type !== 'interaction.create') {
+      throw new Error(`Unsupported thread service request: ${type}`);
+    }
+    const request = body.request && typeof body.request === 'object'
+      ? body.request as Record<string, unknown>
+      : null;
+    if (!request) throw new Error('interaction.create requires a structured request.');
+    const timeoutMs = typeof body.timeoutMs === 'number' && Number.isFinite(body.timeoutMs)
+      ? Math.max(1_000, Math.min(body.timeoutMs, 24 * 60 * 60 * 1_000))
+      : undefined;
+    const expiresAt = timeoutMs ? new Date(Date.now() + timeoutMs).toISOString() : null;
+    const interaction = this.store.createInteraction({
+      threadId: job.thread.id,
+      turnId: job.turn.id,
+      request,
+      expiresAt,
+    });
+    this.store.setThreadStatus(job.thread.id, 'waiting-input');
+    this.emit(job.thread.id, 'interaction', {
+      interactionId: interaction.id,
+      turnId: job.turn.id,
+      state: 'requested',
+      request,
+      expiresAt,
+      final: true,
+    });
+    return new Promise<Record<string, unknown>>((resolveAnswer, rejectAnswer) => {
+      const waiter: InteractionWaiter = {
+        threadId: job.thread.id,
+        resolve: resolveAnswer,
+        reject: rejectAnswer,
+      };
+      if (timeoutMs) {
+        waiter.timer = setTimeout(() => {
+          this.interactionWaiters.delete(interaction.id);
+          this.store.expireInteraction(interaction.id);
+          this.emit(job.thread.id, 'interaction', {
+            interactionId: interaction.id,
+            turnId: job.turn.id,
+            state: 'expired',
+            final: true,
+          });
+          rejectAnswer(new Error('message.ask expired before an interface answered.'));
+        }, timeoutMs);
+        waiter.timer.unref?.();
+      }
+      const onAbort = () => {
+        if (waiter.timer) clearTimeout(waiter.timer);
+        this.interactionWaiters.delete(interaction.id);
+        this.store.expireInteraction(interaction.id);
+        this.emit(job.thread.id, 'interaction', {
+          interactionId: interaction.id,
+          turnId: job.turn.id,
+          state: 'expired',
+          final: true,
+        });
+        rejectAnswer(new Error('message.ask was cancelled with its turn.'));
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+      const originalResolve = waiter.resolve;
+      waiter.resolve = (answer) => {
+        signal.removeEventListener('abort', onAbort);
+        originalResolve(answer);
+      };
+      this.interactionWaiters.set(interaction.id, waiter);
     });
   }
 
@@ -509,6 +635,10 @@ export class HarnessThreadExecutionAdapter implements ThreadExecutionAdapter {
     },
   ): Promise<unknown> {
     const { type, payload } = request;
+    if (type === 'interaction.create' || type === 'message.publish') {
+      if (!input.callbacks.onServiceRequest) throw new Error(`Unsupported harness service request: ${type}`);
+      return input.callbacks.onServiceRequest(type, payload, request.ephemeralPaths);
+    }
     if (!this.workspaceSnapshots || !type.startsWith('code.')) {
       throw new Error(`Unsupported harness service request: ${type}`);
     }

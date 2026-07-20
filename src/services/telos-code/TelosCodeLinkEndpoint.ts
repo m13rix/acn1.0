@@ -383,6 +383,12 @@ export class TelosCodeLinkEndpoint {
         result = { turnId: queued.turnId, state: 'queued' };
         break;
       }
+      case 'interaction.answer':
+        result = this.threads.answerInteraction({
+          interactionId: command.interactionId,
+          answers: { ...command.answers },
+        });
+        break;
       case 'checkpoint.create': {
         if (!this.options.workspaceSnapshots) throw new Error('Workspace checkpoints are unavailable.');
         const thread = this.requireThread(command.threadId);

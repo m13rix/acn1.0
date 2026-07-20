@@ -137,6 +137,44 @@ test('code snapshot operations use bound action-worker service IPC', async () =>
   }
 });
 
+test('message questions and text publish through bound action-worker service IPC', async () => {
+  const tempRoot = await mkdtemp(join(process.cwd(), 'sandboxes', 'test-message-service-ipc-'));
+  const requests: Array<{ type: string; payload: unknown; ephemeralPaths: string[] }> = [];
+  const messagePath = join(process.cwd(), 'tools', 'message', 'index.ts');
+  const sandbox = new LocalSandbox({
+    baseDir: tempRoot,
+    serviceHandler: (request) => {
+      requests.push(request);
+      if (request.type === 'interaction.create') return { response: 'approved' };
+      if (request.type === 'message.publish') return { published: true };
+      throw new Error(`Unexpected service request: ${request.type}`);
+    },
+  });
+
+  try {
+    await sandbox.initialize([{
+      config: { name: 'message', description: 'Cross-interface messaging.', module: messagePath },
+      directory: join(process.cwd(), 'tools', 'message'),
+      absolutePath: messagePath,
+    }]);
+    const result = await sandbox.execute([
+      'const answer = await message.ask("Continue?");',
+      'await message.sendText(`Answer: ${answer}`);',
+      'console.log(answer);',
+    ].join('\n'));
+
+    assert.equal(result.success, true, result.error);
+    assert.match(result.output, /approved/);
+    assert.deepEqual(requests.map((request) => request.type), [
+      'interaction.create',
+      'message.publish',
+    ]);
+  } finally {
+    await sandbox.cleanup();
+    await rmBestEffort(tempRoot);
+  }
+});
+
 test('injected lazy tool reflection handles non-configurable module flags', async () => {
   const tempRoot = await mkdtemp(join(process.cwd(), 'sandboxes', 'test-tool-reflection-'));
   const toolPath = join(tempRoot, 'helper.cjs');

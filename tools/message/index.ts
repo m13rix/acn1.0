@@ -90,6 +90,14 @@ const DEFAULT_TELEGRAM_RETRY_DELAY_MS = 1500;
 const DEFAULT_TELEGRAM_RETRY_ATTEMPTS = 3;
 const TELEGRAM_TEXT_CHUNK_LIMIT = 3000;
 
+type HarnessRequest = (type: string, payload: unknown) => Promise<unknown>;
+
+function getHarnessRequest(): HarnessRequest | undefined {
+  return (globalThis as typeof globalThis & {
+    __TELOS_ACTION_WORKER_REQUEST__?: HarnessRequest;
+  }).__TELOS_ACTION_WORKER_REQUEST__;
+}
+
 function getDiscoveredInternalApiUrl(): string {
   const rawPort = process.env.TELOS_INTERNAL_API_PORT;
   const parsedPort = rawPort ? Number.parseInt(rawPort, 10) : NaN;
@@ -696,6 +704,28 @@ export async function ask(input: string | AskInput, menuOptions?: AskMenuOptions
   const request = normalizeAskRequest(input, menuOptions);
   const { question, menu } = request;
   const questionForDelivery = menu ? question : request.text;
+  const harnessRequest = getHarnessRequest();
+  if (harnessRequest) {
+    const timeoutMs = readOptionalTimeoutEnv('TELOS_MESSAGE_ASK_TIMEOUT_MS');
+    const answer = await harnessRequest('interaction.create', {
+      request: {
+        questions: [
+          {
+            id: menu?.id || 'response',
+            type: menu ? 'single-select' : 'free-text',
+            question,
+            ...(menu ? { options: menu.options } : {}),
+          },
+        ],
+      },
+      ...(timeoutMs ? { timeoutMs } : {}),
+    });
+    const answers = answer && typeof answer === 'object' ? answer as Record<string, unknown> : {};
+    const response = answers.response ?? answers[menu?.id || 'response'];
+    if (typeof response === 'string') return response;
+    if (Array.isArray(response)) return response.map(String).join(', ');
+    return JSON.stringify(answers);
+  }
   // 1. Check if running in a managed context with API access
   const { explicitApiUrl, apiUrl, recipient } = getMessageApiContext();
   const agentName = process.env.TELOS_AGENT_NAME;
@@ -967,6 +997,12 @@ export async function sendFiles(files: string[]): Promise<void> {
  */
 export async function sendText(text: string): Promise<void> {
   appendAgentTextLog(process.env.TELOS_TEXT_LOG_PATH, 'sent_text', text);
+
+  const harnessRequest = getHarnessRequest();
+  if (harnessRequest) {
+    await harnessRequest('message.publish', { text });
+    return;
+  }
 
   const { explicitApiUrl, apiUrl, recipient } = getMessageApiContext();
   const agentName = process.env.TELOS_AGENT_NAME;

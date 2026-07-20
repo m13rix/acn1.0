@@ -52,6 +52,17 @@ export interface StoredTurn {
   error: string | null;
 }
 
+export interface StoredInteraction {
+  id: string;
+  threadId: string;
+  turnId: string | null;
+  state: 'waiting' | 'answered' | 'expired';
+  request: Record<string, unknown>;
+  answer: Record<string, unknown> | null;
+  expiresAt: string | null;
+  answeredAt: string | null;
+}
+
 export type WorkspaceEntryKind = 'file' | 'directory' | 'symlink';
 
 export interface WorkspaceCheckpointFile {

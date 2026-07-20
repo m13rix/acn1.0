@@ -12,6 +12,7 @@ import type {
   LegacyMigrationResult,
   LegacySessionFile,
   StoredThreadEvent,
+  StoredInteraction,
   StoredTurn,
   StoredAppClient,
   ThreadProject,
@@ -76,6 +77,17 @@ interface TurnRow {
   error: string | null;
 }
 
+interface InteractionRow {
+  id: string;
+  thread_id: string;
+  turn_id: string | null;
+  state: StoredInteraction['state'];
+  request_json: string;
+  answer_json: string | null;
+  expires_at: string | null;
+  answered_at: string | null;
+}
+
 interface CheckpointRow {
   id: string;
   timeline_id: string;
@@ -112,6 +124,19 @@ interface AppClientRow {
 
 function parseJson<T>(value: string): T {
   return JSON.parse(value) as T;
+}
+
+function interactionFromRow(row: InteractionRow): StoredInteraction {
+  return {
+    id: row.id,
+    threadId: row.thread_id,
+    turnId: row.turn_id,
+    state: row.state,
+    request: parseJson<Record<string, unknown>>(row.request_json),
+    answer: row.answer_json ? parseJson<Record<string, unknown>>(row.answer_json) : null,
+    expiresAt: row.expires_at,
+    answeredAt: row.answered_at,
+  };
 }
 
 function titleFromLegacySession(session: LegacySessionFile): string {
@@ -469,6 +494,69 @@ export class ThreadStore {
       effectiveEffort: row.effective_effort,
       error: row.error,
     };
+  }
+
+  public createInteraction(input: {
+    id?: string;
+    threadId: string;
+    turnId?: string | null;
+    request: Record<string, unknown>;
+    expiresAt?: string | null;
+  }): StoredInteraction {
+    const id = input.id || this.id();
+    this.database
+      .prepare(
+        `INSERT INTO interactions
+          (id, thread_id, turn_id, state, request_json, answer_json, expires_at, answered_at)
+         VALUES (?, ?, ?, 'waiting', ?, NULL, ?, NULL)`,
+      )
+      .run(
+        id,
+        input.threadId,
+        input.turnId || null,
+        JSON.stringify(input.request),
+        input.expiresAt || null,
+      );
+    return this.getInteraction(id)!;
+  }
+
+  public getInteraction(id: string): StoredInteraction | null {
+    const row = this.database.prepare('SELECT * FROM interactions WHERE id = ?').get(id) as
+      | InteractionRow
+      | undefined;
+    return row ? interactionFromRow(row) : null;
+  }
+
+  public answerInteraction(
+    id: string,
+    answer: Record<string, unknown>,
+  ): { accepted: boolean; interaction: StoredInteraction } {
+    return this.database.transaction(() => {
+      const current = this.getInteraction(id);
+      if (!current) throw new Error(`Interaction not found: ${id}`);
+      if (current.state !== 'waiting') return { accepted: false, interaction: current };
+      const now = this.now();
+      if (current.expiresAt && Date.parse(current.expiresAt) <= now.getTime()) {
+        this.database.prepare("UPDATE interactions SET state = 'expired' WHERE id = ? AND state = 'waiting'").run(id);
+        return { accepted: false, interaction: this.getInteraction(id)! };
+      }
+      const result = this.database
+        .prepare(
+          `UPDATE interactions SET state = 'answered', answer_json = ?, answered_at = ?
+           WHERE id = ? AND state = 'waiting'`,
+        )
+        .run(JSON.stringify(answer), now.toISOString(), id);
+      return { accepted: result.changes === 1, interaction: this.getInteraction(id)! };
+    })();
+  }
+
+  public expireInteraction(id: string): StoredInteraction {
+    this.database
+      .prepare("UPDATE interactions SET state = 'expired' WHERE id = ? AND state = 'waiting'")
+      .run(id);
+    const interaction = this.getInteraction(id);
+    if (!interaction) throw new Error(`Interaction not found: ${id}`);
+    return interaction;
   }
 
   public deleteThread(threadId: string): void {

@@ -185,7 +185,28 @@ test('pairs an app identity only after explicit approval and authenticates recon
           },
         });
       }
-      if (message.type === 'command.result' && message.commandId === '01900000-0000-7000-8000-000000000103') stream.end();
+      if (message.type === 'command.result' && message.commandId === '01900000-0000-7000-8000-000000000103') {
+        store.createInteraction({
+          id: '01900000-0000-7000-8000-000000000401',
+          threadId: '01900000-0000-7000-8000-000000000301',
+          request: { questions: [{ id: 'response', question: 'Continue?' }] },
+        });
+        stream.push({
+          type: 'command',
+          command: {
+            _tag: 'interaction.answer',
+            protocolVersion: 1,
+            commandId: '01900000-0000-7000-8000-000000000104',
+            harnessId: '01900000-0000-7000-8000-000000000001',
+            issuedAt: new Date().toISOString(),
+            expiresAt: new Date(Date.now() + 60_000).toISOString(),
+            threadId: '01900000-0000-7000-8000-000000000301',
+            interactionId: '01900000-0000-7000-8000-000000000401',
+            answers: { response: 'yes' },
+          },
+        });
+      }
+      if (message.type === 'command.result' && message.commandId === '01900000-0000-7000-8000-000000000104') stream.end();
     });
     sessionStream.push({
       type: 'session.hello',
@@ -202,6 +223,8 @@ test('pairs an app identity only after explicit approval and authenticates recon
         'command.result',
         'command.result',
         'command.result',
+        'thread.event',
+        'command.result',
       ],
     );
     assert.equal(
@@ -211,6 +234,9 @@ test('pairs an app identity only after explicit approval and authenticates recon
     );
     assert.equal(store.listProjects()[0]?.displayName, 'Fixture');
     assert.equal(store.listThreads()[0]?.launchProfile.modelId, 'gpt-5.5');
+    assert.deepEqual(store.getInteraction('01900000-0000-7000-8000-000000000401')?.answer, {
+      response: 'yes',
+    });
 
     await endpoint.revokeClient(localIdentity.identity.appInstanceId);
     assert.ok(node.apps.getAuthorization(localIdentity.identity.appInstanceId)?.revokedAt);

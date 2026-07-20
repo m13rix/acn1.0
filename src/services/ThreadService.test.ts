@@ -158,3 +158,54 @@ test('creates authoritative before and after workspace checkpoints for a root tu
     await rm(snapshotRoot, { recursive: true, force: true });
   }
 });
+
+test('persists action-worker questions and accepts only the first interface answer', async () => {
+  const adapter: ThreadExecutionAdapter = {
+    async execute(input) {
+      const answer = await input.callbacks.onServiceRequest?.(
+        'interaction.create',
+        {
+          request: {
+            questions: [{ id: 'choice', type: 'single-select', question: 'Choose', options: [
+              { id: 'a', label: 'A' },
+              { id: 'b', label: 'B' },
+            ] }],
+          },
+        },
+        [],
+      ) as Record<string, unknown>;
+      await input.callbacks.onServiceRequest?.('message.publish', { text: `Selected ${answer.choice}` }, []);
+      return {
+        response: 'done',
+        snapshot: {
+          messages: [],
+          contextFiles: [],
+          surfacedMemoryFactIds: [],
+          injectedMemoryHints: [],
+        },
+      };
+    },
+  };
+
+  await fixture(adapter, async (service, store, directory) => {
+    const project = store.createProject({ path: directory });
+    const thread = store.createThread({ launchProfile: profile(project.id, directory) });
+    const turn = service.enqueueTurn({ threadId: thread.id, text: 'ask me' });
+    let interactionId = '';
+    for (let attempt = 0; attempt < 50 && !interactionId; attempt += 1) {
+      const request = store.replayEvents(thread.id, 0).find((event) => event.type === 'interaction');
+      const value = (request?.payload as Record<string, unknown> | undefined)?.interactionId;
+      if (typeof value === 'string') interactionId = value;
+      else await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.ok(interactionId);
+    assert.equal(store.getThread(thread.id)?.status, 'waiting-input');
+    assert.equal(service.answerInteraction({ interactionId, answers: { choice: 'a' } }).accepted, true);
+    assert.equal(service.answerInteraction({ interactionId, answers: { choice: 'b' } }).accepted, false);
+    assert.equal((await turn.completed).status, 'completed');
+    assert.ok(
+      store.replayEvents(thread.id, 0).some((event) =>
+        event.type === 'message' && (event.payload as Record<string, unknown>).text === 'Selected a'),
+    );
+  });
+});
