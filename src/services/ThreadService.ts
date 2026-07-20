@@ -1,4 +1,6 @@
-import { resolve } from 'node:path';
+import { createHash } from 'node:crypto';
+import { lstat, mkdir, readFile, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises';
+import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { v7 as uuidv7 } from 'uuid';
 
 import type { ReasoningEffort, ThreadLaunchProfile } from '@telos/code-contracts/telos';
@@ -282,6 +284,101 @@ export class ThreadService {
     const thread = this.store.getThread(result.interaction.threadId);
     if (thread?.status === 'waiting-input') this.store.setThreadStatus(thread.id, 'running');
     return result;
+  }
+
+  async listFiles(threadId: string, requestedPath = ''): Promise<{
+    path: string;
+    entries: Array<{ name: string; path: string; kind: 'file' | 'directory' | 'symlink'; size: number }>;
+  }> {
+    const thread = this.requireThread(threadId);
+    const { target, relativePath } = await this.resolveWorkspaceTarget(thread, requestedPath, false);
+    const info = await lstat(target);
+    if (!info.isDirectory()) throw new Error(`Not a directory: ${requestedPath}`);
+    const entries = await readdir(target, { withFileTypes: true });
+    const values = await Promise.all(entries.map(async (entry) => {
+      const absolute = resolve(target, entry.name);
+      const entryInfo = await lstat(absolute);
+      const path = normalizeRelative(relative(this.workspacePath(thread), absolute));
+      return {
+        name: entry.name,
+        path,
+        kind: entry.isSymbolicLink() ? 'symlink' as const
+          : entry.isDirectory() ? 'directory' as const : 'file' as const,
+        size: entryInfo.isFile() ? entryInfo.size : 0,
+      };
+    }));
+    values.sort((left, right) => {
+      if (left.kind === 'directory' && right.kind !== 'directory') return -1;
+      if (left.kind !== 'directory' && right.kind === 'directory') return 1;
+      return left.name.localeCompare(right.name);
+    });
+    return { path: relativePath, entries: values };
+  }
+
+  async readFile(threadId: string, requestedPath: string): Promise<{
+    path: string;
+    contentBase64: string;
+    revision: string;
+    size: number;
+  }> {
+    const thread = this.requireThread(threadId);
+    const { target, relativePath } = await this.resolveWorkspaceTarget(thread, requestedPath, false);
+    const info = await lstat(target);
+    if (!info.isFile()) throw new Error(`Not a regular file: ${requestedPath}`);
+    if (info.size > 20 * 1024 * 1024) throw new Error('Files larger than 20 MiB require direct transfer.');
+    const bytes = await readFile(target);
+    return {
+      path: relativePath,
+      contentBase64: bytes.toString('base64'),
+      revision: sha256(bytes),
+      size: bytes.length,
+    };
+  }
+
+  async writeFile(input: {
+    threadId: string;
+    path: string;
+    contentBase64: string;
+    expectedRevision?: string;
+  }): Promise<{ path: string; revision: string; size: number }> {
+    const thread = this.requireThread(input.threadId);
+    if (this.runningByThread.has(thread.id)) {
+      throw new Error('File edits are disabled while this thread is running.');
+    }
+    const { target, relativePath } = await this.resolveWorkspaceTarget(thread, input.path, true);
+    const existing = await readFile(target).catch((error) => {
+      if (isNodeError(error, 'ENOENT')) return null;
+      throw error;
+    });
+    const currentRevision = existing ? sha256(existing) : null;
+    if (existing && !input.expectedRevision) {
+      throw new Error('File already exists; an expected revision is required to replace it.');
+    }
+    if (input.expectedRevision && currentRevision !== input.expectedRevision) {
+      throw new Error('File save conflict: the harness file changed after it was opened.');
+    }
+    const bytes = decodeBase64(input.contentBase64);
+    await this.createAutomaticCheckpoint(thread, null, `Before file edit: ${relativePath}`);
+    await mkdir(dirname(target), { recursive: true });
+    const temporary = `${target}.telos-${uuidv7()}.tmp`;
+    try {
+      await writeFile(temporary, bytes, { flag: 'wx' });
+      await rename(temporary, target);
+    } finally {
+      await rm(temporary, { force: true }).catch(() => undefined);
+    }
+    await this.createAutomaticCheckpoint(thread, null, `After file edit: ${relativePath}`);
+    const revision = sha256(bytes);
+    this.emit(thread.id, 'activity', {
+      turnId: null,
+      activityType: 'tool',
+      state: 'file-written',
+      path: relativePath,
+      revision,
+      size: bytes.length,
+      final: true,
+    });
+    return { path: relativePath, revision, size: bytes.length };
   }
 
   private async drainWorkspace(workspaceKey: string): Promise<void> {
@@ -607,6 +704,48 @@ export class ThreadService {
     return event;
   }
 
+  private requireThread(threadId: string): HarnessThread {
+    const thread = this.store.getThread(threadId);
+    if (!thread) throw new Error(`Thread not found: ${threadId}`);
+    return thread;
+  }
+
+  private workspacePath(thread: HarnessThread): string {
+    return resolve(thread.launchProfile.worktreePath || thread.launchProfile.workspacePath);
+  }
+
+  private async resolveWorkspaceTarget(
+    thread: HarnessThread,
+    requestedPath: string,
+    allowMissing: boolean,
+  ): Promise<{ target: string; relativePath: string }> {
+    const root = this.workspacePath(thread);
+    const target = resolve(root, requestedPath || '.');
+    const lexical = relative(root, target);
+    if (lexical.startsWith('..') || isAbsolute(lexical)) {
+      throw new Error(`Path escapes the thread workspace: ${requestedPath}`);
+    }
+    const rootReal = await realpath(root);
+    let checkPath = allowMissing ? dirname(target) : target;
+    let checkReal: string;
+    for (;;) {
+      try {
+        checkReal = await realpath(checkPath);
+        break;
+      } catch (error) {
+        if (!allowMissing || !isNodeError(error, 'ENOENT') || checkPath === root) throw error;
+        const parent = dirname(checkPath);
+        if (parent === checkPath) throw error;
+        checkPath = parent;
+      }
+    }
+    const physical = relative(rootReal, checkReal);
+    if (physical.startsWith('..') || isAbsolute(physical)) {
+      throw new Error(`Path resolves outside the thread workspace: ${requestedPath}`);
+    }
+    return { target, relativePath: normalizeRelative(lexical) };
+  }
+
   private workspaceKey(path: string): string {
     const normalized = resolve(path);
     return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
@@ -764,6 +903,28 @@ export class HarnessThreadExecutionAdapter implements ThreadExecutionAdapter {
 function effectiveEffort(providerId: string, requested: ReasoningEffort): ReasoningEffort {
   if (requested !== 'xhigh') return requested;
   return providerId.toLowerCase() === 'openai-codex' ? 'xhigh' : 'high';
+}
+
+function sha256(bytes: Uint8Array): string {
+  return createHash('sha256').update(bytes).digest('hex');
+}
+
+function normalizeRelative(path: string): string {
+  return path === '' ? '' : path.split('\\').join('/');
+}
+
+function decodeBase64(value: string): Buffer {
+  if (typeof value !== 'string') throw new Error('File content is not valid base64.');
+  const normalized = value.replace(/\s+/gu, '').replace(/=+$/u, '');
+  const bytes = Buffer.from(value, 'base64');
+  if (bytes.toString('base64').replace(/=+$/u, '') !== normalized) {
+    throw new Error('File content is not valid base64.');
+  }
+  return bytes;
+}
+
+function isNodeError(error: unknown, code: string): error is NodeJS.ErrnoException {
+  return error instanceof Error && 'code' in error && error.code === code;
 }
 
 class DeltaBatcher {

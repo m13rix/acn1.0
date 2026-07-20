@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, rm } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -255,6 +255,53 @@ test('rewinds workspace checkpoint and executor context without deleting later h
       event.type === 'activity'
       && (event.payload as Record<string, unknown>).state === 'rewound'
       && Array.isArray((event.payload as Record<string, unknown>).undoneTurnIds)));
+  } finally {
+    store.close();
+    await rm(directory, { recursive: true, force: true });
+    await rm(snapshotRoot, { recursive: true, force: true });
+  }
+});
+
+test('browses and edits workspace files with revision conflicts and checkpoints', async () => {
+  const directory = join(tmpdir(), `telos-thread-files-${uuidv7()}`);
+  const workspace = join(directory, 'workspace');
+  const snapshotRoot = join(tmpdir(), `telos-thread-files-cas-${uuidv7()}`);
+  await mkdir(join(workspace, 'src'), { recursive: true });
+  await writeFile(join(workspace, 'src', 'app.ts'), 'export const value = 1;\n');
+  const store = await ThreadStore.open({ databasePath: join(directory, 'threads.db') });
+  const service = new ThreadService(store, {
+    executionAdapter: { async execute() { throw new Error('Unexpected execution'); } },
+    workspaceSnapshots: new WorkspaceSnapshotService(store, snapshotRoot),
+  });
+  try {
+    const project = store.createProject({ path: workspace });
+    const thread = store.createThread({ launchProfile: profile(project.id, workspace) });
+    const root = await service.listFiles(thread.id);
+    assert.deepEqual(root.entries.map((entry) => [entry.name, entry.kind]), [['src', 'directory']]);
+    const opened = await service.readFile(thread.id, 'src/app.ts');
+    assert.equal(Buffer.from(opened.contentBase64, 'base64').toString('utf8'), 'export const value = 1;\n');
+    await assert.rejects(
+      service.writeFile({
+        threadId: thread.id,
+        path: 'src/app.ts',
+        expectedRevision: 'stale',
+        contentBase64: Buffer.from('changed').toString('base64'),
+      }),
+      /save conflict/iu,
+    );
+    const saved = await service.writeFile({
+      threadId: thread.id,
+      path: 'src/app.ts',
+      expectedRevision: opened.revision,
+      contentBase64: Buffer.from('export const value = 2;\n').toString('base64'),
+    });
+    assert.equal(saved.path, 'src/app.ts');
+    assert.equal(await readFile(join(workspace, 'src', 'app.ts'), 'utf8'), 'export const value = 2;\n');
+    assert.deepEqual(
+      service.store.listCheckpoints({ threadId: thread.id }).map((checkpoint) => checkpoint.name).sort(),
+      ['After file edit: src/app.ts', 'Before file edit: src/app.ts'],
+    );
+    await assert.rejects(service.readFile(thread.id, '../threads.db'), /escapes the thread workspace/iu);
   } finally {
     store.close();
     await rm(directory, { recursive: true, force: true });

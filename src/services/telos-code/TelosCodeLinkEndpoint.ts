@@ -389,6 +389,20 @@ export class TelosCodeLinkEndpoint {
           answers: { ...command.answers },
         });
         break;
+      case 'file.list':
+        result = await this.threads.listFiles(command.threadId, command.path);
+        break;
+      case 'file.read':
+        result = await this.threads.readFile(command.threadId, command.path);
+        break;
+      case 'file.write':
+        result = await this.threads.writeFile({
+          threadId: command.threadId,
+          path: command.path,
+          contentBase64: command.contentBase64,
+          expectedRevision: command.expectedRevision,
+        });
+        break;
       case 'checkpoint.create': {
         if (!this.options.workspaceSnapshots) throw new Error('Workspace checkpoints are unavailable.');
         const thread = this.requireThread(command.threadId);
