@@ -38,6 +38,20 @@ export interface StoredThreadEvent {
   payload: TelosCodeEvent | Record<string, unknown>;
 }
 
+export interface StoredTurn {
+  id: string;
+  threadId: string;
+  status: 'queued' | 'running' | 'stopped' | 'completed' | 'failed';
+  inputText: string;
+  attachmentIds: string[];
+  queuedAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  requestedEffort: string | null;
+  effectiveEffort: string | null;
+  error: string | null;
+}
+
 export interface LegacyMigrationIssue {
   file: string;
   reason: string;

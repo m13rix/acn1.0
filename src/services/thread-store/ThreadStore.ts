@@ -12,6 +12,7 @@ import type {
   LegacyMigrationResult,
   LegacySessionFile,
   StoredThreadEvent,
+  StoredTurn,
   ThreadProject,
 } from './types.js';
 
@@ -56,6 +57,20 @@ interface EventRow {
   type: string;
   occurred_at: string;
   payload_json: string;
+}
+
+interface TurnRow {
+  id: string;
+  thread_id: string;
+  status: StoredTurn['status'];
+  input_text: string;
+  attachment_ids_json: string;
+  queued_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  requested_effort: string | null;
+  effective_effort: string | null;
+  error: string | null;
 }
 
 function parseJson<T>(value: string): T {
@@ -273,6 +288,110 @@ export class ThreadStore {
       }
     })();
     return this.getThread(threadId)!;
+  }
+
+  public setThreadStatus(
+    threadId: string,
+    status: ThreadStatus,
+    activeContextTurnId?: string | null,
+  ): HarnessThread {
+    const timestamp = this.now().toISOString();
+    const result = this.database
+      .prepare(
+        `UPDATE threads SET
+          status = ?,
+          active_context_turn_id = CASE WHEN ? = 1 THEN ? ELSE active_context_turn_id END,
+          updated_at = ?,
+          version = version + 1
+         WHERE id = ?`,
+      )
+      .run(status, activeContextTurnId !== undefined ? 1 : 0, activeContextTurnId ?? null, timestamp, threadId);
+    if (result.changes === 0) throw new Error(`Thread not found: ${threadId}`);
+    return this.getThread(threadId)!;
+  }
+
+  public createTurn(input: {
+    id?: string;
+    threadId: string;
+    text: string;
+    attachmentIds?: string[];
+    requestedEffort?: string;
+    effectiveEffort?: string;
+  }): StoredTurn {
+    const id = input.id || this.id();
+    this.database
+      .prepare(
+        `INSERT INTO turns
+          (id, thread_id, status, queued_at, requested_effort, effective_effort,
+           input_text, attachment_ids_json)
+         VALUES (?, ?, 'queued', ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        id,
+        input.threadId,
+        this.now().toISOString(),
+        input.requestedEffort || null,
+        input.effectiveEffort || input.requestedEffort || null,
+        input.text,
+        JSON.stringify(input.attachmentIds || []),
+      );
+    return this.getTurn(id)!;
+  }
+
+  public getTurn(id: string): StoredTurn | null {
+    const row = this.database.prepare('SELECT * FROM turns WHERE id = ?').get(id) as TurnRow | undefined;
+    return row ? this.turnFromRow(row) : null;
+  }
+
+  public listTurns(
+    threadId: string,
+    statuses?: StoredTurn['status'][],
+  ): StoredTurn[] {
+    const rows = statuses?.length
+      ? (this.database
+          .prepare(
+            `SELECT * FROM turns WHERE thread_id = ? AND status IN (${statuses.map(() => '?').join(',')})
+             ORDER BY queued_at ASC`,
+          )
+          .all(threadId, ...statuses) as TurnRow[])
+      : (this.database.prepare('SELECT * FROM turns WHERE thread_id = ? ORDER BY queued_at ASC').all(threadId) as TurnRow[]);
+    return rows.map((row) => this.turnFromRow(row));
+  }
+
+  public updateTurn(
+    id: string,
+    status: StoredTurn['status'],
+    input: { error?: string | null } = {},
+  ): StoredTurn {
+    const timestamp = this.now().toISOString();
+    const result = this.database
+      .prepare(
+        `UPDATE turns SET
+          status = ?,
+          started_at = CASE WHEN ? = 'running' THEN COALESCE(started_at, ?) ELSE started_at END,
+          completed_at = CASE WHEN ? IN ('stopped', 'completed', 'failed') THEN ? ELSE completed_at END,
+          error = ?
+         WHERE id = ?`,
+      )
+      .run(status, status, timestamp, status, timestamp, input.error ?? null, id);
+    if (result.changes === 0) throw new Error(`Turn not found: ${id}`);
+    return this.getTurn(id)!;
+  }
+
+  private turnFromRow(row: TurnRow): StoredTurn {
+    return {
+      id: row.id,
+      threadId: row.thread_id,
+      status: row.status,
+      inputText: row.input_text,
+      attachmentIds: parseJson<string[]>(row.attachment_ids_json),
+      queuedAt: row.queued_at,
+      startedAt: row.started_at,
+      completedAt: row.completed_at,
+      requestedEffort: row.requested_effort,
+      effectiveEffort: row.effective_effort,
+      error: row.error,
+    };
   }
 
   public deleteThread(threadId: string): void {

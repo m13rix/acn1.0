@@ -1,4 +1,4 @@
-export const THREAD_STORE_SCHEMA_VERSION = 1;
+export const THREAD_STORE_SCHEMA_VERSION = 2;
 
 export const THREAD_STORE_MIGRATIONS: ReadonlyArray<{ version: number; sql: string }> = [
   {
@@ -168,6 +168,13 @@ export const THREAD_STORE_MIGRATIONS: ReadonlyArray<{ version: number; sql: stri
         result_json TEXT NOT NULL,
         executed_at TEXT NOT NULL
       );
+    `,
+  },
+  {
+    version: 2,
+    sql: `
+      ALTER TABLE turns ADD COLUMN input_text TEXT NOT NULL DEFAULT '';
+      ALTER TABLE turns ADD COLUMN attachment_ids_json TEXT NOT NULL DEFAULT '[]';
     `,
   },
 ];

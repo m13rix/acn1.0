@@ -5,5 +5,6 @@ export type {
   LegacyMigrationIssue,
   LegacyMigrationResult,
   StoredThreadEvent,
+  StoredTurn,
   ThreadProject,
 } from './types.js';
