@@ -428,13 +428,15 @@ function decodeBase64Text(content: string): string | null {
   }
 }
 
-function mapReasoning(reasoning: ProviderConfig['reasoning']): { effort: 'low' | 'medium' | 'high' } | undefined {
+function mapReasoning(reasoning: ProviderConfig['reasoning']): { effort: 'low' | 'medium' | 'high' | 'xhigh' } | undefined {
   switch (reasoning) {
     case 'low':
     case 'off':
       return { effort: 'low' };
     case 'high':
       return { effort: 'high' };
+    case 'xhigh':
+      return { effort: 'xhigh' };
     case 'medium':
     default:
       return { effort: 'medium' };

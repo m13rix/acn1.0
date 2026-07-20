@@ -38,7 +38,7 @@ function mapReasoning(reasoning: ProviderConfig['reasoning']): string {
   if (reasoning === 'off' || !reasoning) {
     return 'instant';
   }
-  return reasoning;
+  return reasoning === 'xhigh' ? 'high' : reasoning;
 }
 
 function mapFinishReason(reason: string | undefined): ProviderResponse['finishReason'] {

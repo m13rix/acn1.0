@@ -53,7 +53,7 @@ export interface ProviderConfig {
   /**
    * Reasoning control
    */
-  reasoning?: 'off' | 'low' | 'medium' | 'high'; // default: 'medium'
+  reasoning?: 'off' | 'low' | 'medium' | 'high' | 'xhigh'; // default: 'medium'
   /**
    * Streaming
    */
@@ -310,7 +310,7 @@ export interface AgentConfig {
   frequency_penalty?: number;
   presence_penalty?: number;
   repetition_penalty?: number;
-  reasoning?: 'off' | 'low' | 'medium' | 'high';
+  reasoning?: 'off' | 'low' | 'medium' | 'high' | 'xhigh';
   stream?: boolean;
   systemPrompt: string;  // filename reference
   tools: string[];       // tool names

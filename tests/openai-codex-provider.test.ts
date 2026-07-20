@@ -7,6 +7,7 @@ import { OpenRouterProvider } from '../src/providers/openrouter.js';
 import { OpenAICodexProvider } from '../src/providers/openai-codex/index.js';
 import { OpenAICodexAuthStore } from '../src/providers/openai-codex/auth/auth-store.js';
 import { OAuthOnlyModelSelectedViaApiProviderError } from '../src/providers/openai-codex/errors.js';
+import { buildCodexRequest } from '../src/providers/openai-codex/invoke.js';
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'telos-codex-provider-'));
@@ -66,6 +67,21 @@ test('OpenRouterProvider omits reasoning_content on assistant tool calls when re
   );
 
   assert.equal(Object.hasOwn(request.messages[1] ?? {}, 'reasoning_content'), false);
+});
+
+test('xhigh stays native for Codex and falls back to high for OpenRouter', () => {
+  const codexRequest = buildCodexRequest(
+    [{ role: 'user', content: 'Solve this.' }],
+    { model: 'gpt-5.6-codex', reasoning: 'xhigh' },
+  );
+  assert.deepEqual(codexRequest.reasoning, { effort: 'xhigh' });
+
+  const openRouter = new OpenRouterProvider('test-key');
+  const openRouterRequest = openRouter.buildRequest(
+    [{ role: 'user', content: 'Solve this.' }],
+    { model: 'openai/gpt-5.6', reasoning: 'xhigh' },
+  );
+  assert.equal(openRouterRequest.reasoning?.effort, 'high');
 });
 
 test('OpenAICodexProvider completes using stored OAuth profile', async () => {
