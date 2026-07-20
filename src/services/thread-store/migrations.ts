@@ -1,4 +1,4 @@
-export const THREAD_STORE_SCHEMA_VERSION = 3;
+export const THREAD_STORE_SCHEMA_VERSION = 4;
 
 export const THREAD_STORE_MIGRATIONS: ReadonlyArray<{ version: number; sql: string }> = [
   {
@@ -183,6 +183,20 @@ export const THREAD_STORE_MIGRATIONS: ReadonlyArray<{ version: number; sql: stri
       ALTER TABLE checkpoint_files ADD COLUMN mtime_ms REAL;
       CREATE INDEX IF NOT EXISTS checkpoints_thread_idx ON checkpoints(thread_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS checkpoint_files_hash_idx ON checkpoint_files(content_hash);
+    `,
+  },
+  {
+    version: 4,
+    sql: `
+      CREATE TABLE IF NOT EXISTS executor_snapshot_history (
+        thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+        turn_id TEXT NOT NULL REFERENCES turns(id) ON DELETE CASCADE,
+        snapshot_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (thread_id, turn_id)
+      );
+      CREATE INDEX IF NOT EXISTS executor_snapshot_history_turn_idx
+        ON executor_snapshot_history(turn_id);
     `,
   },
 ];

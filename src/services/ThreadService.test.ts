@@ -209,3 +209,55 @@ test('persists action-worker questions and accepts only the first interface answ
     );
   });
 });
+
+test('rewinds workspace checkpoint and executor context without deleting later history', async () => {
+  const directory = join(tmpdir(), `telos-thread-rewind-${uuidv7()}`);
+  const workspace = join(directory, 'workspace');
+  const snapshotRoot = join(tmpdir(), `telos-thread-rewind-cas-${uuidv7()}`);
+  await mkdir(workspace, { recursive: true });
+  const store = await ThreadStore.open({ databasePath: join(directory, 'threads.db') });
+  const snapshots = new WorkspaceSnapshotService(store, snapshotRoot);
+  const adapter: ThreadExecutionAdapter = {
+    async execute(input) {
+      return {
+        response: input.turn.inputText,
+        snapshot: {
+          messages: [{ role: 'user' as const, content: input.turn.inputText }],
+          contextFiles: [],
+          surfacedMemoryFactIds: [],
+          injectedMemoryHints: [],
+        },
+      };
+    },
+  };
+  const service = new ThreadService(store, { executionAdapter: adapter, workspaceSnapshots: snapshots });
+  try {
+    const project = store.createProject({ path: workspace });
+    const thread = store.createThread({ launchProfile: profile(project.id, workspace) });
+    const first = service.enqueueTurn({ threadId: thread.id, text: 'first' });
+    await first.completed;
+    const second = service.enqueueTurn({ threadId: thread.id, text: 'second' });
+    await second.completed;
+    const firstCheckpoint = snapshots
+      .listSnapshots({ threadId: thread.id })
+      .find((checkpoint) => checkpoint.turnId === first.turnId && checkpoint.name === 'After completed turn');
+    assert.ok(firstCheckpoint);
+
+    const result = await service.rewind({
+      threadId: thread.id,
+      checkpointId: firstCheckpoint.id,
+    }) as { undoneTurnIds: string[]; safetyCheckpoint: { id: string } };
+    assert.deepEqual(result.undoneTurnIds, [second.turnId]);
+    assert.ok(result.safetyCheckpoint.id);
+    assert.equal(store.getExecutorSnapshot(thread.id)?.activeContextTurnId, first.turnId);
+    assert.equal(store.getThread(thread.id)?.activeContextTurnId, first.turnId);
+    assert.ok(store.replayEvents(thread.id, 0).some((event) =>
+      event.type === 'activity'
+      && (event.payload as Record<string, unknown>).state === 'rewound'
+      && Array.isArray((event.payload as Record<string, unknown>).undoneTurnIds)));
+  } finally {
+    store.close();
+    await rm(directory, { recursive: true, force: true });
+    await rm(snapshotRoot, { recursive: true, force: true });
+  }
+});

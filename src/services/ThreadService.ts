@@ -216,6 +216,50 @@ export class ThreadService {
     return this.enqueueTurn(input);
   }
 
+  async rewind(input: {
+    threadId: string;
+    checkpointId: string;
+    files?: string[];
+  }): Promise<unknown> {
+    if (!this.workspaceSnapshots) throw new Error('Workspace checkpoints are unavailable.');
+    if (this.runningByThread.has(input.threadId)) {
+      throw new Error('Stop the active turn before rewinding this thread.');
+    }
+    const thread = this.store.getThread(input.threadId);
+    if (!thread) throw new Error(`Thread not found: ${input.threadId}`);
+    const checkpoint = this.store.getCheckpoint(input.checkpointId);
+    if (!checkpoint || checkpoint.threadId !== thread.id) {
+      throw new Error(`Checkpoint is not available to this thread: ${input.checkpointId}`);
+    }
+    const rollback = await this.workspaceSnapshots.rollback(input.checkpointId, {
+      files: input.files,
+      threadId: thread.id,
+      turnId: checkpoint.turnId,
+    });
+    if (checkpoint.turnId) this.store.restoreExecutorSnapshot(thread.id, checkpoint.turnId);
+    else this.store.clearExecutorSnapshot(thread.id);
+    const selectedTurn = checkpoint.turnId ? this.store.getTurn(checkpoint.turnId) : null;
+    const undoneTurnIds = this.store.listTurns(thread.id)
+      .filter((turn) => !selectedTurn || turn.queuedAt > selectedTurn.queuedAt)
+      .map((turn) => turn.id);
+    this.emit(thread.id, 'activity', {
+      turnId: checkpoint.turnId,
+      activityType: 'checkpoint',
+      state: 'rewound',
+      checkpointId: checkpoint.id,
+      activeContextTurnId: checkpoint.turnId,
+      undoneTurnIds,
+      safetyCheckpointId: rollback.safetyCheckpoint.id,
+      files: input.files,
+      final: true,
+    });
+    return {
+      ...rollback,
+      activeContextTurnId: checkpoint.turnId,
+      undoneTurnIds,
+    };
+  }
+
   answerInteraction(input: {
     interactionId: string;
     answers: Record<string, unknown>;

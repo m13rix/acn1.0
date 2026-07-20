@@ -399,12 +399,16 @@ export class TelosCodeLinkEndpoint {
         }) };
         break;
       }
-      case 'checkpoint.rewind': {
-        if (!this.options.workspaceSnapshots) throw new Error('Workspace checkpoints are unavailable.');
-        this.threads.stop(command.threadId);
-        result = await this.options.workspaceSnapshots.rollback(command.checkpointId, {
-          files: command.files ? [...command.files] : undefined,
+      case 'checkpoint.list':
+        result = { checkpoints: this.options.workspaceSnapshots?.listSnapshots({
           threadId: command.threadId,
+        }) || [] };
+        break;
+      case 'checkpoint.rewind': {
+        result = await this.threads.rewind({
+          threadId: command.threadId,
+          checkpointId: command.checkpointId,
+          files: command.files ? [...command.files] : undefined,
         });
         break;
       }

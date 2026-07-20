@@ -652,9 +652,12 @@ export class ThreadStore {
     snapshot: unknown,
     activeContextTurnId: string | null,
   ): void {
-    this.database
-      .prepare(
-        `INSERT INTO executor_snapshots
+    const encoded = JSON.stringify(snapshot);
+    const timestamp = this.now().toISOString();
+    this.database.transaction(() => {
+      this.database
+        .prepare(
+          `INSERT INTO executor_snapshots
           (thread_id, version, active_context_turn_id, snapshot_json, updated_at)
          VALUES (?, 1, ?, ?, ?)
          ON CONFLICT(thread_id) DO UPDATE SET
@@ -662,8 +665,42 @@ export class ThreadStore {
            active_context_turn_id = excluded.active_context_turn_id,
            snapshot_json = excluded.snapshot_json,
            updated_at = excluded.updated_at`,
+        )
+        .run(threadId, activeContextTurnId, encoded, timestamp);
+      if (activeContextTurnId) {
+        this.database
+          .prepare(
+            `INSERT INTO executor_snapshot_history (thread_id, turn_id, snapshot_json, created_at)
+             VALUES (?, ?, ?, ?)
+             ON CONFLICT(thread_id, turn_id) DO UPDATE SET
+               snapshot_json = excluded.snapshot_json,
+               created_at = excluded.created_at`,
+          )
+          .run(threadId, activeContextTurnId, encoded, timestamp);
+      }
+    })();
+  }
+
+  public restoreExecutorSnapshot(threadId: string, turnId: string): {
+    activeContextTurnId: string;
+    snapshot: unknown;
+  } {
+    const row = this.database
+      .prepare(
+        `SELECT snapshot_json FROM executor_snapshot_history
+         WHERE thread_id = ? AND turn_id = ?`,
       )
-      .run(threadId, activeContextTurnId, JSON.stringify(snapshot), this.now().toISOString());
+      .get(threadId, turnId) as { snapshot_json: string } | undefined;
+    if (!row) throw new Error(`Executor snapshot is unavailable for turn: ${turnId}`);
+    const snapshot = parseJson<unknown>(row.snapshot_json);
+    this.saveExecutorSnapshot(threadId, snapshot, turnId);
+    this.setThreadStatus(threadId, 'idle', turnId);
+    return { activeContextTurnId: turnId, snapshot };
+  }
+
+  public clearExecutorSnapshot(threadId: string): void {
+    this.database.prepare('DELETE FROM executor_snapshots WHERE thread_id = ?').run(threadId);
+    this.setThreadStatus(threadId, 'idle', null);
   }
 
   public getExecutorSnapshot(threadId: string): {
