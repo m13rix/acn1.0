@@ -13,6 +13,7 @@ import type {
   LegacySessionFile,
   StoredThreadEvent,
   StoredTurn,
+  StoredAppClient,
   ThreadProject,
   WorkspaceCheckpoint,
   WorkspaceCheckpointFile,
@@ -96,6 +97,19 @@ interface CheckpointFileRow {
   mtime_ms: number | null;
 }
 
+interface AppClientRow {
+  id: string;
+  app_id: string;
+  device_name: string;
+  signing_public_key: string;
+  exchange_public_key: string;
+  fingerprint: string;
+  capabilities_json: string;
+  created_at: string;
+  last_seen_at: string | null;
+  revoked_at: string | null;
+}
+
 function parseJson<T>(value: string): T {
   return JSON.parse(value) as T;
 }
@@ -156,6 +170,21 @@ function checkpointFileFromRow(row: CheckpointFileRow): WorkspaceCheckpointFile 
     mode: row.mode,
     symlinkTarget: row.symlink_target,
     mtimeMs: row.mtime_ms,
+  };
+}
+
+function appClientFromRow(row: AppClientRow): StoredAppClient {
+  return {
+    id: row.id,
+    appId: row.app_id,
+    deviceName: row.device_name,
+    signingPublicKey: row.signing_public_key,
+    exchangePublicKey: row.exchange_public_key,
+    fingerprint: row.fingerprint,
+    capabilities: parseJson<string[]>(row.capabilities_json),
+    createdAt: row.created_at,
+    lastSeenAt: row.last_seen_at,
+    revokedAt: row.revoked_at,
   };
 }
 
@@ -701,6 +730,23 @@ export class ThreadStore {
     })();
   }
 
+  public getCommandResult<T>(commandId: string): T | null {
+    const row = this.database
+      .prepare('SELECT result_json FROM command_deduplication WHERE command_id = ?')
+      .get(commandId) as { result_json: string } | undefined;
+    return row ? parseJson<T>(row.result_json) : null;
+  }
+
+  public saveCommandResult<T>(commandId: string, commandType: string, result: T): T {
+    this.database
+      .prepare(
+        `INSERT OR IGNORE INTO command_deduplication
+          (command_id, command_type, result_json, executed_at) VALUES (?, ?, ?, ?)`,
+      )
+      .run(commandId, commandType, JSON.stringify(result), this.now().toISOString());
+    return this.getCommandResult<T>(commandId) ?? result;
+  }
+
   public setActiveThread(routeId: string, interfaceType: string, threadId: string | null): void {
     this.database
       .prepare(
@@ -719,6 +765,54 @@ export class ThreadStore {
       | { active_thread_id: string | null }
       | undefined;
     return row?.active_thread_id || null;
+  }
+
+  public saveAppClient(client: StoredAppClient): StoredAppClient {
+    this.database
+      .prepare(
+        `INSERT INTO app_clients
+          (id, app_id, device_name, signing_public_key, exchange_public_key, fingerprint,
+           capabilities_json, created_at, last_seen_at, revoked_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           device_name = excluded.device_name,
+           signing_public_key = excluded.signing_public_key,
+           exchange_public_key = excluded.exchange_public_key,
+           fingerprint = excluded.fingerprint,
+           capabilities_json = excluded.capabilities_json,
+           last_seen_at = excluded.last_seen_at,
+           revoked_at = excluded.revoked_at`,
+      )
+      .run(
+        client.id,
+        client.appId,
+        client.deviceName,
+        client.signingPublicKey,
+        client.exchangePublicKey,
+        client.fingerprint,
+        JSON.stringify(client.capabilities),
+        client.createdAt,
+        client.lastSeenAt,
+        client.revokedAt,
+      );
+    return this.getAppClient(client.id)!;
+  }
+
+  public getAppClient(id: string): StoredAppClient | null {
+    const row = this.database.prepare('SELECT * FROM app_clients WHERE id = ?').get(id) as
+      | AppClientRow
+      | undefined;
+    return row ? appClientFromRow(row) : null;
+  }
+
+  public listAppClients(): StoredAppClient[] {
+    return (this.database.prepare('SELECT * FROM app_clients ORDER BY created_at DESC').all() as AppClientRow[])
+      .map(appClientFromRow);
+  }
+
+  public revokeAppClient(id: string, revokedAt = this.now().toISOString()): StoredAppClient | null {
+    this.database.prepare('UPDATE app_clients SET revoked_at = ? WHERE id = ?').run(revokedAt, id);
+    return this.getAppClient(id);
   }
 
   public async migrateLegacySessions(): Promise<LegacyMigrationResult> {

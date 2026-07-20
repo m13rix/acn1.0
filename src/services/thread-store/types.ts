@@ -75,6 +75,19 @@ export interface WorkspaceCheckpoint {
   createdAt: string;
 }
 
+export interface StoredAppClient {
+  id: string;
+  appId: string;
+  deviceName: string;
+  signingPublicKey: string;
+  exchangePublicKey: string;
+  fingerprint: string;
+  capabilities: string[];
+  createdAt: string;
+  lastSeenAt: string | null;
+  revokedAt: string | null;
+}
+
 export interface LegacyMigrationIssue {
   file: string;
   reason: string;

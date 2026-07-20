@@ -75,6 +75,7 @@ export class ThreadService {
   }
 
   async createThread(input: {
+    threadId?: string;
     projectId: string;
     worktreePath?: string | null;
     agentName: string;
@@ -114,6 +115,7 @@ export class ThreadService {
       reasoning: input.reasoning,
     };
     const thread = this.store.createThread({
+      id: input.threadId,
       parentThreadId: input.parentThreadId,
       launchProfile,
       title: input.title,
