@@ -97,6 +97,10 @@ export class TelosCodeRuntime {
     });
   }
 
+  public get threadService(): ThreadService {
+    return this.threads;
+  }
+
   public formatPairingMessage(pairing = this.beginPairing()): string {
     return [
       'Telos Code pairing code (valid for 10 minutes):',

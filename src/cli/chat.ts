@@ -616,6 +616,7 @@ async function main(): Promise<void> {
       telosCodeRuntime = await TelosCodeRuntime.start({
         approveClient: (request) => telegramService?.requestTelosCodeApproval(request) ?? false,
       });
+      telegramService?.attachThreadService(telosCodeRuntime.threadService);
       telegramService?.registerTelosCodePairingProvider(async () => telosCodeRuntime!.formatPairingMessage());
       const pairingMessage = telosCodeRuntime.formatPairingMessage();
       console.log(COLORS.muted(`\n${pairingMessage}\n`));

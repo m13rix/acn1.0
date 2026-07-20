@@ -22,6 +22,10 @@ import { COLORS, SYMBOLS, StreamDisplay } from '../cli/display.js';
 import { getInterfaceRouteRegistry } from '../interfaces/registry.js';
 import type { InterfaceRouteHandler, InterfaceUiEventPayload } from '../interfaces/base.js';
 import type { LoadedAgent } from '../types/index.js';
+import type { ReasoningEffort } from '@telos/code-contracts/telos';
+import { ThreadService } from './ThreadService.js';
+import type { StoredThreadEvent } from './thread-store/types.js';
+import { TelosCodeCatalogService } from './telos-code/TelosCodeCatalogService.js';
 import {
     clearPersistedChatSessionState,
     clearPersistedRouteSelection,
@@ -148,6 +152,35 @@ interface ChatSession {
     uiScopes: Map<string, TelegramUiState>;
 }
 
+interface TelegramThreadCreationFlow {
+    projectId?: string;
+    agentName?: string;
+    providerId?: string;
+    modelId?: string;
+    models?: Array<{ id: string; displayName: string }>;
+    nextCursor?: string;
+}
+
+interface TelegramThreadInteraction {
+    interactionId: string;
+    questions: Array<{
+        id: string;
+        prompt: string;
+        type: string;
+        options: Array<{ id: string; label: string }>;
+    }>;
+    index: number;
+    answers: Record<string, unknown>;
+    selected: Set<string>;
+}
+
+interface PendingDurableUpload {
+    threadId: string;
+    fileName: string;
+    bytes: Buffer;
+    caption: string;
+}
+
 interface TelegramApiErrorLike {
     response?: {
         error_code?: number;
@@ -195,6 +228,13 @@ export class TelegramService {
     }>();
     private telosCodePairingProvider: (() => Promise<string>) | null = null;
     private questionCounter = 0;
+    private threadService: ThreadService | null = null;
+    private readonly threadCatalog = new TelosCodeCatalogService();
+    private readonly threadSubscriptions = new Map<string, () => void>();
+    private readonly threadRoutes = new Map<string, TelegramRoute>();
+    private readonly threadCreationFlows = new Map<string, TelegramThreadCreationFlow>();
+    private readonly threadInteractions = new Map<string, TelegramThreadInteraction>();
+    private readonly pendingDurableUploads = new Map<string, PendingDurableUpload>();
 
     constructor() {
         this.bot = new Telegraf(BOT_TOKEN);
@@ -220,6 +260,10 @@ export class TelegramService {
                 });
             }
         });
+    }
+
+    public attachThreadService(service: ThreadService): void {
+        this.threadService = service;
     }
 
     private setupApiRoutes(): void {
@@ -578,6 +622,319 @@ export class TelegramService {
         return false;
     }
 
+    private activeDurableThread(routeKey: string) {
+        if (!this.threadService) return null;
+        const id = this.threadService.store.getActiveThread(`telegram:${routeKey}`);
+        return id ? this.threadService.store.getThread(id) : null;
+    }
+
+    private ensureDurableSubscription(routeKey: string, route: TelegramRoute, threadId: string): void {
+        if (!this.threadService || this.threadSubscriptions.has(routeKey)) return;
+        this.threadRoutes.set(routeKey, route);
+        this.threadSubscriptions.set(routeKey, this.threadService.subscribe(threadId, (event) => {
+            void this.renderDurableThreadEvent(routeKey, route, event).catch((error) =>
+                console.error('[Telegram] Durable event rendering failed:', error));
+        }));
+    }
+
+    private async selectDurableThread(routeKey: string, route: TelegramRoute, threadId: string): Promise<void> {
+        if (!this.threadService) throw new Error('Durable threads are not available.');
+        const thread = this.threadService.store.getThread(threadId);
+        if (!thread) throw new Error(`Thread not found: ${threadId}`);
+        this.threadService.store.setActiveThread(`telegram:${routeKey}`, 'telegram', thread.id);
+        this.threadSubscriptions.get(routeKey)?.();
+        this.threadSubscriptions.delete(routeKey);
+        this.ensureDurableSubscription(routeKey, route, thread.id);
+        await this.sendMessageToRoute(route, `Active thread: ${thread.title}\n${thread.launchProfile.agentName} | ${thread.launchProfile.providerId}/${thread.launchProfile.modelId} | ${thread.launchProfile.reasoning}`);
+    }
+
+    private async showDurableThreads(routeKey: string, route: TelegramRoute, archived = false): Promise<void> {
+        if (!this.threadService) {
+            await this.sendMessageToRoute(route, 'Durable threads are not available until Telos Code starts.');
+            return;
+        }
+        const activeId = this.threadService.store.getActiveThread(`telegram:${routeKey}`);
+        const threads = this.threadService.store.listThreads({ includeArchived: true })
+            .filter((thread) => archived ? !!thread.archivedAt : !thread.archivedAt)
+            .filter((thread) => !thread.parentThreadId);
+        if (!threads.length) {
+            await this.sendMessageToRoute(route, archived ? 'No archived threads.' : 'No threads yet. Use /new.');
+            return;
+        }
+        await this.sendMessageToRoute(route, archived ? 'Archived threads' : 'Threads', {
+            reply_markup: { inline_keyboard: threads.slice(0, 30).map((thread) => [{
+                text: `${thread.id === activeId ? '* ' : ''}${thread.title}`.slice(0, 60),
+                callback_data: `tt:s:${thread.id}`,
+            }]) },
+        });
+    }
+
+    private async startDurableThreadFlow(routeKey: string, route: TelegramRoute): Promise<void> {
+        if (!this.threadService) throw new Error('Durable threads are unavailable.');
+        const projects = this.threadService.store.listProjects();
+        if (!projects.length) {
+            await this.sendMessageToRoute(route, 'Register a project first: /project C:\\path\\to\\project');
+            return;
+        }
+        this.threadCreationFlows.set(routeKey, {});
+        await this.sendMessageToRoute(route, 'New thread | choose project', {
+            reply_markup: { inline_keyboard: projects.slice(0, 30).map((project, index) => [{
+                text: project.displayName.slice(0, 60), callback_data: `tc:p:${index}`,
+            }]) },
+        });
+    }
+
+    private async handleDurableThreadCallback(ctx: Context, routeKey: string, route: TelegramRoute, data: string): Promise<boolean> {
+        if (!this.threadService) return false;
+        if (data.startsWith('tt:s:')) {
+            await this.selectDurableThread(routeKey, route, data.slice(5));
+            await (ctx as any).answerCbQuery?.('Thread selected').catch(() => undefined);
+            return true;
+        }
+        if (data.startsWith('ti:')) {
+            const interaction = this.threadInteractions.get(routeKey);
+            const optionIndex = Number(data.split(':')[1]);
+            const question = interaction?.questions[interaction.index];
+            const option = question?.options[optionIndex];
+            if (!interaction || !question || !option) return false;
+            if (question.type === 'multi-select') {
+                if (interaction.selected.has(option.id)) interaction.selected.delete(option.id);
+                else interaction.selected.add(option.id);
+                await (ctx as any).answerCbQuery?.(`${interaction.selected.has(option.id) ? 'Selected' : 'Removed'}: ${option.label}`).catch(() => undefined);
+            } else {
+                interaction.answers[question.id] = option.id;
+                interaction.index += 1;
+                await (ctx as any).answerCbQuery?.(`Selected: ${option.label}`).catch(() => undefined);
+            }
+            await this.presentDurableInteraction(routeKey, route, interaction);
+            return true;
+        }
+        if (data === 'tidone') {
+            const interaction = this.threadInteractions.get(routeKey);
+            const question = interaction?.questions[interaction.index];
+            if (!interaction || !question || question.type !== 'multi-select') return false;
+            interaction.answers[question.id] = [...interaction.selected];
+            interaction.selected.clear();
+            interaction.index += 1;
+            await (ctx as any).answerCbQuery?.('Selection saved').catch(() => undefined);
+            await this.presentDurableInteraction(routeKey, route, interaction);
+            return true;
+        }
+        if (data.startsWith('tu:')) {
+            const pending = this.pendingDurableUploads.get(routeKey);
+            if (!pending) {
+                await (ctx as any).answerCbQuery?.('This upload expired.').catch(() => undefined);
+                return true;
+            }
+            const action = data.split(':')[1];
+            if (action === 'cancel') {
+                this.pendingDurableUploads.delete(routeKey);
+                await (ctx as any).answerCbQuery?.('Upload cancelled').catch(() => undefined);
+                return true;
+            }
+            const target = action === 'rename'
+                ? await this.availableUploadName(pending.threadId, pending.fileName)
+                : pending.fileName;
+            await this.writeDurableUpload(pending, target, action === 'replace');
+            this.pendingDurableUploads.delete(routeKey);
+            await (ctx as any).answerCbQuery?.('Uploaded').catch(() => undefined);
+            return true;
+        }
+        if (data.startsWith('tk:r:')) {
+            const thread = this.activeDurableThread(routeKey);
+            if (!thread) return true;
+            await this.threadService.rewind({ threadId: thread.id, checkpointId: data.slice(5) });
+            await (ctx as any).answerCbQuery?.('Thread rewound').catch(() => undefined);
+            return true;
+        }
+        if (!data.startsWith('tc:')) return false;
+        const flow = this.threadCreationFlows.get(routeKey);
+        if (!flow) {
+            await (ctx as any).answerCbQuery?.('This new-thread flow expired.').catch(() => undefined);
+            return true;
+        }
+        const [, stage, rawIndex] = data.split(':');
+        const index = Number(rawIndex);
+        if (stage === 'p') {
+            const project = this.threadService.store.listProjects()[index];
+            if (!project) return true;
+            flow.projectId = project.id;
+            const catalog = await this.threadCatalog.getCatalog();
+            await this.sendMessageToRoute(route, 'Choose text agent', { reply_markup: {
+                inline_keyboard: catalog.agents.map((agent, item) => [{ text: agent.name.slice(0, 60), callback_data: `tc:a:${item}` }]),
+            } });
+        } else if (stage === 'a') {
+            const catalog = await this.threadCatalog.getCatalog();
+            const agent = catalog.agents[index];
+            if (!agent) return true;
+            flow.agentName = agent.name;
+            await this.sendMessageToRoute(route, 'Choose healthy provider', { reply_markup: {
+                inline_keyboard: catalog.providers.map((provider, item) => [{ text: provider.displayName.slice(0, 60), callback_data: `tc:v:${item}` }]),
+            } });
+        } else if (stage === 'v') {
+            const catalog = await this.threadCatalog.getCatalog();
+            const provider = catalog.providers[index];
+            if (!provider) return true;
+            flow.providerId = provider.id;
+            const page = await this.threadCatalog.listModels({ providerId: provider.id, limit: 10 });
+            flow.models = [...page.items];
+            flow.nextCursor = page.nextCursor;
+            await this.showDurableModelPage(route, flow);
+        } else if (stage === 'm') {
+            const model = flow.models?.[index];
+            if (!model) return true;
+            flow.modelId = model.id;
+            await this.sendMessageToRoute(route, 'Choose reasoning effort', { reply_markup: {
+                inline_keyboard: [['off', 'low', 'medium'], ['high', 'xhigh']].map((row) => row.map((effort) => ({
+                    text: effort, callback_data: `tc:e:${effort}`,
+                }))),
+            } });
+        } else if (stage === 'more' && flow.providerId && flow.nextCursor) {
+            const page = await this.threadCatalog.listModels({ providerId: flow.providerId, cursor: flow.nextCursor, limit: 10 });
+            flow.models = [...(flow.models || []), ...page.items];
+            flow.nextCursor = page.nextCursor;
+            await this.showDurableModelPage(route, flow);
+        } else if (stage === 'e') {
+            const modelId = flow.modelId;
+            if (!flow.projectId || !flow.agentName || !flow.providerId || !modelId) return true;
+            if (typeof rawIndex !== 'string' || !['off', 'low', 'medium', 'high', 'xhigh'].includes(rawIndex)) return true;
+            const reasoning = rawIndex as ReasoningEffort;
+            const thread = await this.threadService.createThread({
+                projectId: flow.projectId, agentName: flow.agentName, providerId: flow.providerId,
+                modelId, reasoning,
+            });
+            this.threadCreationFlows.delete(routeKey);
+            await this.selectDurableThread(routeKey, route, thread.id);
+        }
+        await (ctx as any).answerCbQuery?.().catch(() => undefined);
+        return true;
+    }
+
+    private async showDurableModelPage(route: TelegramRoute, flow: TelegramThreadCreationFlow): Promise<void> {
+        const models = flow.models || [];
+        const start = Math.max(0, models.length - 10);
+        const buttons = models.slice(start).map((model, offset) => [{
+            text: model.displayName.slice(0, 60), callback_data: `tc:m:${start + offset}`,
+        }]);
+        if (flow.nextCursor) buttons.push([{ text: 'Load more', callback_data: 'tc:more:0' }]);
+        await this.sendMessageToRoute(route, 'Choose model', { reply_markup: { inline_keyboard: buttons } });
+    }
+
+    private async renderDurableThreadEvent(routeKey: string, route: TelegramRoute, event: StoredThreadEvent): Promise<void> {
+        const payload = event.payload as Record<string, unknown>;
+        if (event.type === 'message' && payload.role === 'assistant' && payload.final === true && typeof payload.text === 'string') {
+            await this.sendMessageToRoute(route, payload.text);
+            return;
+        }
+        if (event.type === 'interaction' && payload.state === 'requested' && typeof payload.interactionId === 'string') {
+            const request = payload.request && typeof payload.request === 'object' ? payload.request as Record<string, unknown> : {};
+            const rawQuestions = Array.isArray(request.questions) ? request.questions : [];
+            const questions = rawQuestions.map((raw, index) => {
+                const question = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
+                const options = Array.isArray(question.options) ? question.options.map((item, optionIndex) => {
+                    const option = item && typeof item === 'object' ? item as Record<string, unknown> : {};
+                    return { id: String(option.id || option.value || optionIndex), label: String(option.label || option.value || option.id || optionIndex) };
+                }) : [];
+                return { id: String(question.id || `question-${index + 1}`), prompt: String(question.question || question.prompt || 'Input requested'),
+                    type: String(question.type || (options.length ? 'single-select' : 'free-text')), options };
+            });
+            const interaction: TelegramThreadInteraction = {
+                interactionId: payload.interactionId, questions, index: 0, answers: {}, selected: new Set(),
+            };
+            this.threadInteractions.set(routeKey, interaction);
+            await this.presentDurableInteraction(routeKey, route, interaction);
+            return;
+        }
+        if (event.type === 'interaction' && payload.state === 'answered' && typeof payload.interactionId === 'string') {
+            const active = this.threadInteractions.get(routeKey);
+            if (active?.interactionId === payload.interactionId) {
+                this.threadInteractions.delete(routeKey);
+                await this.sendMessageToRoute(route, 'Question answered from another attached interface.');
+            }
+            return;
+        }
+        if (event.type === 'attachment' && payload.state === 'created' && typeof payload.attachmentId === 'string') {
+            const attachment = this.threadService?.attachments.get(payload.attachmentId, event.threadId);
+            if (!attachment) return;
+            if (attachment.mimeType.startsWith('audio/')) await this.sendVoiceToRoute(route, attachment.storagePath);
+            else await this.sendDocumentToRoute(route, attachment.storagePath);
+            return;
+        }
+        if (event.type === 'activity' && payload.activityType === 'child-thread'
+            && (payload.state === 'completed' || payload.state === 'failed')) {
+            await this.sendMessageToRoute(route, `Subagent ${String(payload.state)}${payload.error ? `: ${String(payload.error)}` : '.'}`);
+            return;
+        }
+        if (event.type === 'activity' && payload.activityType === 'turn'
+            && (payload.state === 'completed' || payload.state === 'failed' || payload.state === 'stopped')) {
+            await this.sendMessageToRoute(route, payload.state === 'completed'
+                ? 'Turn completed.'
+                : `Turn ${String(payload.state)}${payload.error ? `: ${String(payload.error)}` : '.'}`);
+        }
+    }
+
+    private async presentDurableInteraction(routeKey: string, route: TelegramRoute, interaction: TelegramThreadInteraction): Promise<void> {
+        const question = interaction.questions[interaction.index];
+        if (!question) {
+            this.threadInteractions.delete(routeKey);
+            const result = this.threadService?.answerInteraction({ interactionId: interaction.interactionId, answers: interaction.answers });
+            await this.sendMessageToRoute(route, result?.accepted ? 'Answer received.' : 'This question was already answered elsewhere.');
+            return;
+        }
+        if (question.options.length) {
+            const rows = question.options.map((option, index) => [{
+                text: `${interaction.selected.has(option.id) ? '[x] ' : ''}${option.label}`.slice(0, 60),
+                callback_data: `ti:${index}`,
+            }]);
+            if (question.type === 'multi-select') rows.push([{ text: 'Done', callback_data: 'tidone' }]);
+            await this.sendMessageToRoute(route, question.prompt, { reply_markup: { inline_keyboard: rows } });
+        } else {
+            await this.sendMessageToRoute(route, `${question.prompt}\n\nReply with your answer.`);
+        }
+    }
+
+    private async availableUploadName(threadId: string, requestedName: string): Promise<string> {
+        const safeName = path.basename(requestedName).replace(/[<>:"/\\|?*\x00-\x1f]/g, '_');
+        const extension = path.extname(safeName);
+        const stem = path.basename(safeName, extension);
+        for (let index = 1; index < 10_000; index += 1) {
+            const candidate = index === 1 ? safeName : `${stem} (${index})${extension}`;
+            try {
+                await this.threadService?.readFile(threadId, candidate);
+            } catch {
+                return candidate;
+            }
+        }
+        throw new Error(`Unable to find an available name for ${safeName}`);
+    }
+
+    private async writeDurableUpload(pending: PendingDurableUpload, target: string, replace: boolean): Promise<void> {
+        if (!this.threadService) throw new Error('Durable threads are unavailable.');
+        let expectedRevision: string | undefined;
+        if (replace) {
+            const existing = await this.threadService.readFile(pending.threadId, target);
+            expectedRevision = existing.revision;
+        }
+        await this.threadService.writeFile({
+            threadId: pending.threadId,
+            path: target,
+            contentBase64: pending.bytes.toString('base64'),
+            expectedRevision,
+        });
+        const route = [...this.pendingDurableUploads.entries()]
+            .find(([, value]) => value === pending)?.[0];
+        if (route) {
+            const destination = this.threadRoutes.get(route);
+            if (destination) await this.sendMessageToRoute(destination, `Uploaded to workspace: ${target}`);
+        }
+        if (pending.caption.trim()) {
+            this.threadService.enqueueTurn({
+                threadId: pending.threadId,
+                text: `${pending.caption.trim()}\n\nUploaded workspace file: ${target}`,
+            });
+        }
+    }
+
     private setupHandlers(): void {
         this.bot.command('start', async (ctx) => {
             const chatId = ctx.chat.id.toString();
@@ -599,6 +956,137 @@ export class TelegramService {
             } catch (error) {
                 await ctx.reply(`Unable to create a Telos Code pairing code: ${error instanceof Error ? error.message : String(error)}`);
             }
+        });
+
+        this.bot.command(['threads', 'switch'], async (ctx) => {
+            if (!this.checkAuth(ctx)) return;
+            const route = this.extractRouteFromContext(ctx);
+            await this.showDurableThreads(this.routeKey(route), route);
+        });
+
+        this.bot.command('archived', async (ctx) => {
+            if (!this.checkAuth(ctx)) return;
+            const route = this.extractRouteFromContext(ctx);
+            await this.showDurableThreads(this.routeKey(route), route, true);
+        });
+
+        this.bot.command('new', async (ctx) => {
+            if (!this.checkAuth(ctx)) return;
+            const route = this.extractRouteFromContext(ctx);
+            await this.startDurableThreadFlow(this.routeKey(route), route);
+        });
+
+        this.bot.command('project', async (ctx) => {
+            if (!this.checkAuth(ctx) || !this.threadService) return;
+            const route = this.extractRouteFromContext(ctx);
+            const raw = ctx.message.text.replace(/^\/project(?:@\w+)?\s*/i, '').trim();
+            const [requestedPath, displayName] = raw.split('|', 2).map((value) => value.trim());
+            if (!requestedPath) {
+                await this.sendMessageToRoute(route, 'Usage: /project C:\\path\\to\\project | Optional name');
+                return;
+            }
+            const absolutePath = path.resolve(requestedPath);
+            if (!fs.existsSync(absolutePath) || !fs.statSync(absolutePath).isDirectory()) {
+                await this.sendMessageToRoute(route, `Directory not found: ${absolutePath}`);
+                return;
+            }
+            const existing = this.threadService.store.listProjects().find((project) =>
+                path.resolve(project.path).toLowerCase() === absolutePath.toLowerCase());
+            const project = existing || this.threadService.store.createProject({ path: absolutePath, displayName });
+            await this.sendMessageToRoute(route, `Project registered: ${project.displayName}\n${project.path}`);
+        });
+
+        this.bot.command('rename', async (ctx) => {
+            if (!this.checkAuth(ctx) || !this.threadService) return;
+            const route = this.extractRouteFromContext(ctx);
+            const routeKey = this.routeKey(route);
+            const thread = this.activeDurableThread(routeKey);
+            const title = ctx.message.text.replace(/^\/rename(?:@\w+)?\s*/i, '').trim();
+            if (!thread || !title) {
+                await this.sendMessageToRoute(route, 'Select a thread, then use /rename New title');
+                return;
+            }
+            this.threadService.store.renameThread(thread.id, title);
+            await this.sendMessageToRoute(route, `Renamed thread to: ${title}`);
+        });
+
+        this.bot.command(['archive', 'unarchive'], async (ctx) => {
+            if (!this.checkAuth(ctx) || !this.threadService) return;
+            const route = this.extractRouteFromContext(ctx);
+            const thread = this.activeDurableThread(this.routeKey(route));
+            if (!thread) {
+                await this.sendMessageToRoute(route, 'Select a thread first with /threads.');
+                return;
+            }
+            const archived = ctx.message.text.startsWith('/archive');
+            this.threadService.store.archiveThread(thread.id, archived);
+            await this.sendMessageToRoute(route, archived ? 'Thread archived.' : 'Thread unarchived.');
+        });
+
+        this.bot.command('delete', async (ctx) => {
+            if (!this.checkAuth(ctx) || !this.threadService) return;
+            const route = this.extractRouteFromContext(ctx);
+            const routeKey = this.routeKey(route);
+            const thread = this.activeDurableThread(routeKey);
+            const confirmation = ctx.message.text.replace(/^\/delete(?:@\w+)?\s*/i, '').trim().toLowerCase();
+            if (!thread || confirmation !== 'confirm') {
+                await this.sendMessageToRoute(route, 'Permanent deletion removes thread history and checkpoints, never project files. Use /delete confirm.');
+                return;
+            }
+            this.threadSubscriptions.get(routeKey)?.();
+            this.threadSubscriptions.delete(routeKey);
+            this.threadService.store.deleteThread(thread.id);
+            this.threadService.store.setActiveThread(`telegram:${routeKey}`, 'telegram', null);
+            await this.sendMessageToRoute(route, 'Thread permanently deleted.');
+        });
+
+        this.bot.command('stop', async (ctx) => {
+            if (!this.checkAuth(ctx) || !this.threadService) return;
+            const route = this.extractRouteFromContext(ctx);
+            const thread = this.activeDurableThread(this.routeKey(route));
+            await this.sendMessageToRoute(route, thread && this.threadService.stop(thread.id)
+                ? 'Stopping the active turn...' : 'No active turn to stop.');
+        });
+
+        this.bot.command('stopandsend', async (ctx) => {
+            if (!this.checkAuth(ctx) || !this.threadService) return;
+            const route = this.extractRouteFromContext(ctx);
+            const thread = this.activeDurableThread(this.routeKey(route));
+            const text = ctx.message.text.replace(/^\/stopandsend(?:@\w+)?\s*/i, '').trim();
+            if (!thread || !text) {
+                await this.sendMessageToRoute(route, 'Usage: /stopandsend your follow-up');
+                return;
+            }
+            this.threadService.stopAndSend({ threadId: thread.id, text });
+            await this.sendMessageToRoute(route, 'Stopping the current turn; follow-up queued.');
+        });
+
+        this.bot.command('checkpoints', async (ctx) => {
+            if (!this.checkAuth(ctx) || !this.threadService) return;
+            const route = this.extractRouteFromContext(ctx);
+            const thread = this.activeDurableThread(this.routeKey(route));
+            if (!thread) return;
+            const checkpoints = this.threadService.store.listCheckpoints({ threadId: thread.id }).slice(0, 20);
+            await this.sendMessageToRoute(route, checkpoints.length ? 'Checkpoints (rewind preserves visible history)' : 'No checkpoints yet.',
+                checkpoints.length ? { reply_markup: { inline_keyboard: checkpoints.map((checkpoint) => [{
+                    text: `${checkpoint.name || 'Checkpoint'} | ${new Date(checkpoint.createdAt).toLocaleString()}`.slice(0, 60),
+                    callback_data: `tk:r:${checkpoint.id}`,
+                }]) } } : undefined);
+        });
+
+        this.bot.command('modelsearch', async (ctx) => {
+            if (!this.checkAuth(ctx)) return;
+            const route = this.extractRouteFromContext(ctx);
+            const flow = this.threadCreationFlows.get(this.routeKey(route));
+            const query = ctx.message.text.replace(/^\/modelsearch(?:@\w+)?\s*/i, '').trim();
+            if (!flow?.providerId || !query) {
+                await this.sendMessageToRoute(route, 'During /new, choose a provider and use /modelsearch query.');
+                return;
+            }
+            const page = await this.threadCatalog.listModels({ providerId: flow.providerId, query, limit: 10 });
+            flow.models = [...page.items];
+            flow.nextCursor = page.nextCursor;
+            await this.showDurableModelPage(route, flow);
         });
 
         this.bot.command('new_session', async (ctx) => {
@@ -658,6 +1146,23 @@ export class TelegramService {
             const routeKey = this.routeKey(route);
             const text = ctx.message.text;
 
+            const interaction = this.threadInteractions.get(routeKey);
+            const question = interaction?.questions[interaction.index];
+            if (interaction && question && !question.options.length) {
+                interaction.answers[question.id] = text;
+                interaction.index += 1;
+                await this.presentDurableInteraction(routeKey, route, interaction);
+                return;
+            }
+
+            const durableThread = this.activeDurableThread(routeKey);
+            if (durableThread && this.threadService) {
+                this.ensureDurableSubscription(routeKey, route, durableThread.id);
+                this.threadService.enqueueTurn({ threadId: durableThread.id, text });
+                await this.sendMessageToRoute(route, durableThread.status === 'running' ? 'Follow-up queued.' : 'Turn queued.');
+                return;
+            }
+
             if (text.startsWith('Select: ') || text.startsWith('?? Select: ')) {
                 const selection = this.parseSelectAgentCommand(text);
                 await this.startSessionWithConfiguration(routeKey, route, selection.agentName, selection.runPath);
@@ -687,10 +1192,13 @@ export class TelegramService {
                 pending.resolve(approved);
                 return;
             }
-            const match = typeof data === 'string' ? /^ask:([a-z0-9]+):(\d+)$/.exec(data) : null;
-            if (!chatId || !this.authorizedUsers.has(chatId) || !match) return;
-
+            if (!chatId || !this.authorizedUsers.has(chatId)) return;
             const route = this.extractRouteFromContext(ctx);
+            if (typeof data === 'string' && await this.handleDurableThreadCallback(ctx, this.routeKey(route), route, data)) return;
+
+            const match = typeof data === 'string' ? /^ask:([a-z0-9]+):(\d+)$/.exec(data) : null;
+            if (!match) return;
+
             const session = this.sessions.get(this.routeKey(route));
             const index = Number(match[2]);
             const active = session?.activeQuestionMenu;
@@ -720,8 +1228,32 @@ export class TelegramService {
                 const link = await ctx.telegram.getFileLink(ctx.message.voice.file_id);
                 console.log(COLORS.muted(`\n${SYMBOLS.user} [Telegram Voice] Downloading/transcribing...`));
 
+                const durableThread = this.activeDurableThread(routeKey);
+                let attachmentId: string | undefined;
+                if (durableThread && this.threadService) {
+                    this.ensureDurableSubscription(routeKey, route, durableThread.id);
+                    const response = await fetch(link.href);
+                    if (!response.ok) throw new Error(`Telegram file download failed: ${response.status}`);
+                    const attachment = await this.threadService.createUploadedAttachment({
+                        threadId: durableThread.id,
+                        bytes: new Uint8Array(await response.arrayBuffer()),
+                        name: `voice-${Date.now()}.ogg`,
+                        mimeType: 'audio/ogg',
+                        source: 'telegram-voice',
+                    });
+                    attachmentId = attachment.id;
+                }
+
                 const transcript = await this.transcribe(link.href);
                 await this.sendMessageToRoute(route, `Transcript: "${transcript}"`);
+                if (durableThread && this.threadService) {
+                    this.threadService.enqueueTurn({
+                        threadId: durableThread.id,
+                        text: transcript,
+                        attachmentIds: attachmentId ? [attachmentId] : [],
+                    });
+                    return;
+                }
                 await this.handleUserActivity(routeKey, route, { text: transcript, timestamp: Date.now() });
             } catch (e) {
                 console.error('Transcription error:', e);
@@ -752,8 +1284,42 @@ export class TelegramService {
 
                 const link = await ctx.telegram.getFileLink(fileId);
                 const response = await fetch(link.href);
+                if (!response.ok) throw new Error(`Telegram file download failed: ${response.status}`);
                 const arrayBuffer = await response.arrayBuffer();
                 const buffer = Buffer.from(arrayBuffer);
+
+                const durableThread = this.activeDurableThread(routeKey);
+                if (durableThread && this.threadService) {
+                    this.ensureDurableSubscription(routeKey, route, durableThread.id);
+                    const safeName = path.basename(fileName).replace(/[<>:"/\\|?*\x00-\x1f]/g, '_');
+                    try {
+                        await this.threadService.readFile(durableThread.id, safeName);
+                        this.pendingDurableUploads.set(routeKey, {
+                            threadId: durableThread.id,
+                            fileName: safeName,
+                            bytes: buffer,
+                            caption: asAny.caption || '',
+                        });
+                        await this.sendMessageToRoute(route, `A workspace file named ${safeName} already exists.`, {
+                            reply_markup: { inline_keyboard: [[
+                                { text: 'Replace', callback_data: 'tu:replace' },
+                                { text: 'Rename', callback_data: 'tu:rename' },
+                                { text: 'Cancel', callback_data: 'tu:cancel' },
+                            ]] },
+                        });
+                    } catch {
+                        const pending = {
+                            threadId: durableThread.id,
+                            fileName: safeName,
+                            bytes: buffer,
+                            caption: asAny.caption || '',
+                        };
+                        this.pendingDurableUploads.set(routeKey, pending);
+                        await this.writeDurableUpload(pending, safeName, false);
+                        this.pendingDurableUploads.delete(routeKey);
+                    }
+                    return;
+                }
 
                 let saveDir = path.join(process.cwd(), 'temp_uploads');
                 const chatSession = this.sessions.get(routeKey);
