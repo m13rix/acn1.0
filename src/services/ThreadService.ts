@@ -318,7 +318,7 @@ export class ThreadService {
     const rollback = await this.workspaceSnapshots.rollback(input.checkpointId, {
       files: input.files,
       threadId: thread.id,
-      turnId: checkpoint.turnId,
+      turnId: thread.activeContextTurnId,
     });
     if (checkpoint.turnId) this.store.restoreExecutorSnapshot(thread.id, checkpoint.turnId);
     else this.store.clearExecutorSnapshot(thread.id);
@@ -395,6 +395,52 @@ export class ThreadService {
       return left.name.localeCompare(right.name);
     });
     return { path: relativePath, entries: values };
+  }
+
+  async searchFiles(threadId: string, query: string, requestedLimit = 100): Promise<{
+    entries: Array<{ name: string; path: string; kind: 'file' | 'directory' | 'symlink'; size: number }>;
+  }> {
+    const thread = this.requireThread(threadId);
+    const normalizedQuery = query.trim().toLocaleLowerCase();
+    if (!normalizedQuery) return { entries: [] };
+    const limit = Math.max(1, Math.min(requestedLimit, 500));
+    const root = this.workspacePath(thread);
+    const pending: Array<{ absolute: string; relativePath: string }> = [
+      { absolute: root, relativePath: '' },
+    ];
+    const matches: Array<{
+      name: string;
+      path: string;
+      kind: 'file' | 'directory' | 'symlink';
+      size: number;
+    }> = [];
+    while (pending.length && matches.length < limit) {
+      const directory = pending.pop()!;
+      const children = await readdir(directory.absolute, { withFileTypes: true });
+      for (const child of children) {
+        if (!directory.relativePath && child.name === '.git') continue;
+        const relativePath = normalizeRelative(
+          directory.relativePath ? `${directory.relativePath}/${child.name}` : child.name,
+        );
+        const absolute = resolve(directory.absolute, child.name);
+        const info = await lstat(absolute);
+        const kind = child.isSymbolicLink()
+          ? 'symlink' as const
+          : child.isDirectory() ? 'directory' as const : 'file' as const;
+        if (relativePath.toLocaleLowerCase().includes(normalizedQuery)) {
+          matches.push({
+            name: child.name,
+            path: relativePath,
+            kind,
+            size: info.isFile() ? info.size : 0,
+          });
+          if (matches.length >= limit) break;
+        }
+        if (kind === 'directory') pending.push({ absolute, relativePath });
+      }
+    }
+    matches.sort((left, right) => left.path.localeCompare(right.path));
+    return { entries: matches };
   }
 
   async readFile(threadId: string, requestedPath: string): Promise<{

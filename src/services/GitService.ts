@@ -77,6 +77,12 @@ export class GitService {
     return next;
   }
 
+  public async listProjectWorktrees(projectId: string): Promise<unknown[]> {
+    const project = this.store.getProject(projectId);
+    if (!project || project.unregisteredAt) throw new Error(`Project not found: ${projectId}`);
+    return this.listWorktrees(resolve(project.path));
+  }
+
   private async executeLocked(
     thread: HarnessThread,
     action: GitAction,

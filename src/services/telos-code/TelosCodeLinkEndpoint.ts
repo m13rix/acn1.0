@@ -1,5 +1,8 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { resolve } from 'node:path';
+import { readFile, readdir } from 'node:fs/promises';
 
 import type { TelosCodeCommand } from '@telos/code-contracts/telos';
 import {
@@ -628,6 +631,15 @@ export class TelosCodeLinkEndpoint {
       case 'project.unregister':
         result = { project: this.store.unregisterProject(command.projectId) };
         break;
+      case 'filesystem.roots':
+        result = { roots: filesystemRoots() };
+        break;
+      case 'filesystem.list':
+        result = { path: resolve(command.path), entries: await browseFilesystem(command.path) };
+        break;
+      case 'project.worktrees':
+        result = { worktrees: await this.threads.git.listProjectWorktrees(command.projectId) };
+        break;
       case 'thread.create':
         result = { thread: await this.threads.createThread({
           threadId: command.threadId,
@@ -691,6 +703,9 @@ export class TelosCodeLinkEndpoint {
       case 'file.list':
         result = await this.threads.listFiles(command.threadId, command.path);
         break;
+      case 'file.search':
+        result = await this.threads.searchFiles(command.threadId, command.query, command.limit);
+        break;
       case 'file.read':
         result = await this.threads.readFile(command.threadId, command.path);
         break;
@@ -716,6 +731,45 @@ export class TelosCodeLinkEndpoint {
         result = { checkpoints: this.options.workspaceSnapshots?.listSnapshots({
           threadId: command.threadId,
         }) || [] };
+        break;
+      case 'checkpoint.stats': {
+        const checkpoints = this.options.workspaceSnapshots?.listSnapshots({ threadId: command.threadId }) || [];
+        const blobs = new Map<string, number>();
+        let coveredEntries = 0;
+        for (const checkpoint of checkpoints) {
+          const files = this.store.getCheckpointFiles(checkpoint.id);
+          coveredEntries = Math.max(coveredEntries, files.length);
+          for (const file of files) {
+            if (file.contentHash) blobs.set(file.contentHash, file.size);
+          }
+        }
+        const thread = this.requireThread(command.threadId);
+        const workspacePath = thread.launchProfile.worktreePath || thread.launchProfile.workspacePath;
+        const ignoreFile = await readFile(resolve(workspacePath, '.telos-snapshotignore'), 'utf8')
+          .catch((error) => {
+            if ((error as NodeJS.ErrnoException).code === 'ENOENT') return '';
+            throw error;
+          });
+        result = {
+          checkpointCount: checkpoints.length,
+          uniqueBlobCount: blobs.size,
+          storedBytes: [...blobs.values()].reduce((sum, size) => sum + size, 0),
+          coveredEntries,
+          ignoredPatterns: ignoreFile.split(/\r?\n/gu).map((line) => line.trim())
+            .filter((line) => line && !line.startsWith('#')),
+        };
+        break;
+      }
+      case 'checkpoint.diff':
+        if (!this.options.workspaceSnapshots) throw new Error('Workspace checkpoints are unavailable.');
+        result = await this.options.workspaceSnapshots.diff(command.checkpointId, {
+          ...(command.files ? { files: [...command.files] } : {}),
+        });
+        break;
+      case 'checkpoint.delete':
+        if (!this.options.workspaceSnapshots) throw new Error('Workspace checkpoints are unavailable.');
+        await this.options.workspaceSnapshots.deleteSnapshot(command.checkpointId);
+        result = { deleted: true };
         break;
       case 'checkpoint.rewind': {
         result = await this.threads.rewind({
@@ -949,6 +1003,44 @@ function isStringHeaders(value: unknown): value is Record<string, string | strin
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   return Object.values(value).every((item) => typeof item === 'string'
     || (Array.isArray(item) && item.every((part) => typeof part === 'string')));
+}
+
+function filesystemRoots(): Array<{ path: string; label: string }> {
+  const roots: Array<{ path: string; label: string }> = [];
+  const home = homedir();
+  if (home) roots.push({ path: home, label: 'Home' });
+  if (process.platform === 'win32') {
+    for (let code = 65; code <= 90; code += 1) {
+      const path = `${String.fromCharCode(code)}:\\`;
+      if (existsSync(path) && !roots.some((root) => root.path.toLowerCase() === path.toLowerCase())) {
+        roots.push({ path, label: path });
+      }
+    }
+  } else if (!roots.some((root) => root.path === '/')) {
+    roots.push({ path: '/', label: 'Filesystem' });
+  }
+  return roots;
+}
+
+async function browseFilesystem(path: string): Promise<Array<{
+  name: string;
+  path: string;
+  kind: 'directory' | 'file' | 'symlink';
+}>> {
+  const directory = resolve(path);
+  const children = await readdir(directory, { withFileTypes: true });
+  return children
+    .map((child) => ({
+      name: child.name,
+      path: resolve(directory, child.name),
+      kind: child.isDirectory() ? 'directory' as const
+        : child.isSymbolicLink() ? 'symlink' as const : 'file' as const,
+    }))
+    .sort((left, right) => {
+      if (left.kind === 'directory' && right.kind !== 'directory') return -1;
+      if (right.kind === 'directory' && left.kind !== 'directory') return 1;
+      return left.name.localeCompare(right.name);
+    });
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {

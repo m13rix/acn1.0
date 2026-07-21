@@ -232,6 +232,7 @@ export class TelegramService {
         timer: NodeJS.Timeout;
     }>();
     private telosCodePairingProvider: (() => Promise<TelosCodePairingPresentation>) | null = null;
+    private telosCodeClientRevoker: ((appClientId: string) => Promise<void>) | null = null;
     private questionCounter = 0;
     private threadService: ThreadService | null = null;
     private readonly threadCatalog = new TelosCodeCatalogService();
@@ -969,6 +970,27 @@ export class TelegramService {
             }
         });
 
+        this.bot.command('telosclients', async (ctx) => {
+            if (!this.checkAuth(ctx)) return;
+            if (!this.threadService) {
+                await ctx.reply('Telos Code is not available on this harness.');
+                return;
+            }
+            const clients = this.threadService.store.listAppClients().filter((client) => !client.revokedAt);
+            if (!clients.length) {
+                await ctx.reply('No active Telos Code devices are authorized.');
+                return;
+            }
+            await ctx.reply('Authorized Telos Code devices', {
+                reply_markup: {
+                    inline_keyboard: clients.map((client) => [{
+                        text: `${client.deviceName} · ${client.fingerprint.slice(0, 12)}`.slice(0, 60),
+                        callback_data: `tc:revoke:${client.id}`,
+                    }]),
+                },
+            });
+        });
+
         this.bot.command(['threads', 'switch'], async (ctx) => {
             if (!this.checkAuth(ctx)) return;
             const route = this.extractRouteFromContext(ctx);
@@ -1205,6 +1227,21 @@ export class TelegramService {
             }
             if (!chatId || !this.authorizedUsers.has(chatId)) return;
             const route = this.extractRouteFromContext(ctx);
+            const revokeClientMatch = typeof data === 'string'
+                ? /^tc:revoke:([0-9a-f-]+)$/i.exec(data)
+                : null;
+            if (revokeClientMatch && this.threadService) {
+                const existing = this.threadService.store.getAppClient(revokeClientMatch[1]!);
+                if (existing && this.telosCodeClientRevoker) {
+                    await this.telosCodeClientRevoker(existing.id);
+                } else if (existing) {
+                    this.threadService.store.revokeAppClient(existing.id);
+                }
+                await ctx.answerCbQuery(existing ? 'Device revoked' : 'Device not found').catch(() => undefined);
+                await ctx.editMessageReplyMarkup({ inline_keyboard: [] } as any).catch(() => undefined);
+                if (existing) await this.sendMessageToRoute(route, `Revoked Telos Code device: ${existing.deviceName}`);
+                return;
+            }
             if (typeof data === 'string' && await this.handleDurableThreadCallback(ctx, this.routeKey(route), route, data)) return;
 
             const match = typeof data === 'string' ? /^ask:([a-z0-9]+):(\d+)$/.exec(data) : null;
@@ -3160,6 +3197,14 @@ export class TelegramService {
         this.telosCodePairingProvider = provider;
     }
 
+    public registerTelosCodeClientRevoker(revoker: ((appClientId: string) => Promise<void>) | null): void {
+        this.telosCodeClientRevoker = revoker;
+    }
+
+    public canApproveTelosCodeClients(): boolean {
+        return this.authorizedUsers.size > 0 && !readBooleanEnv('TELOS_DISABLE_TELEGRAM_BOT');
+    }
+
     public async requestTelosCodeApproval(input: {
         deviceName: string;
         fingerprint: string;
@@ -3245,6 +3290,7 @@ export class TelegramService {
 
     public async stop(): Promise<void> {
         this.telosCodePairingProvider = null;
+        this.telosCodeClientRevoker = null;
         for (const pending of this.pendingTelosCodeApprovals.values()) {
             clearTimeout(pending.timer);
             pending.resolve(false);

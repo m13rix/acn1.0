@@ -145,6 +145,7 @@ scripts/diffusiongemma-windows/results/
 .telos-last-agent-session.json
 sandboxes/
 telos-link-data/
+.tmp/
 __pycache__/
 *.py[cod]
 

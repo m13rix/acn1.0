@@ -338,6 +338,11 @@ test('browses and edits workspace files with revision conflicts and checkpoints'
     const thread = store.createThread({ launchProfile: profile(project.id, workspace) });
     const root = await service.listFiles(thread.id);
     assert.deepEqual(root.entries.map((entry) => [entry.name, entry.kind]), [['src', 'directory']]);
+    assert.deepEqual(
+      (await service.searchFiles(thread.id, 'APP')).entries.map((entry) => entry.path),
+      ['src/app.ts'],
+    );
+    assert.deepEqual((await service.searchFiles(thread.id, 'missing')).entries, []);
     const opened = await service.readFile(thread.id, 'src/app.ts');
     assert.equal(Buffer.from(opened.contentBase64, 'base64').toString('utf8'), 'export const value = 1;\n');
     await assert.rejects(
@@ -357,9 +362,20 @@ test('browses and edits workspace files with revision conflicts and checkpoints'
     });
     assert.equal(saved.path, 'src/app.ts');
     assert.equal(await readFile(join(workspace, 'src', 'app.ts'), 'utf8'), 'export const value = 2;\n');
+    await service.writeFile({
+      threadId: thread.id,
+      path: 'src/new.txt',
+      contentBase64: Buffer.from('uploaded').toString('base64'),
+    });
+    assert.equal(await readFile(join(workspace, 'src', 'new.txt'), 'utf8'), 'uploaded');
     assert.deepEqual(
       service.store.listCheckpoints({ threadId: thread.id }).map((checkpoint) => checkpoint.name).sort(),
-      ['After file edit: src/app.ts', 'Before file edit: src/app.ts'],
+      [
+        'After file edit: src/app.ts',
+        'After file edit: src/new.txt',
+        'Before file edit: src/app.ts',
+        'Before file edit: src/new.txt',
+      ],
     );
     await assert.rejects(service.readFile(thread.id, '../threads.db'), /escapes the thread workspace/iu);
   } finally {

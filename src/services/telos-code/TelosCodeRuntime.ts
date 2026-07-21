@@ -51,12 +51,17 @@ export class TelosCodeRuntime {
   ) {}
 
   public static async start(options: TelosCodeRuntimeOptions): Promise<TelosCodeRuntime> {
-    const dataDirectory = resolve(options.dataDirectory || join(process.cwd(), 'data', 'telos-code'));
+    const dataDirectory = resolve(
+      options.dataDirectory || process.env.TELOS_CODE_DATA_DIRECTORY || join(process.cwd(), 'data', 'telos-code'),
+    );
     await mkdir(dataDirectory, { recursive: true });
     const harnessId = await loadHarnessId(join(dataDirectory, 'harness-id'));
     const store = await ThreadStore.open({
       databasePath: join(dataDirectory, 'threads.db'),
-      legacySessionsPath: options.legacySessionsPath || join(process.cwd(), 'data', 'chat-sessions'),
+      legacySessionsPath:
+        options.legacySessionsPath ||
+        process.env.TELOS_CODE_LEGACY_SESSIONS_DIRECTORY ||
+        join(process.cwd(), 'data', 'chat-sessions'),
       defaultWorkspacePath: process.cwd(),
     });
     const migration = await store.migrateLegacySessions();
@@ -132,6 +137,10 @@ export class TelosCodeRuntime {
 
   public get threadService(): ThreadService {
     return this.threads;
+  }
+
+  public revokeClient(appClientId: string): Promise<void> {
+    return this.endpoint.revokeClient(appClientId);
   }
 
   public formatPairingMessage(pairing = this.beginPairing()): string {
