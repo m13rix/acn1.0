@@ -28,6 +28,7 @@ interface LiveTerminal {
   persistTimer?: ReturnType<typeof setTimeout>;
   checkpointTimer?: ReturnType<typeof setTimeout>;
   checkpointPending: Promise<void>;
+  checkpointWorkspaceChanges: boolean;
   exitPromise: Promise<void>;
   resolveExit: () => void;
   dataSubscription?: { dispose(): void };
@@ -49,9 +50,23 @@ export interface TerminalOpenInput {
   rows?: number;
   command?: string;
   keepOpen?: boolean;
+  /** Whether opening this command must first capture a rollback checkpoint. */
+  checkpointBeforeCommand?: boolean;
 }
 
 const requireFromHere = createRequire(import.meta.url);
+
+/**
+ * A finite read is common in agent work and cannot modify the workspace. Keep
+ * the rollback boundary for every other command, but do not recursively snapshot
+ * a project merely to display a file or inspect Git state.
+ */
+function isClearlyReadOnlyCommand(command: string): boolean {
+  const normalized = command.trim();
+  if (!normalized || /(?:&&|\|\||[;|]|>{1,2})/u.test(normalized)) return false;
+  return /^(?:type|cat|gc|get-content|dir|ls|get-childitem|rg|findstr|select-string)\b/iu.test(normalized)
+    || /^git\s+(?:status|diff|log|show|branch|rev-parse)\b/iu.test(normalized);
+}
 
 export class TerminalService {
   private readonly live = new Map<string, LiveTerminal>();
@@ -97,7 +112,8 @@ export class TerminalService {
     const cols = clamp(input.cols, 20, 1_000, DEFAULT_COLS);
     const rows = clamp(input.rows, 5, 500, DEFAULT_ROWS);
     const command = input.command?.trim() || '';
-    if (command && this.workspaceSnapshots) {
+    const checkpointWorkspaceChanges = input.checkpointBeforeCommand !== false;
+    if (command && checkpointWorkspaceChanges && this.workspaceSnapshots) {
       await this.workspaceSnapshots.snapshot({
         workspacePath: thread.launchProfile.worktreePath || thread.launchProfile.workspacePath,
         threadId: thread.id,
@@ -122,6 +138,7 @@ export class TerminalService {
       snapshot,
       process,
       checkpointPending: Promise.resolve(),
+      checkpointWorkspaceChanges,
       exitPromise: exit.promise,
       resolveExit: exit.resolve,
     };
@@ -226,6 +243,7 @@ export class TerminalService {
       snapshot,
       process,
       checkpointPending: Promise.resolve(),
+      checkpointWorkspaceChanges: true,
       exitPromise: exit.promise,
       resolveExit: exit.resolve,
     };
@@ -264,6 +282,7 @@ export class TerminalService {
       cwd: input.cwd,
       command: input.command,
       keepOpen: false,
+      checkpointBeforeCommand: !isClearlyReadOnlyCommand(input.command),
     });
     let timedOut = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -356,9 +375,11 @@ export class TerminalService {
     } catch {
       // The native PTY may already have released every process handle.
     }
-    void terminal.checkpointPending
-      .then(() => this.checkpoint(terminal.snapshot, 'After terminal activity'))
-      .catch(() => undefined);
+    if (terminal.checkpointWorkspaceChanges) {
+      void terminal.checkpointPending
+        .then(() => this.checkpoint(terminal.snapshot, 'After terminal activity'))
+        .catch(() => undefined);
+    }
     this.emit(terminal.snapshot.threadId, { type: 'exited', terminal: terminal.snapshot });
     const cleanupTimer = setTimeout(() => {
       if (this.live.get(terminal.snapshot.id) === terminal) this.live.delete(terminal.snapshot.id);
@@ -376,6 +397,7 @@ export class TerminalService {
   }
 
   private scheduleQuietCheckpoint(terminal: LiveTerminal): void {
+    if (!terminal.checkpointWorkspaceChanges) return;
     if (terminal.checkpointTimer) clearTimeout(terminal.checkpointTimer);
     terminal.checkpointTimer = setTimeout(() => {
       terminal.checkpointTimer = undefined;

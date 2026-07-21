@@ -26,7 +26,10 @@ export const DEFAULT_ACTION_AUTOFIX_CONFIG: ResolvedActionAutoFixConfig = {
     autoInstallMissingPackages: true,
   },
   modelRepair: {
-    enabled: true,
+    // Formatting and tool mistakes must remain visible to the calling agent.
+    // Model retries hide the original failure and can add a slow, surprising
+    // second model call, so this is deliberately opt-in rather than default-on.
+    enabled: false,
     provider: 'openrouter',
     model: 'openai/gpt-oss-20b',
     temperature: 0.1,

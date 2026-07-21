@@ -146,3 +146,36 @@ test('respects maxAttempts and does not call model when limit is 1', async () =>
   assert.equal(result.result.success, false);
   assert.ok(result.summaryLines.some((line) => line.includes('failed after 1 attempts')));
 });
+
+test('keeps model repair disabled unless an agent explicitly opts in', async () => {
+  const sandbox = new MockSandbox(() => ({ success: false, output: '', error: 'SyntaxError: broken' }));
+  let modelCalls = 0;
+  const session = {
+    agent: {
+      config: {
+        sandbox: 'local',
+        actionAutoFix: {
+          enabled: true,
+          maxAttempts: 2,
+          deterministic: { enabled: false },
+        },
+      },
+    },
+    sandbox,
+  } as any;
+  const engine = new ActionAutoFixEngine(session, {
+    repairWithModel: async () => {
+      modelCalls += 1;
+      return { repairedCode: "console.log('fixed');", note: 'should not run' };
+    },
+  });
+
+  const result = await engine.repairAndRetry({
+    originalCode: 'broken(',
+    initialResult: { success: false, output: '', error: 'SyntaxError: broken' },
+    env: {},
+  });
+
+  assert.equal(modelCalls, 0);
+  assert.equal(result.result.success, false);
+});

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, rm } from 'node:fs/promises';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -7,10 +7,12 @@ import { v7 as uuidv7 } from 'uuid';
 
 import type { ThreadLaunchProfile } from '@telos/code-contracts/telos';
 import { TerminalService } from './TerminalService.js';
+import { WorkspaceSnapshotService } from './WorkspaceSnapshotService.js';
 import { ThreadStore } from './thread-store/ThreadStore.js';
 
 async function fixture(
   run: (terminals: TerminalService, store: ThreadStore, threadId: string, directory: string) => Promise<void>,
+  workspaceSnapshots?: WorkspaceSnapshotService,
 ): Promise<void> {
   const directory = join(tmpdir(), `telos-terminal-${uuidv7()}`);
   await mkdir(directory, { recursive: true });
@@ -27,7 +29,7 @@ async function fixture(
     reasoning: 'high',
   };
   const thread = store.createThread({ launchProfile: profile });
-  const terminals = new TerminalService(store);
+  const terminals = new TerminalService(store, workspaceSnapshots);
   try {
     await run(terminals, store, thread.id, directory);
   } finally {
@@ -51,6 +53,27 @@ test('runs commands through a durable visible terminal and persists the result',
     assert.equal(persisted?.status, 'exited');
     assert.match(persisted?.history || '', /terminal-ok/u);
   });
+});
+
+test('does not snapshot the workspace for a finite read-only terminal command', async () => {
+  let snapshots = 0;
+  const workspaceSnapshots = {
+    snapshot: async () => {
+      snapshots += 1;
+      return {};
+    },
+  } as unknown as WorkspaceSnapshotService;
+  await fixture(async (terminals, _store, threadId, directory) => {
+    await writeFile(join(directory, 'DESIGN.md'), '# Design\n', 'utf8');
+    const result = await terminals.run({
+      threadId,
+      command: process.platform === 'win32' ? 'type DESIGN.md' : 'cat DESIGN.md',
+      timeoutMs: 10_000,
+    });
+    assert.equal(result.success, true);
+    assert.match(result.stdout, /Design/u);
+  }, workspaceSnapshots);
+  assert.equal(snapshots, 0);
 });
 
 test('supports attach, resize, clear, restart, close, and rejects cwd escape', async () => {
