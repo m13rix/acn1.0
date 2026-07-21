@@ -227,7 +227,7 @@ export class AdaptiveStepContextService {
   }
 
   recordStep(input: PendingStepInput): void {
-    const { session, messages, stepNumber } = input;
+    const { session, messages } = input;
     if (!isEnabled(session.agent)) return;
 
     const sessionRecord = this.getOrCreateSession(session);
@@ -251,7 +251,10 @@ export class AdaptiveStepContextService {
 
     const previous = sessionRecord.steps[sessionRecord.steps.length - 1];
     const beforePrevious = sessionRecord.steps[sessionRecord.steps.length - 2];
-    const index = typeof stepNumber === 'number' ? stepNumber : sessionRecord.steps.length;
+    // Provider runtimes number tool-loop steps from zero for every user turn.
+    // This service owns a durable session timeline, so its identifiers must be
+    // monotonic across turns instead of reusing the runtime-local counter.
+    const index = sessionRecord.steps.length;
     const record: AdaptiveStepRecord = {
       id: `${session.id}:${index}:${Date.now().toString(36)}`,
       sessionId: session.id,
@@ -309,28 +312,11 @@ export class AdaptiveStepContextService {
   }
 
   compactMessagesForPrompt(session: Session, messages: Message[]): Message[] {
-    if (!isPruningEnabled(session.agent)) {
-      return messages.map(message => this.cloneMessage(message));
-    }
-
-    const sessionRecord = this.sessions.get(session.id);
-    if (!sessionRecord || sessionRecord.steps.length < 2) {
-      return messages.map(message => this.cloneMessage(message));
-    }
-
-    const threshold = session.agent.config.adaptiveStepContext?.pruning?.heatThreshold ?? DEFAULT_PRUNING_HEAT_THRESHOLD;
-    const heatByStep = this.scoreHeatByStep(sessionRecord);
-
-    return messages.map(message => {
-      if (message.content.includes('<ACTIVE_INSTRUCTION_ALGORITHM_STEP>')) {
-        return this.cloneMessage(message);
-      }
-      const stepIndex = message.adaptiveStepIndex;
-      if (typeof stepIndex !== 'number') return this.cloneMessage(message);
-      const heat = heatByStep.get(stepIndex);
-      if (heat === undefined || heat >= threshold) return this.cloneMessage(message);
-      return this.compactColdMessage(message, stepIndex, heat);
-    });
+    // Adaptive context is currently observational. Keep recording/embedding
+    // steps for the timeline and future redesign, but never replace or remove
+    // a message from the model's context based on a heat score.
+    void session;
+    return messages.map(message => this.cloneMessage(message));
   }
 
   viewStep(sessionId: string, stepNumber: number): string {
