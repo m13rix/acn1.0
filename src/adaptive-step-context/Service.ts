@@ -201,6 +201,7 @@ export class AdaptiveStepContextService {
   private static instance: AdaptiveStepContextService | null = null;
   private readonly sessions = new Map<string, AdaptiveSessionRecord>();
   private readonly embeddingPromises = new Set<Promise<void>>();
+  private readonly goalEmbeddingsInFlight = new Set<string>();
 
   static getInstance(): AdaptiveStepContextService {
     if (!this.instance) {
@@ -213,17 +214,7 @@ export class AdaptiveStepContextService {
     if (!isEnabled(session.agent)) return;
 
     const record = this.getOrCreateSession(session);
-    if (record.goal && !record.goalEmbedding && record.goalEmbeddingStatus === 'pending') {
-      this.queueEmbedding(async () => {
-        try {
-          record.goalEmbedding = await embedText(record.goal, record.embeddingModel, undefined, 'adaptive.goal', record.embeddingProvider);
-          record.goalEmbeddingStatus = 'ready';
-        } catch (error) {
-          record.goalEmbeddingStatus = 'error';
-          record.goalEmbeddingError = error instanceof Error ? error.message : String(error);
-        }
-      });
-    }
+    this.ensureGoalEmbedding(record, firstUserMessage(session));
 
     if (isDebugEnabled(session.agent)) {
       const { ensureAdaptiveStepContextServer } = await import('./server.js');
@@ -240,6 +231,7 @@ export class AdaptiveStepContextService {
     if (!isEnabled(session.agent)) return;
 
     const sessionRecord = this.getOrCreateSession(session);
+    this.ensureGoalEmbedding(sessionRecord, firstUserMessage(session));
     const assistantMessages = messages.filter(message => message.role === 'assistant');
     const toolMessages = messages.filter(message => message.role === 'tool');
     const assistant = assistantMessages[assistantMessages.length - 1];
@@ -453,6 +445,33 @@ export class AdaptiveStepContextService {
     };
     this.sessions.set(session.id, record);
     return record;
+  }
+
+  /**
+   * Sessions initialize before their first user message is appended. Fill the
+   * goal when the first completed step observes that message, then embed it in
+   * the background rather than blocking the agent loop.
+   */
+  private ensureGoalEmbedding(record: AdaptiveSessionRecord, goal: string): void {
+    if (!record.goal && goal) {
+      record.goal = goal;
+      record.goalEmbeddingStatus = 'pending';
+      this.persistSession(record);
+    }
+    if (!record.goal || record.goalEmbedding || record.goalEmbeddingStatus !== 'pending'
+      || this.goalEmbeddingsInFlight.has(record.id)) return;
+    this.goalEmbeddingsInFlight.add(record.id);
+    this.queueEmbedding(async () => {
+      try {
+        record.goalEmbedding = await embedText(record.goal, record.embeddingModel, undefined, 'adaptive.goal', record.embeddingProvider);
+        record.goalEmbeddingStatus = 'ready';
+      } catch (error) {
+        record.goalEmbeddingStatus = 'error';
+        record.goalEmbeddingError = error instanceof Error ? error.message : String(error);
+      } finally {
+        this.goalEmbeddingsInFlight.delete(record.id);
+      }
+    });
   }
 
   private queueEmbedding(task: () => Promise<void>): void {

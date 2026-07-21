@@ -109,10 +109,6 @@ export class ThreadService {
   private readonly subscribers = new Map<string, Set<ThreadEventSubscriber>>();
   private readonly managedChildJobs = new Map<string, ManagedChildJob>();
   private readonly sharedChildrenByWorkspace = new Map<string, Set<Promise<void>>>();
-  // A Telos Code thread must be visible before its first full workspace snapshot finishes.
-  // The snapshot remains a hard execution boundary, so no agent can change the workspace
-  // before the baseline that makes rewind safe has completed.
-  private readonly pendingBaselineCheckpoints = new Map<string, Promise<void>>();
   private readonly workspaceSnapshots: WorkspaceSnapshotService | undefined;
   readonly terminals: TerminalService;
   readonly git: GitService;
@@ -177,7 +173,6 @@ export class ThreadService {
     reasoning: ReasoningEffort;
     parentThreadId?: string | null;
     title?: string;
-    deferBaseline?: boolean;
   }): Promise<HarnessThread> {
     const project = this.store.getProject(input.projectId);
     if (!project) throw new Error(`Project not found: ${input.projectId}`);
@@ -214,18 +209,6 @@ export class ThreadService {
       launchProfile,
       title: input.title,
     });
-    if (this.workspaceSnapshots) {
-      if (input.deferBaseline) {
-        this.deferBaselineCheckpoint(thread);
-        return thread;
-      }
-      try {
-        await this.createAutomaticCheckpoint(thread, null, 'Thread baseline');
-      } catch (error) {
-        this.store.deleteThread(thread.id);
-        throw error;
-      }
-    }
     return thread;
   }
 
@@ -507,7 +490,6 @@ export class ThreadService {
       throw new Error('File save conflict: the harness file changed after it was opened.');
     }
     const bytes = decodeBase64(input.contentBase64);
-    await this.createAutomaticCheckpoint(thread, null, `Before file edit: ${relativePath}`);
     await mkdir(dirname(target), { recursive: true });
     const temporary = `${target}.telos-${uuidv7()}.tmp`;
     try {
@@ -516,7 +498,6 @@ export class ThreadService {
     } finally {
       await rm(temporary, { force: true }).catch(() => undefined);
     }
-    await this.createAutomaticCheckpoint(thread, null, `After file edit: ${relativePath}`);
     const revision = sha256(bytes);
     this.emit(thread.id, 'activity', {
       turnId: null,
@@ -591,9 +572,11 @@ export class ThreadService {
     const previous = this.store.getExecutorSnapshot(job.thread.id);
 
     try {
-      await this.waitForBaselineCheckpoint(job.thread);
-      if (abortController.signal.aborted) throw abortController.signal.reason;
-      await this.createAutomaticCheckpoint(job.thread, job.turn.id, 'Before turn');
+      await this.createAutomaticCheckpoint(
+        job.thread,
+        previous?.activeContextTurnId ?? null,
+        'Before turn',
+      );
       const result = await this.executionAdapter.execute({
         thread: job.thread,
         turn: job.turn,
@@ -630,6 +613,25 @@ export class ThreadService {
           onCli: (command) => this.emitToolActivity(job, 'terminal', command),
           onFile: (filename) => this.emitToolActivity(job, 'file', filename),
           onObservation: (output) => this.emitToolActivity(job, 'observation', output),
+          onMemoryHintsRetrieved: (content, score) => {
+            this.emit(job.thread.id, 'activity', {
+              turnId: job.turn.id,
+              activityType: 'memory-hints',
+              state: 'retrieved',
+              text: content,
+              score,
+              final: true,
+            });
+          },
+          onMemoryHintsSearched: (score) => {
+            this.emit(job.thread.id, 'activity', {
+              turnId: job.turn.id,
+              activityType: 'memory-hints',
+              state: 'searched',
+              score,
+              final: true,
+            });
+          },
           onModelSelected: (model, provider, reason) =>
             this.emit(job.thread.id, 'activity', {
               turnId: job.turn.id,
@@ -677,7 +679,6 @@ export class ThreadService {
         });
       }
       this.store.saveExecutorSnapshot(job.thread.id, result.snapshot, job.turn.id);
-      await this.createAutomaticCheckpoint(job.thread, job.turn.id, 'After completed turn');
       const completed = this.store.updateTurn(job.turn.id, 'completed');
       this.store.setThreadStatus(job.thread.id, 'idle', job.turn.id);
       this.emit(job.thread.id, 'activity', {
@@ -701,19 +702,6 @@ export class ThreadService {
         });
       }
       const message = error instanceof Error ? error.message : String(error);
-      await this.createAutomaticCheckpoint(
-        job.thread,
-        job.turn.id,
-        stopped ? 'After stopped turn' : 'After failed turn',
-      ).catch((checkpointError) => {
-        this.emit(job.thread.id, 'activity', {
-          turnId: job.turn.id,
-          activityType: 'checkpoint',
-          state: 'failed',
-          error: checkpointError instanceof Error ? checkpointError.message : String(checkpointError),
-          final: true,
-        });
-      });
       const completed = this.store.updateTurn(job.turn.id, stopped ? 'stopped' : 'failed', {
         error: stopped ? null : message,
       });
@@ -1154,45 +1142,6 @@ export class ThreadService {
     });
   }
 
-  private deferBaselineCheckpoint(thread: HarnessThread): void {
-    this.emit(thread.id, 'activity', {
-      turnId: null,
-      activityType: 'checkpoint',
-      state: 'creating-baseline',
-      name: 'Thread baseline',
-      final: true,
-    });
-    const pending = this.createAutomaticCheckpoint(thread, null, 'Thread baseline');
-    this.pendingBaselineCheckpoints.set(thread.id, pending);
-    void pending.catch((error) => {
-      this.emit(thread.id, 'activity', {
-        turnId: null,
-        activityType: 'checkpoint',
-        state: 'failed',
-        name: 'Thread baseline',
-        error: error instanceof Error ? error.message : String(error),
-        final: true,
-      });
-    }).finally(() => {
-      if (this.pendingBaselineCheckpoints.get(thread.id) === pending) {
-        this.pendingBaselineCheckpoints.delete(thread.id);
-      }
-    });
-  }
-
-  private async waitForBaselineCheckpoint(thread: HarnessThread): Promise<void> {
-    const pending = this.pendingBaselineCheckpoints.get(thread.id);
-    if (!pending) return;
-    this.emit(thread.id, 'activity', {
-      turnId: null,
-      activityType: 'checkpoint',
-      state: 'waiting-for-baseline',
-      name: 'Thread baseline',
-      final: true,
-    });
-    await pending;
-  }
-
   private emit(threadId: string, type: string, payload: Record<string, unknown>): StoredThreadEvent {
     const event = this.store.appendEvent(threadId, type, payload);
     for (const subscriber of this.subscribers.get(threadId) || []) subscriber(event);
@@ -1248,6 +1197,13 @@ export class ThreadService {
 }
 
 export class HarnessThreadExecutionAdapter implements ThreadExecutionAdapter {
+  private readonly sessions = new Map<string, Session>();
+  private readonly activeServiceInputs = new Map<string, {
+    thread: HarnessThread;
+    turn: StoredTurn;
+    callbacks: ThreadExecutionCallbacks;
+  }>();
+
   constructor(
     private readonly workspaceSnapshots?: WorkspaceSnapshotService,
     private readonly agentLoader = new AgentLoader(),
@@ -1261,28 +1217,48 @@ export class HarnessThreadExecutionAdapter implements ThreadExecutionAdapter {
     signal: AbortSignal;
     callbacks: ThreadExecutionCallbacks;
   }): Promise<ThreadExecutionResult> {
-    const source = await this.agentLoader.loadByName(input.thread.launchProfile.agentName);
-    if (!source) throw new Error(`Agent not found: ${input.thread.launchProfile.agentName}`);
-    const agent = this.resolveAgent(source, input.thread.launchProfile);
-    const runtime = resolveTextAgentRuntime(agent);
-    const tools = await loadAgentTools(agent, this.toolLoader, ['message']);
-    const workspacePath = input.thread.launchProfile.worktreePath
-      || input.thread.launchProfile.workspacePath;
-    const sandbox = new LocalSandbox({
-      existingPath: workspacePath,
-      serviceHandler: (request) => this.handleServiceRequest(request, input),
-    });
-    const session = new Session({
-      agent,
-      provider: runtime.provider,
-      syntax: runtime.syntax,
-      loop: runtime.loop,
-      tools,
-      sandbox,
-    });
-    await session.initialize();
-    try {
+    let session = this.sessions.get(input.thread.id);
+    if (!session) {
+      const source = await this.agentLoader.loadByName(input.thread.launchProfile.agentName);
+      if (!source) throw new Error(`Agent not found: ${input.thread.launchProfile.agentName}`);
+      const agent = this.resolveAgent(source, input.thread.launchProfile);
+      const runtime = resolveTextAgentRuntime(agent);
+      const tools = await loadAgentTools(agent, this.toolLoader, ['message']);
+      const workspacePath = input.thread.launchProfile.worktreePath
+        || input.thread.launchProfile.workspacePath;
+      const threadId = input.thread.id;
+      const sandbox = new LocalSandbox({
+        existingPath: workspacePath,
+        serviceHandler: (request) => {
+          const active = this.activeServiceInputs.get(threadId);
+          if (!active) throw new Error('No active execution context for this thread.');
+          return this.handleServiceRequest(request, active);
+        },
+      });
+      session = new Session({
+        id: threadId,
+        agent,
+        provider: runtime.provider,
+        syntax: runtime.syntax,
+        loop: runtime.loop,
+        tools,
+        sandbox,
+      });
       if (input.previousSnapshot) session.applySnapshot(input.previousSnapshot);
+      await session.initialize();
+      this.sessions.set(threadId, session);
+    } else if (input.previousSnapshot) {
+      // Persisted state is authoritative: this also makes a rewind take effect
+      // without destroying the warm sandbox or adaptive thread context.
+      session.applySnapshot(input.previousSnapshot);
+    }
+
+    this.activeServiceInputs.set(input.thread.id, {
+      thread: input.thread,
+      turn: input.turn,
+      callbacks: input.callbacks,
+    });
+    try {
       const callbacks: ExecutorCallbacks = {
         ...input.callbacks,
         onTextDone: (fullText) => {
@@ -1293,7 +1269,7 @@ export class HarnessThreadExecutionAdapter implements ThreadExecutionAdapter {
       const executor = new Executor(session, {
         stream: true,
         callbacks,
-        requireFinish: agent.config.requireFinish,
+        requireFinish: session.agent.config.requireFinish,
         signal: input.signal,
         // A thread is already durably checkpointed at turn completion. Cloning and
         // synchronously writing the complete (and often large) session before every
@@ -1306,7 +1282,7 @@ export class HarnessThreadExecutionAdapter implements ThreadExecutionAdapter {
       const response = await executor.execute(input.turn.inputText);
       return { response, snapshot: session.exportSnapshot() };
     } finally {
-      await session.cleanup();
+      this.activeServiceInputs.delete(input.thread.id);
     }
   }
 

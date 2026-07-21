@@ -32,6 +32,8 @@ export function formatLocalDeviceTime(now: Date = new Date()): string {
 }
 
 export interface SessionComponents {
+  /** Stable owner identity for durable threads that resume across turns. */
+  id?: string;
   agent: LoadedAgent;
   provider: Provider;
   syntax: SyntaxType;
@@ -173,7 +175,7 @@ export class Session {
   private executionState: SessionExecutionStateSnapshot | null = null;
 
   constructor(components: SessionComponents) {
-    this.id = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+    this.id = components.id || Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
     this.agent = components.agent;
     this.provider = components.provider;
     this.syntax = components.syntax;

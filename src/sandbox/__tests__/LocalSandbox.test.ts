@@ -333,6 +333,25 @@ test('action exposes files read/write/edit/search/list and code outline packages
   }
 });
 
+test('files treats a single leading slash as workspace-relative', async () => {
+  const tempRoot = await mkdtemp(join(process.cwd(), 'sandboxes', 'test-root-relative-files-'));
+  const sandbox = new LocalSandbox({ baseDir: tempRoot });
+
+  try {
+    await sandbox.initialize([]);
+    const result = await sandbox.execute([
+      'await files.write("README.md", "workspace root");',
+      'console.log(await files.read("/README.md"));',
+    ].join('\n'));
+
+    assert.equal(result.success, true, result.error);
+    assert.match(result.output, /workspace root/);
+  } finally {
+    await sandbox.cleanup();
+    await rmBestEffort(tempRoot);
+  }
+});
+
 test('files search and raw read work with repo-style action snippets', async () => {
   const tempRoot = await mkdtemp(join(process.cwd(), 'sandboxes', 'test-files-runtime-'));
   const sandbox = new LocalSandbox({ baseDir: tempRoot });

@@ -120,7 +120,7 @@ test('stop records partial output and lets the queued follow-up continue', async
   });
 });
 
-test('creates authoritative before and after workspace checkpoints for a root turn', async () => {
+test('creates one workspace checkpoint before each root turn', async () => {
   const directory = join(tmpdir(), `telos-thread-checkpoints-${uuidv7()}`);
   const snapshotRoot = join(tmpdir(), `telos-snapshot-cas-${uuidv7()}`);
   await mkdir(directory, { recursive: true });
@@ -148,12 +148,12 @@ test('creates authoritative before and after workspace checkpoints for a root tu
 
     assert.deepEqual(
       snapshots.listSnapshots({ threadId: thread.id }).map((checkpoint) => checkpoint.name).sort(),
-      ['After completed turn', 'Before turn'],
+      ['Before turn'],
     );
     assert.equal(
       store.replayEvents(thread.id, 0).filter((event) => event.type === 'activity'
         && (event.payload as Record<string, unknown>)['activityType'] === 'checkpoint').length,
-      2,
+      1,
     );
   } finally {
     store.close();
@@ -162,23 +162,15 @@ test('creates authoritative before and after workspace checkpoints for a root tu
   }
 });
 
-test('returns a Telos Code thread before its baseline checkpoint, while holding execution safely', async () => {
+test('creates Telos Code threads without a baseline scan and checkpoints before execution', async () => {
   const directory = join(tmpdir(), `telos-thread-deferred-baseline-${uuidv7()}`);
   await mkdir(directory, { recursive: true });
   const store = await ThreadStore.open({ databasePath: join(directory, 'threads.db') });
-  let releaseBaseline!: () => void;
-  const baselineReleased = new Promise<void>((resolve) => { releaseBaseline = resolve; });
-  let baselineStarted!: () => void;
-  const baselineStartedPromise = new Promise<void>((resolve) => { baselineStarted = resolve; });
   let snapshots = 0;
   let executed = false;
   const snapshotService = {
     async snapshot() {
       snapshots += 1;
-      if (snapshots === 1) {
-        baselineStarted();
-        await baselineReleased;
-      }
       return { id: `checkpoint-${snapshots}` };
     },
   } as unknown as WorkspaceSnapshotService;
@@ -195,23 +187,17 @@ test('returns a Telos Code thread before its baseline checkpoint, while holding 
   const service = new ThreadService(store, { executionAdapter: adapter, workspaceSnapshots: snapshotService });
   try {
     const project = store.createProject({ path: directory });
-    const creation = service.createThread({
+    const thread = await service.createThread({
       projectId: project.id,
       agentName: 'Telos-Code',
       providerId: 'opencode',
       modelId: 'deepseek-v4-flash',
       reasoning: 'medium',
-      deferBaseline: true,
     });
-    await baselineStartedPromise;
-    const thread = await creation;
-    const turn = service.enqueueTurn({ threadId: thread.id, text: 'wait for safety baseline' });
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    assert.equal(executed, false);
-
-    releaseBaseline();
-    assert.equal((await turn.completed).status, 'completed');
+    assert.equal(snapshots, 0);
+    assert.equal((await service.enqueueTurn({ threadId: thread.id, text: 'start promptly' }).completed).status, 'completed');
     assert.equal(executed, true);
+    assert.equal(snapshots, 1);
   } finally {
     store.close();
     await rm(directory, { recursive: true, force: true });
@@ -266,6 +252,31 @@ test('persists action-worker questions and accepts only the first interface answ
       store.replayEvents(thread.id, 0).some((event) =>
         event.type === 'message' && (event.payload as Record<string, unknown>).text === 'Selected a'),
     );
+  });
+});
+
+test('publishes retrieved memory hints as durable thread activity', async () => {
+  const adapter: ThreadExecutionAdapter = {
+    async execute(input) {
+      input.callbacks.onMemoryHintsRetrieved?.('Prefer the project design tokens.', 0.82);
+      return {
+        response: 'done',
+        snapshot: { messages: [], contextFiles: [], surfacedMemoryFactIds: [], injectedMemoryHints: [] },
+      };
+    },
+  };
+  await fixture(adapter, async (service, store, directory) => {
+    const project = store.createProject({ path: directory });
+    const thread = store.createThread({ launchProfile: profile(project.id, directory) });
+    await service.enqueueTurn({ threadId: thread.id, text: 'use memory' }).completed;
+    assert.ok(store.replayEvents(thread.id, 0).some((event) => {
+      const payload = event.payload as Record<string, unknown>;
+      return event.type === 'activity'
+        && payload.activityType === 'memory-hints'
+        && payload.state === 'retrieved'
+        && payload.text === 'Prefer the project design tokens.'
+        && payload.score === 0.82;
+    }));
   });
 });
 
@@ -356,7 +367,7 @@ test('rewinds workspace checkpoint and executor context without deleting later h
     await second.completed;
     const firstCheckpoint = snapshots
       .listSnapshots({ threadId: thread.id })
-      .find((checkpoint) => checkpoint.turnId === first.turnId && checkpoint.name === 'After completed turn');
+      .find((checkpoint) => checkpoint.turnId === first.turnId && checkpoint.name === 'Before turn');
     assert.ok(firstCheckpoint);
 
     const result = await service.rewind({
@@ -378,7 +389,7 @@ test('rewinds workspace checkpoint and executor context without deleting later h
   }
 });
 
-test('browses and edits workspace files with revision conflicts and checkpoints', async () => {
+test('browses and edits workspace files with revision conflicts without extra checkpoints', async () => {
   const directory = join(tmpdir(), `telos-thread-files-${uuidv7()}`);
   const workspace = join(directory, 'workspace');
   const snapshotRoot = join(tmpdir(), `telos-thread-files-cas-${uuidv7()}`);
@@ -426,12 +437,7 @@ test('browses and edits workspace files with revision conflicts and checkpoints'
     assert.equal(await readFile(join(workspace, 'src', 'new.txt'), 'utf8'), 'uploaded');
     assert.deepEqual(
       service.store.listCheckpoints({ threadId: thread.id }).map((checkpoint) => checkpoint.name).sort(),
-      [
-        'After file edit: src/app.ts',
-        'After file edit: src/new.txt',
-        'Before file edit: src/app.ts',
-        'Before file edit: src/new.txt',
-      ],
+      [],
     );
     await assert.rejects(service.readFile(thread.id, '../threads.db'), /escapes the thread workspace/iu);
   } finally {
