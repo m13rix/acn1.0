@@ -3260,14 +3260,27 @@ export class TelegramService {
         const apiPort = this.getInternalApiPort();
 
         await new Promise<void>((resolve, reject) => {
-            this.server = this.app.listen(apiPort, () => {
-                const addr = this.server?.address() as AddressInfo;
+            const server = this.app.listen(apiPort);
+            this.server = server;
+            const onListening = () => {
+                const address = server.address();
+                if (!address || typeof address === 'string') {
+                    reject(new Error(`Internal API did not expose a TCP address on port ${apiPort}.`));
+                    return;
+                }
+                const addr = address as AddressInfo;
                 this.apiUrl = `http://localhost:${addr.port}`;
                 process.env.TELOS_API_URL = this.apiUrl; // Provide globally to agents
                 console.log(chalk.gray(`Internal API listening on ${this.apiUrl}`));
                 resolve();
-            });
-            this.server.once('error', reject);
+            };
+            const onError = (error: Error & { code?: string }) => {
+                reject(error.code === 'EADDRINUSE'
+                    ? new Error(`Internal API port ${apiPort} is already in use. Set TELOS_INTERNAL_API_PORT to another port or stop the process using it.`)
+                    : error);
+            };
+            server.once('listening', onListening);
+            server.once('error', onError);
         });
 
         if (readBooleanEnv('TELOS_DISABLE_TELEGRAM_BOT')) {
