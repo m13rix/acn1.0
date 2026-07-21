@@ -69,6 +69,42 @@ export function validateAgentConfig(config: AgentConfig): void {
   if (config.preserveSession !== undefined && typeof config.preserveSession !== 'boolean') {
     throw new Error('preserveSession must be a boolean when provided.');
   }
+
+  if (config.preserveReasoning !== undefined && typeof config.preserveReasoning !== 'boolean') {
+    throw new Error('preserveReasoning must be a boolean when provided.');
+  }
+
+  if (config.suppressFinalOutput !== undefined && typeof config.suppressFinalOutput !== 'boolean') {
+    throw new Error('suppressFinalOutput must be a boolean when provided.');
+  }
+
+
+  if (config.actionToolPolicy !== undefined) {
+    if (!isPlainObject(config.actionToolPolicy)) {
+      throw new Error('actionToolPolicy must be an object when provided.');
+    }
+    if (
+      config.actionToolPolicy.allowImplicitTools !== undefined
+      && typeof config.actionToolPolicy.allowImplicitTools !== 'boolean'
+    ) {
+      throw new Error('actionToolPolicy.allowImplicitTools must be a boolean when provided.');
+    }
+    if (
+      config.actionToolPolicy.allowImports !== undefined
+      && typeof config.actionToolPolicy.allowImports !== 'boolean'
+    ) {
+      throw new Error('actionToolPolicy.allowImports must be a boolean when provided.');
+    }
+    if (config.actionToolPolicy.builtins !== undefined) {
+      const allowedBuiltins = new Set(['files', 'terminal', 'code', 'computer']);
+      if (
+        !Array.isArray(config.actionToolPolicy.builtins)
+        || config.actionToolPolicy.builtins.some((name) => !allowedBuiltins.has(String(name)))
+      ) {
+        throw new Error('actionToolPolicy.builtins may contain only files, terminal, code, and computer.');
+      }
+    }
+  }
 }
 
 export function getDefaultAgentModality(): AgentModality {

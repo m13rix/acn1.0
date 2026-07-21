@@ -17,6 +17,7 @@ modelSwitching:
 tools:
   - context
   - message
+  - telos
 
 memoryToolDocs: false
 
@@ -33,6 +34,7 @@ adaptiveStepContext:
 
 injectAgentsList: false
 requireFinish: false
+preserveSession: true
 
 interfaceOptions:
   launchDefault: true

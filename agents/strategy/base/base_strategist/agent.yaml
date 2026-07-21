@@ -41,7 +41,7 @@ memory:
     enabled: true
     toolResponses:
       enabled: false
-    userPhraseWeighting: "llm"
+    userPhraseWeighting: "embedding"
 
   categories:
     - name: superhuman_candidate_generation

@@ -5,9 +5,13 @@ import { randomUUID } from 'crypto';
 import type {
   AdaptiveScoreStats,
   AgentContextState,
+  AdvisorInstructionsState,
+  AutomaticTriggerState,
   ConversationRecord,
+  ConversationLogRecord,
   PendingSpeakerProposal,
   RealtimeAdvisorState,
+  RealtimeAdvisorTriggerType,
   RealtimeChunkMetadata,
   SpeakerRecord,
   StoredAudioChunk,
@@ -19,6 +23,8 @@ const STATE_VERSION = 1;
 const MAX_SCORE_SAMPLES = 500;
 const STATE_WRITE_RETRIES = 8;
 const STATE_WRITE_RETRY_BASE_MS = 25;
+const DEFAULT_AUTOMATIC_TRIGGER_TYPE: RealtimeAdvisorTriggerType = 'debounce';
+const DEFAULT_AUTOMATIC_TRIGGER_VALUE = 10;
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -53,6 +59,15 @@ function createEmptyScoreStats(): AdaptiveScoreStats {
   };
 }
 
+function createDefaultAutomaticTrigger(timestamp = nowIso()): AutomaticTriggerState {
+  return {
+    type: DEFAULT_AUTOMATIC_TRIGGER_TYPE,
+    value: DEFAULT_AUTOMATIC_TRIGGER_VALUE,
+    updatedAt: timestamp,
+    lineCountSinceLastTrigger: 0,
+  };
+}
+
 function createEmptyState(): RealtimeAdvisorState {
   return {
     version: STATE_VERSION,
@@ -62,14 +77,44 @@ function createEmptyState(): RealtimeAdvisorState {
     pendingSpeakers: {},
     unknownBuffers: {},
     scoreStats: createEmptyScoreStats(),
+    automaticTrigger: createDefaultAutomaticTrigger(),
+    logs: [],
+    advisorInstructions: {
+      text: '',
+    },
   };
 }
 
 function normalizeState(raw: Partial<RealtimeAdvisorState> | null | undefined): RealtimeAdvisorState {
+  const fallbackTrigger = createDefaultAutomaticTrigger();
+  const rawTrigger = raw?.automaticTrigger;
+  const triggerType = rawTrigger?.type === 'every' || rawTrigger?.type === 'debounce'
+    ? rawTrigger.type
+    : fallbackTrigger.type;
+  const rawTriggerValue = Number(rawTrigger?.value);
+  const triggerValue = Number.isFinite(rawTriggerValue) && rawTriggerValue > 0
+    ? rawTriggerValue
+    : fallbackTrigger.value;
+  const lineCountSinceLastTrigger = Number.isFinite(Number(rawTrigger?.lineCountSinceLastTrigger))
+    ? Math.max(0, Math.floor(Number(rawTrigger?.lineCountSinceLastTrigger)))
+    : 0;
+
+  const chunks = raw?.chunks ?? {};
+  for (const chunk of Object.values(chunks) as Array<StoredAudioChunk & { pyannote?: { diarizationJobId?: string; status?: NonNullable<StoredAudioChunk['assemblyAi']>['status']; error?: string } }>) {
+    if (!chunk.assemblyAi && chunk.pyannote) {
+      chunk.assemblyAi = {
+        transcriptId: chunk.pyannote.diarizationJobId,
+        status: chunk.pyannote.status || 'queued',
+        error: chunk.pyannote.error,
+      };
+      delete chunk.pyannote;
+    }
+  }
+
   return {
     version: STATE_VERSION,
     conversations: raw?.conversations ?? {},
-    chunks: raw?.chunks ?? {},
+    chunks,
     speakers: raw?.speakers ?? {},
     pendingSpeakers: raw?.pendingSpeakers ?? {},
     unknownBuffers: raw?.unknownBuffers ?? {},
@@ -77,6 +122,44 @@ function normalizeState(raw: Partial<RealtimeAdvisorState> | null | undefined): 
       ...createEmptyScoreStats(),
       ...(raw?.scoreStats ?? {}),
     },
+    automaticTrigger: {
+      type: triggerType,
+      value: triggerValue,
+      updatedAt: typeof rawTrigger?.updatedAt === 'string' ? rawTrigger.updatedAt : fallbackTrigger.updatedAt,
+      lineCountSinceLastTrigger,
+      lastTriggeredAt: typeof rawTrigger?.lastTriggeredAt === 'string' ? rawTrigger.lastTriggeredAt : undefined,
+      lastTriggerConversationId: typeof rawTrigger?.lastTriggerConversationId === 'string' ? rawTrigger.lastTriggerConversationId : undefined,
+      lastTriggerChunkId: typeof rawTrigger?.lastTriggerChunkId === 'string' ? rawTrigger.lastTriggerChunkId : undefined,
+      lastTriggerReason: typeof rawTrigger?.lastTriggerReason === 'string' ? rawTrigger.lastTriggerReason : undefined,
+    },
+    logs: Array.isArray(raw?.logs)
+      ? raw.logs
+        .filter((log): log is ConversationLogRecord =>
+          !!log
+          && typeof log.id === 'string'
+          && typeof log.createdAt === 'string'
+          && typeof log.text === 'string'
+        )
+        .slice(-1000)
+      : [],
+    advisorInstructions: {
+      text: typeof raw?.advisorInstructions?.text === 'string' ? raw.advisorInstructions.text : '',
+      updatedAt: typeof raw?.advisorInstructions?.updatedAt === 'string' ? raw.advisorInstructions.updatedAt : undefined,
+    },
+  };
+}
+
+function validateTriggerInput(type: string, value: number): { type: RealtimeAdvisorTriggerType; value: number } {
+  const normalizedType = type.trim().toLowerCase();
+  if (normalizedType !== 'debounce' && normalizedType !== 'every') {
+    throw new Error('Automatic trigger type must be "debounce" or "every".');
+  }
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error('Automatic trigger value must be a positive number.');
+  }
+  return {
+    type: normalizedType,
+    value: normalizedType === 'every' ? Math.max(1, Math.floor(value)) : value,
   };
 }
 
@@ -131,6 +214,86 @@ export class RealtimeAdvisorStore {
     return JSON.parse(JSON.stringify(this.state)) as RealtimeAdvisorState;
   }
 
+  getAutomaticTrigger(): AutomaticTriggerState {
+    return JSON.parse(JSON.stringify(this.state.automaticTrigger)) as AutomaticTriggerState;
+  }
+
+  async setAutomaticTrigger(type: string, value: number): Promise<AutomaticTriggerState> {
+    const validated = validateTriggerInput(type, value);
+    this.state.automaticTrigger = {
+      ...this.state.automaticTrigger,
+      type: validated.type,
+      value: validated.value,
+      updatedAt: nowIso(),
+      lineCountSinceLastTrigger: 0,
+    };
+    await this.save();
+    return this.getAutomaticTrigger();
+  }
+
+  async recordVoiceLineForAutomaticTrigger(): Promise<AutomaticTriggerState> {
+    const trigger = this.state.automaticTrigger;
+    trigger.lineCountSinceLastTrigger = Math.max(0, Math.floor(trigger.lineCountSinceLastTrigger || 0)) + 1;
+    trigger.updatedAt = nowIso();
+    await this.save();
+    return this.getAutomaticTrigger();
+  }
+
+  async markAutomaticTriggerFired(input: {
+    conversationId?: string;
+    chunkId?: string;
+    reason: string;
+  }): Promise<AutomaticTriggerState> {
+    const trigger = this.state.automaticTrigger;
+    trigger.lineCountSinceLastTrigger = 0;
+    trigger.lastTriggeredAt = nowIso();
+    trigger.lastTriggerConversationId = input.conversationId;
+    trigger.lastTriggerChunkId = input.chunkId;
+    trigger.lastTriggerReason = input.reason;
+    await this.save();
+    return this.getAutomaticTrigger();
+  }
+
+  async addLog(text: string): Promise<ConversationLogRecord> {
+    const normalized = String(text || '').trim();
+    if (!normalized) {
+      throw new Error('context.log.add(log): log must be a non-empty string.');
+    }
+    const timestamp = nowIso();
+    const record: ConversationLogRecord = {
+      id: compactId('log'),
+      createdAt: timestamp,
+      text: normalized,
+    };
+    this.state.logs.push(record);
+    if (this.state.logs.length > 1000) {
+      this.state.logs.splice(0, this.state.logs.length - 1000);
+    }
+    await this.save();
+    return { ...record };
+  }
+
+  listLogs(maxResults = 20): ConversationLogRecord[] {
+    const limit = Math.max(1, Math.min(200, Math.floor(maxResults)));
+    return this.state.logs
+      .slice(-limit)
+      .reverse()
+      .map((record) => ({ ...record }));
+  }
+
+  getAdvisorInstructions(): AdvisorInstructionsState {
+    return { ...this.state.advisorInstructions };
+  }
+
+  async setAdvisorInstructions(text: string): Promise<AdvisorInstructionsState> {
+    this.state.advisorInstructions = {
+      text: String(text || '').trim(),
+      updatedAt: nowIso(),
+    };
+    await this.save();
+    return this.getAdvisorInstructions();
+  }
+
   getConversation(conversationId: string): ConversationRecord | undefined {
     return this.state.conversations[conversationId];
   }
@@ -182,7 +345,7 @@ export class RealtimeAdvisorStore {
       mimeType: input.mimeType,
       quickTranscript,
       metadata: input.metadata.metadata,
-      pyannote: {
+      assemblyAi: {
         status: 'queued',
       },
     };
@@ -215,19 +378,112 @@ export class RealtimeAdvisorStore {
     return { chunk, conversation, quickEntry };
   }
 
+  async registerQuickChunk(input: {
+    metadata: RealtimeChunkMetadata;
+    conversationGapMs: number;
+  }): Promise<{ chunk: StoredAudioChunk; conversation: ConversationRecord; quickEntry?: TranscriptEntry; created: boolean }> {
+    const receivedAt = nowIso();
+    const clientTimestamp = this.normalizeTimestamp(input.metadata.timestamp, receivedAt);
+    const chunkId = input.metadata.chunkId?.trim() || compactId('chunk');
+    const existing = this.state.chunks[chunkId];
+    if (existing) {
+      const existingConversation = this.state.conversations[existing.conversationId];
+      if (!existingConversation) {
+        throw new Error(`Chunk ${chunkId} references missing conversation ${existing.conversationId}.`);
+      }
+      return {
+        chunk: existing,
+        conversation: existingConversation,
+        created: false,
+      };
+    }
+
+    const conversation = this.resolveConversationForTimestamp(clientTimestamp, input.conversationGapMs);
+    const quickTranscript = input.metadata.quickTranscript?.trim() || '';
+    const chunk: StoredAudioChunk = {
+      id: chunkId,
+      conversationId: conversation.id,
+      receivedAt,
+      clientTimestamp,
+      audioPath: '',
+      mimeType: '',
+      quickTranscript,
+      metadata: input.metadata.metadata,
+      assemblyAi: {
+        status: 'queued',
+      },
+    };
+
+    this.state.chunks[chunk.id] = chunk;
+    conversation.chunkIds.push(chunk.id);
+    conversation.updatedAt = receivedAt;
+    conversation.lastChunkAt = clientTimestamp;
+
+    let quickEntry: TranscriptEntry | undefined;
+    if (quickTranscript) {
+      quickEntry = {
+        id: compactId('entry'),
+        chunkId: chunk.id,
+        conversationId: conversation.id,
+        source: 'quick',
+        createdAt: receivedAt,
+        updatedAt: receivedAt,
+        startTime: clientTimestamp,
+        speakerLabel: '[...]',
+        text: quickTranscript,
+        final: false,
+        revision: 1,
+        agentMarker: compactId('tr'),
+      };
+      conversation.entries.push(quickEntry);
+    }
+
+    await this.save();
+    return { chunk, conversation, quickEntry, created: true };
+  }
+
+  async attachAudioToChunk(input: {
+    chunkId: string;
+    audioPath: string;
+    mimeType: string;
+    metadata: RealtimeChunkMetadata;
+  }): Promise<{ chunk: StoredAudioChunk; conversation: ConversationRecord }> {
+    const chunk = this.state.chunks[input.chunkId];
+    if (!chunk) {
+      throw new Error(`Cannot attach audio to missing chunk ${input.chunkId}.`);
+    }
+    chunk.audioPath = input.audioPath;
+    chunk.mimeType = input.mimeType;
+    chunk.metadata = {
+      ...(chunk.metadata || {}),
+      ...(input.metadata.metadata || {}),
+    };
+    if (!chunk.quickTranscript && input.metadata.quickTranscript?.trim()) {
+      chunk.quickTranscript = input.metadata.quickTranscript.trim();
+    }
+    chunk.assemblyAi = { status: 'queued' };
+    const conversation = this.state.conversations[chunk.conversationId];
+    if (!conversation) {
+      throw new Error(`Chunk ${input.chunkId} references missing conversation ${chunk.conversationId}.`);
+    }
+    conversation.updatedAt = nowIso();
+    await this.save();
+    return { chunk, conversation };
+  }
+
   async markChunkProcessing(
     chunkId: string,
-    status: NonNullable<StoredAudioChunk['pyannote']>['status'],
-    details?: { diarizationJobId?: string; error?: string },
+    status: NonNullable<StoredAudioChunk['assemblyAi']>['status'],
+    details?: { transcriptId?: string; error?: string },
   ): Promise<void> {
     const chunk = this.state.chunks[chunkId];
     if (!chunk) {
       return;
     }
 
-    chunk.pyannote = {
+    chunk.assemblyAi = {
       status,
-      diarizationJobId: details?.diarizationJobId ?? chunk.pyannote?.diarizationJobId,
+      transcriptId: details?.transcriptId ?? chunk.assemblyAi?.transcriptId,
       error: details?.error,
     };
     await this.save();

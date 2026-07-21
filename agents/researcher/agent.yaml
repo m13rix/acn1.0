@@ -1,5 +1,5 @@
 name: researcher
-description: High-quality research specialist. Uses search.answer as the default grounded search path, escalates to search.search / search.crawl / search.research when needed, and stores durable user context in memory.
+description: High-quality research specialist that discovers sources, reads decisive pages, builds claim-level evidence, and reports contradictions instead of trusting synthesized prose.
 
 model: gpt-5.4-mini
 provider: openai-codex

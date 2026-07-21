@@ -572,7 +572,17 @@ export async function llm<TJson = unknown>(
 ): Promise<TJson>;
 export async function llm(
   prompt: string,
-  schema: ZodTypeAny | JsonSchema,
+  options: { schema: ZodTypeAny | JsonSchema },
+  imagePath?: string
+): Promise<unknown>;
+export async function llm(
+  prompt: string,
+  schema?: undefined,
+  imagePath?: string
+): Promise<string>;
+export async function llm(
+  prompt: string,
+  schema?: ZodTypeAny | JsonSchema | { schema: ZodTypeAny | JsonSchema },
   imagePath?: string
 ): Promise<unknown> {
   return runStructuredLlm(prompt, schema, imagePath);

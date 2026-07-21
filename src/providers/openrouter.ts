@@ -514,6 +514,7 @@ export class OpenRouterProvider extends BaseProvider {
       case 'low':
         return { effort: 'low' };
       case 'high':
+      case 'xhigh':
         return { effort: 'high' };
       case 'medium':
       default:

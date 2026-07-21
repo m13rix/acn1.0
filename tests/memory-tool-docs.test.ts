@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { PromptBuilder } from '../src/core/PromptBuilder.ts';
 import { getEffectiveMemoryCategories } from '../src/core/memoryToolDocs.ts';
+import { resolveProjectMemoryCategory } from '../src/memory_system/projectCategory.ts';
 import type { LoadedAgent, LoadedTool } from '../src/types/index.ts';
 
 function makeTool(name: string, description = `${name} docs`): LoadedTool {
@@ -13,7 +14,7 @@ function makeTool(name: string, description = `${name} docs`): LoadedTool {
   };
 }
 
-function makeAgent(memoryToolDocs: boolean): LoadedAgent {
+function makeAgent(memoryToolDocs: boolean, projectCategory?: boolean | string): LoadedAgent {
   return {
     config: {
       name: 'test-agent',
@@ -24,6 +25,7 @@ function makeAgent(memoryToolDocs: boolean): LoadedAgent {
       memory: {
         enabled: true,
         categories: [{ name: 'core' }],
+        projectCategory,
       },
     },
     systemPromptContent: 'Base prompt.',
@@ -44,6 +46,17 @@ test('memoryToolDocs adds tooldoc categories for loaded tools', () => {
   ]);
 });
 
+test('projectCategory true adds the derived project category', () => {
+  const projectCategory = resolveProjectMemoryCategory(true);
+  const categories = getEffectiveMemoryCategories(makeAgent(false, true), []);
+
+  assert.ok(projectCategory);
+  assert.deepEqual(categories?.map((cat) => cat.name), [
+    'core',
+    projectCategory,
+  ]);
+});
+
 test('memoryToolDocs keeps full tool docs out of the system prompt', () => {
   const prompt = new PromptBuilder().build(
     makeAgent(true),
@@ -54,7 +67,7 @@ test('memoryToolDocs keeps full tool docs out of the system prompt', () => {
   );
 
   assert.match(prompt, /Available modules: `utils`, `search`/);
-  assert.match(prompt, /utils\.tools\.doc\("name"\)/);
+  assert.match(prompt, /tool\.help\(\)/);
   assert.doesNotMatch(prompt, /VERY_LONG_UTILS_DOC/);
   assert.doesNotMatch(prompt, /VERY_LONG_SEARCH_DOC/);
 });

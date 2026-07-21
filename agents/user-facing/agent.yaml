@@ -1,0 +1,31 @@
+name: user-facing
+description: the only agent to talk with the user, maintaining the interface identity.
+
+model: kimi-k2.6
+provider: opencode
+systemPrompt: prompts/system.md
+runPath: ./
+
+modelSwitching:
+  whitelist:
+    - kimi-k2.6
+  selector:
+    model: openai/gpt-oss-20b
+    provider: openrouter
+
+tools:
+  - message
+  - memory
+
+injectAgentsList: false
+requireFinish: false
+preserveSession: true
+preserveReasoning: false
+requireFinishHeartbeat: false
+suppressFinalOutput: true
+
+memory:
+  enabled: true
+
+loop: provider-tools
+syntax: markdown

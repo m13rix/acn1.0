@@ -14,3 +14,52 @@ declare module 'speaker' {
     on(event: string, listener: (...args: any[]) => void): this;
   }
 }
+
+declare module 'localtunnel' {
+  import { EventEmitter } from 'events';
+
+  export interface LocalTunnelOptions {
+    port: number;
+    host?: string;
+    subdomain?: string;
+    local_host?: string;
+    local_https?: boolean;
+    local_cert?: string;
+    local_key?: string;
+    local_ca?: string;
+    allow_invalid_cert?: boolean;
+  }
+
+  export interface LocalTunnel extends EventEmitter {
+    url: string;
+    cachedUrl?: string;
+    close(): void;
+  }
+
+  export type LocalTunnelCallback = (error?: Error | null, tunnel?: LocalTunnel) => void;
+
+  export default function localtunnel(options: LocalTunnelOptions): Promise<LocalTunnel>;
+  export default function localtunnel(options: LocalTunnelOptions, callback: LocalTunnelCallback): LocalTunnel;
+}
+
+declare module 'better-sqlite3' {
+  export interface RunResult {
+    changes: number;
+    lastInsertRowid: number | bigint;
+  }
+
+  export interface Statement {
+    run(...params: unknown[]): RunResult;
+    get(...params: unknown[]): unknown;
+    all(...params: unknown[]): unknown[];
+  }
+
+  export default class Database {
+    constructor(filename: string);
+    pragma(source: string): unknown;
+    exec(source: string): this;
+    prepare(source: string): Statement;
+    transaction<T extends (...args: any[]) => any>(handler: T): T;
+    close(): void;
+  }
+}

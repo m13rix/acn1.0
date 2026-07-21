@@ -291,19 +291,20 @@ export class GeminiProvider extends BaseProvider {
 
   private mapReasoning(model: string, reasoning: NonNullable<ProviderConfig['reasoning']>): any {
     const m = model.toLowerCase();
+    const effectiveReasoning = reasoning === 'xhigh' ? 'high' : reasoning;
 
     // Gemini 3 models use thinkingLevel
     if (m.includes('gemini-3')) {
       let level: string;
       if (m.includes('gemini-3-flash')) {
         // flash: low/medium/high behave similarly, off maps to minimal
-        level = reasoning === 'off' ? 'minimal' : reasoning;
+        level = effectiveReasoning === 'off' ? 'minimal' : effectiveReasoning;
       } else if (m.includes('gemini-3-pro')) {
         // pro: 'off' and 'medium' not supported; default is 'high'
-        level = (reasoning === 'off' || reasoning === 'medium') ? 'high' : reasoning;
+        level = (effectiveReasoning === 'off' || effectiveReasoning === 'medium') ? 'high' : effectiveReasoning;
       }  else {
         // fallback for unknown gemini-3 variants
-        level = reasoning === 'off' ? 'minimal' : reasoning;
+        level = effectiveReasoning === 'off' ? 'minimal' : effectiveReasoning;
       }
 
       if (!['minimal', 'low', 'medium', 'high'].includes(level)) {
@@ -315,7 +316,7 @@ export class GeminiProvider extends BaseProvider {
 
     // Other models use thinkingBudget
     let budget: number;
-    switch (reasoning) {
+    switch (effectiveReasoning) {
       case 'off':
         budget = 0;
         break;

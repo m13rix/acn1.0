@@ -12,7 +12,7 @@ export type ProviderName = 'gemini' | 'inception' | 'openrouter' | 'ollama' | 'o
 export function createProvider(name: ProviderName, apiKey?: string): Provider {
     const normalized = name.toLowerCase();
 
-    if (['gemini', 'inception', 'openrouter', 'ollama', 'kimi-code', 'openai-codex'].includes(normalized)) {
+    if (['gemini', 'inception', 'openrouter', 'ollama', 'vllm', 'kimi-code', 'openai-codex', 'opencode'].includes(normalized)) {
         return new AiSdkTextProvider(normalized, apiKey);
     }
 

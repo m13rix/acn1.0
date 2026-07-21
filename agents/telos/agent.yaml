@@ -1,0 +1,62 @@
+name: Telos
+description: Constitutional root agent for Project Arete. Reconstructs reality, decides what should happen, directs Executor, and delegates all expression to the user-facing identity.
+
+model: kimi-k3
+provider: opencode
+systemPrompt: prompts/system.md
+runPath: ./
+
+modelSwitching:
+  mode: whitelist
+  whitelist:
+    - kimi-k3
+  selector:
+    model: kimi-k3
+    provider: opencode
+
+tools:
+  - agents
+  - decision
+
+actionToolPolicy:
+  allowImplicitTools: false
+  builtins: []
+  allowImports: false
+
+memoryToolDocs: true
+
+memory:
+  enabled: true
+  embeddingProvider: openrouter
+  embeddingModel: qwen/qwen3-embedding-8b
+  memoryToolDocs: true
+
+  autoHints:
+    enabled: true
+    toolResponses:
+      enabled: false
+    userPhraseWeighting: embedding
+
+  categories:
+    - name: core_prompt_v1
+    - name: telos_constitution
+    - name: root_telos
+  projectCategory: true
+  includeUncategorized: true
+  fallbackCategory: core
+  searchMaxChains: 8
+
+adaptiveStepContext:
+  enabled: true
+  pruning:
+    enabled: true
+    heatThreshold: 0.6
+  debug:
+    enabled: true
+
+injectAgentsList: false
+requireFinish: true
+requireFinishHeartbeat: true
+preserveSession: true
+preserveReasoning: true
+suppressFinalOutput: true

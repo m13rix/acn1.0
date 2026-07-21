@@ -7,6 +7,7 @@ import { OpenRouterProvider } from '../src/providers/openrouter.js';
 import { OpenAICodexProvider } from '../src/providers/openai-codex/index.js';
 import { OpenAICodexAuthStore } from '../src/providers/openai-codex/auth/auth-store.js';
 import { OAuthOnlyModelSelectedViaApiProviderError } from '../src/providers/openai-codex/errors.js';
+import { buildCodexRequest } from '../src/providers/openai-codex/invoke.js';
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'telos-codex-provider-'));
@@ -68,6 +69,21 @@ test('OpenRouterProvider omits reasoning_content on assistant tool calls when re
   assert.equal(Object.hasOwn(request.messages[1] ?? {}, 'reasoning_content'), false);
 });
 
+test('xhigh stays native for Codex and falls back to high for OpenRouter', () => {
+  const codexRequest = buildCodexRequest(
+    [{ role: 'user', content: 'Solve this.' }],
+    { model: 'gpt-5.6-codex', reasoning: 'xhigh' },
+  );
+  assert.deepEqual(codexRequest.reasoning, { effort: 'xhigh' });
+
+  const openRouter = new OpenRouterProvider('test-key');
+  const openRouterRequest = openRouter.buildRequest(
+    [{ role: 'user', content: 'Solve this.' }],
+    { model: 'openai/gpt-5.6', reasoning: 'xhigh' },
+  );
+  assert.equal(openRouterRequest.reasoning?.effort, 'high');
+});
+
 test('OpenAICodexProvider completes using stored OAuth profile', async () => {
   await withTempDir(async (dir) => {
     const authStore = new OpenAICodexAuthStore(dir);
@@ -97,8 +113,19 @@ test('OpenAICodexProvider completes using stored OAuth profile', async () => {
           },
           async *stream(opts) {
             seenBody = opts.body;
+            assert.equal(opts.headers.originator, 'codex_cli_rs');
             yield { type: 'text.delta', delta: 'OK' };
-            yield { type: 'done' };
+            yield {
+              type: 'done',
+              usage: {
+                promptTokens: 50,
+                completionTokens: 5,
+                totalTokens: 55,
+                cachedPromptTokens: 40,
+                cacheWriteTokens: 10,
+                reasoningTokens: 2,
+              },
+            };
           },
         },
       }
@@ -110,6 +137,7 @@ test('OpenAICodexProvider completes using stored OAuth profile', async () => {
     );
 
     assert.equal(response.content, 'OK');
+    assert.equal(response.usage?.cachedPromptTokens, 40);
     assert.equal(seenBody?.stream, true);
   });
 });

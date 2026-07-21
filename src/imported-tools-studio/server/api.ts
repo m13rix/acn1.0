@@ -1,7 +1,7 @@
-import { Router } from 'express';
+import { Router, type Router as ExpressRouter } from 'express';
 import { ImportedToolsService } from '../../imported-tools/index.js';
 
-const router = Router();
+const router: ExpressRouter = Router();
 const service = new ImportedToolsService();
 
 router.get('/imports', async (_req, res) => {

@@ -6,6 +6,7 @@ import type {
   ProviderToolRequest,
   ProviderToolResponse,
 } from '../../types/index.js';
+import { createHash } from 'node:crypto';
 // @ts-ignore - mime-types doesn't have perfect TypeScript types
 import { lookup } from 'mime-types';
 
@@ -47,8 +48,9 @@ export function buildCodexRequest(
     include: reasoning ? ['reasoning.encrypted_content'] : [],
   };
   const cacheOptions = getPromptCacheOptions(config.providerOptions);
-  if (cacheOptions.promptCacheKey) {
-    request.prompt_cache_key = cacheOptions.promptCacheKey;
+  const promptCacheKey = cacheOptions.promptCacheKey || buildDefaultPromptCacheKey(request);
+  if (promptCacheKey) {
+    request.prompt_cache_key = promptCacheKey;
   }
 
   Object.keys(request).forEach((key) => {
@@ -58,6 +60,17 @@ export function buildCodexRequest(
   });
 
   return request;
+}
+
+function buildDefaultPromptCacheKey(request: Record<string, unknown>): string {
+  const stablePayload = JSON.stringify({
+    model: request.model,
+    instructions: request.instructions,
+    tools: request.tools,
+    tool_choice: request.tool_choice,
+    reasoning: request.reasoning,
+  });
+  return `telos-codex:${createHash('sha256').update(stablePayload).digest('hex').slice(0, 48)}`;
 }
 
 function getPromptCacheOptions(providerOptions: Record<string, unknown> | undefined): {
@@ -130,17 +143,7 @@ export function parseCodexResponse(response: any): ProviderToolResponse {
     reasoning,
     finishReason: mapFinishReason(response?.status),
     toolCalls,
-    usage: response?.usage
-      ? {
-          promptTokens: Number(response.usage.input_tokens ?? 0),
-          completionTokens: Number(response.usage.output_tokens ?? 0),
-          totalTokens: Number(response.usage.total_tokens ?? 0),
-          cachedPromptTokens: Number(response.usage.input_tokens_details?.cached_tokens ?? 0),
-          cacheWriteTokens: Number(response.usage.input_tokens_details?.cache_write_tokens ?? 0),
-          reasoningTokens: Number(response.usage.output_tokens_details?.reasoning_tokens ?? 0),
-          raw: response.usage,
-        }
-      : undefined,
+    usage: mapCodexUsage(response),
   };
 }
 
@@ -229,11 +232,49 @@ export function mapCodexSseEvent(
       state.textDone = true;
       out.push({ type: 'text.done' });
     }
-    out.push({ type: 'done' });
+    out.push({ type: 'done', usage: mapCodexUsage(payload) });
     return out;
   }
 
   return out;
+}
+
+function mapCodexUsage(payload: any): ProviderToolResponse['usage'] | undefined {
+  const usage = payload?.usage ?? payload?.response?.usage ?? payload?.token_usage;
+  if (!usage || typeof usage !== 'object') {
+    return undefined;
+  }
+
+  const inputTokens = Number(usage.input_tokens ?? usage.prompt_tokens ?? 0);
+  const outputTokens = Number(usage.output_tokens ?? usage.completion_tokens ?? 0);
+  const totalTokens = Number(usage.total_tokens ?? inputTokens + outputTokens);
+  const cachedPromptTokens = Number(
+    usage.input_tokens_details?.cached_tokens
+    ?? usage.prompt_tokens_details?.cached_tokens
+    ?? usage.cached_input_tokens
+    ?? 0
+  );
+  const cacheWriteTokens = Number(
+    usage.input_tokens_details?.cache_write_tokens
+    ?? usage.cache_write_tokens
+    ?? 0
+  );
+  const reasoningTokens = Number(
+    usage.output_tokens_details?.reasoning_tokens
+    ?? usage.completion_tokens_details?.reasoning_tokens
+    ?? usage.reasoning_output_tokens
+    ?? 0
+  );
+
+  return {
+    promptTokens: Number.isFinite(inputTokens) ? inputTokens : 0,
+    completionTokens: Number.isFinite(outputTokens) ? outputTokens : 0,
+    totalTokens: Number.isFinite(totalTokens) ? totalTokens : 0,
+    cachedPromptTokens: Number.isFinite(cachedPromptTokens) ? cachedPromptTokens : 0,
+    cacheWriteTokens: Number.isFinite(cacheWriteTokens) ? cacheWriteTokens : 0,
+    reasoningTokens: Number.isFinite(reasoningTokens) ? reasoningTokens : 0,
+    raw: usage,
+  };
 }
 
 function mapMessageToCodexInput(message: Message): Array<Record<string, unknown>> {
@@ -387,13 +428,15 @@ function decodeBase64Text(content: string): string | null {
   }
 }
 
-function mapReasoning(reasoning: ProviderConfig['reasoning']): { effort: 'low' | 'medium' | 'high' } | undefined {
+function mapReasoning(reasoning: ProviderConfig['reasoning']): { effort: 'low' | 'medium' | 'high' | 'xhigh' } | undefined {
   switch (reasoning) {
     case 'low':
     case 'off':
       return { effort: 'low' };
     case 'high':
       return { effort: 'high' };
+    case 'xhigh':
+      return { effort: 'xhigh' };
     case 'medium':
     default:
       return { effort: 'medium' };

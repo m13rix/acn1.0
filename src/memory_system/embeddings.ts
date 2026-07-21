@@ -3,15 +3,24 @@ import { GoogleGenAI } from '@google/genai';
 import { Ollama } from 'ollama';
 import type { MemoryDebugLogger } from './debug.js';
 import { summarizeText } from './debug.js';
+import type { EmbeddingProvider } from './types.js';
+import { embedLocalQwen, localQwenEmbeddingAvailable } from './LocalQwenEmbedding.js';
 
 const cache = new Map<string, number[]>();
 const GEMINI_EMBED_BATCH_LIMIT = 100;
 const OLLAMA_EMBED_BATCH_LIMIT = 64;
+const OPENROUTER_EMBED_BATCH_LIMIT = 64;
+const OPENROUTER_EMBEDDINGS_URL = 'https://openrouter.ai/api/v1/embeddings';
+const OPENROUTER_QUERY_HEDGE_DELAY_MS = Math.max(0, Number(process.env.MEMORY_OPENROUTER_QUERY_HEDGE_DELAY_MS || 700));
 
 let ai: GoogleGenAI | null = null;
 let ollamaClient: Ollama | null = null;
 const EMBED_RETRY_DELAY_MS = 3000;
 const OLLAMA_KEEP_ALIVE = '30m';
+
+function shouldUseLocalQwen(model: string, label: string): boolean {
+  return model === 'qwen/qwen3-embedding-8b' && label.startsWith('query.') && localQwenEmbeddingAvailable();
+}
 
 function sanitizeNumber(value: unknown): number {
   const numeric = typeof value === 'number' ? value : Number(value);
@@ -159,6 +168,14 @@ function getClient(): GoogleGenAI {
   return ai;
 }
 
+function getOpenRouterApiKey(): string {
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (!apiKey) {
+    throw new Error('OPENROUTER_API_KEY is required for OpenRouter memory embeddings.');
+  }
+  return apiKey;
+}
+
 function normalizeKey(text: string): string {
   return text.trim().toLowerCase();
 }
@@ -179,7 +196,19 @@ function isNaNEncodingError(error: unknown): boolean {
 type GeminiEmbeddingMode = 'retrieval-query' | 'retrieval-document' | 'symmetric';
 
 function isGeminiEmbeddingModel(model: string): boolean {
-  return model.startsWith('gemini-embedding-');
+  return model.startsWith('gemini-embedding-') || model.includes('/gemini-embedding-');
+}
+
+function resolveEmbeddingProvider(model: string, provider?: EmbeddingProvider): EmbeddingProvider {
+  if (provider) return provider;
+  const envProvider = process.env.MEMORY_EMBEDDING_PROVIDER?.trim().toLowerCase();
+  if (envProvider === 'google' || envProvider === 'ollama' || envProvider === 'openrouter') {
+    return envProvider;
+  }
+  if (isGeminiEmbeddingModel(model) || model === 'text-embedding-004') {
+    return 'google';
+  }
+  return 'ollama';
 }
 
 function resolveGeminiEmbeddingMode(label: string): GeminiEmbeddingMode {
@@ -246,6 +275,58 @@ function maybeNormalizeVector(vector: number[]): number[] {
   return vector;
 }
 
+async function embedOpenRouter(model: string, input: string | string[], signal?: AbortSignal): Promise<number[][]> {
+  const response = await fetch(OPENROUTER_EMBEDDINGS_URL, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${getOpenRouterApiKey()}`,
+      'Content-Type': 'application/json',
+      'HTTP-Referer': process.env.OPENROUTER_SITE_URL || 'http://localhost',
+      'X-Title': process.env.OPENROUTER_APP_NAME || 'TELOS memory embeddings',
+    },
+    body: JSON.stringify({
+      model,
+      input,
+    }),
+    signal,
+  });
+
+  const json = await response.json().catch(() => null) as any;
+  if (!response.ok) {
+    const details = typeof json === 'string' ? json : JSON.stringify(json ?? {});
+    throw new Error(`OpenRouter embedding request failed: ${response.status} ${response.statusText} ${details}`);
+  }
+
+  const data = Array.isArray(json?.data) ? json.data : [];
+  const vectors = data.map((item: any) => item?.embedding);
+  if (vectors.length === 0 && Array.isArray(json?.embedding)) {
+    vectors.push(json.embedding);
+  }
+  return vectors;
+}
+
+async function embedOpenRouterInteractive(model: string, input: string | string[], interactive: boolean): Promise<number[][]> {
+  if (!interactive || OPENROUTER_QUERY_HEDGE_DELAY_MS <= 0) return embedOpenRouter(model, input);
+  const primaryController = new AbortController();
+  const secondaryController = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const secondary = new Promise<number[][]>((resolve, reject) => {
+    timer = setTimeout(() => {
+      void embedOpenRouter(model, input, secondaryController.signal).then(resolve, reject);
+    }, OPENROUTER_QUERY_HEDGE_DELAY_MS);
+  });
+  try {
+    return await Promise.any([
+      embedOpenRouter(model, input, primaryController.signal),
+      secondary,
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+    primaryController.abort();
+    secondaryController.abort();
+  }
+}
+
 export function normalizeEmbeddingVectorUnit(vector: number[] | ArrayLike<number>): number[] {
   return maybeNormalizeVector(sanitizeEmbeddingVector(vector));
 }
@@ -255,15 +336,20 @@ export async function embedText(
   model: string,
   debug?: MemoryDebugLogger,
   label = 'embedding',
+  provider?: EmbeddingProvider,
 ): Promise<number[]> {
   const cleanText = normalizeEmbeddingInput(text);
-  const geminiMode = isGeminiEmbeddingModel(model) ? resolveGeminiEmbeddingMode(label) : null;
+  const resolvedProvider = resolveEmbeddingProvider(model, provider);
+  const geminiMode = (resolvedProvider === 'google' || resolvedProvider === 'openrouter') && isGeminiEmbeddingModel(model)
+    ? resolveGeminiEmbeddingMode(label)
+    : null;
   const prepared = geminiMode ? prepareGeminiEmbeddingInput(cleanText, model, geminiMode) : { content: cleanText };
-  const cacheKey = `${model}::${geminiMode ?? 'default'}::${normalizeKey(prepared.content)}`;
+  const cacheKey = `${resolvedProvider}::${model}::${geminiMode ?? 'default'}::${normalizeKey(prepared.content)}`;
   const cached = cache.get(cacheKey);
   if (cached) {
     debug?.('memory.embed.cache_hit', `Embedding cache hit for ${label}.`, {
       model,
+      provider: resolvedProvider,
       textPreview: summarizeText(cleanText, 300),
       preparedTextPreview: summarizeText(prepared.content, 300),
       geminiMode,
@@ -274,13 +360,14 @@ export async function embedText(
 
   debug?.('memory.embed.start', `Starting embedding for ${label}.`, {
     model,
+    provider: resolvedProvider,
     textLength: cleanText.length,
     textPreview: summarizeText(cleanText, 500),
     preparedTextPreview: summarizeText(prepared.content, 500),
     geminiMode,
   });
 
-  if (isGeminiEmbeddingModel(model) || model === 'text-embedding-004') {
+  if (resolvedProvider === 'google') {
     try {
       const response = await withTransientRetry(`google:${model}`, async () => {
         const client = getClient();
@@ -312,6 +399,46 @@ export async function embedText(
         textPreview: summarizeText(cleanText, 1000),
         preparedTextPreview: summarizeText(prepared.content, 1000),
         geminiMode,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  if (resolvedProvider === 'openrouter') {
+    try {
+      let response: number[][];
+      if (shouldUseLocalQwen(model, label)) {
+        try {
+          response = await embedLocalQwen([prepared.content]);
+        } catch (error) {
+          console.warn('[memory.embeddings] Local Qwen query embedding failed; falling back to OpenRouter:', error instanceof Error ? error.message : String(error));
+          response = await withTransientRetry(`openrouter:${model}`, async () => {
+            return embedOpenRouterInteractive(model, prepared.content, label.startsWith('query.'));
+          }, debug);
+        }
+      } else {
+        response = await withTransientRetry(`openrouter:${model}`, async () => {
+          return embedOpenRouterInteractive(model, prepared.content, label.startsWith('query.'));
+        }, debug);
+      }
+
+      const vector = maybeNormalizeVector(sanitizeEmbeddingVector(response[0]));
+      if (vector.length === 0) {
+        throw new Error(`OpenRouter Embedding API (${model}) returned an empty vector.`);
+      }
+      cache.set(cacheKey, vector);
+      debug?.('memory.embed.success', `Embedding completed for ${label}.`, {
+        model,
+        provider: 'openrouter',
+        dimensions: vector.length,
+      });
+      return vector;
+    } catch (error) {
+      debug?.('memory.embed.error', `Embedding failed for ${label}.`, {
+        model,
+        provider: 'openrouter',
+        textPreview: summarizeText(cleanText, 1000),
         error: error instanceof Error ? error.message : String(error),
       });
       throw error;
@@ -365,19 +492,22 @@ export async function embedBatch(
     debug?: MemoryDebugLogger;
     label?: string;
     concurrency?: number;
+    provider?: EmbeddingProvider;
   },
 ): Promise<number[][]> {
   const debug = options?.debug;
   const label = options?.label ?? 'embedding_batch';
+  const resolvedProvider = resolveEmbeddingProvider(model, options?.provider);
   const results = new Array<number[]>(texts.length);
 
   debug?.('memory.embed.batch_start', `Starting embedding batch for ${label}.`, {
     model,
+    provider: resolvedProvider,
     count: texts.length,
     concurrency: 1,
   });
 
-  if (isGeminiEmbeddingModel(model) && texts.length > 0) {
+  if (resolvedProvider === 'google' && texts.length > 0) {
     const preparedInputs = texts.map((text, index) => {
       const cleanText = normalizeEmbeddingInput(text ?? '');
       const itemLabel = `${label}[${index}]`;
@@ -387,7 +517,7 @@ export async function embedBatch(
         cleanText,
         geminiMode,
         prepared,
-        cacheKey: `${model}::${geminiMode}::${normalizeKey(prepared.content)}`,
+        cacheKey: `${resolvedProvider}::${model}::${geminiMode}::${normalizeKey(prepared.content)}`,
       };
     });
 
@@ -529,7 +659,7 @@ export async function embedBatch(
     const cleanText = normalizeEmbeddingInput(text ?? '');
     return {
       cleanText,
-      cacheKey: `${model}::default::${normalizeKey(cleanText)}`,
+      cacheKey: `${resolvedProvider}::${model}::default::${normalizeKey(cleanText)}`,
     };
   });
 
@@ -548,8 +678,9 @@ export async function embedBatch(
     uniqueUncached.set(item.cacheKey, item);
   }
 
-  debug?.('memory.embed.batch_dedup', `Prepared Ollama batch inputs for ${label}.`, {
+  debug?.('memory.embed.batch_dedup', `Prepared ${resolvedProvider} batch inputs for ${label}.`, {
     model,
+    provider: resolvedProvider,
     totalInputs: texts.length,
     cacheHitCount,
     duplicateReuseCount,
@@ -557,6 +688,112 @@ export async function embedBatch(
   });
 
   const uncachedItems = Array.from(uniqueUncached.values());
+  if (resolvedProvider === 'openrouter') {
+    const interactiveQuery = label.startsWith('query.');
+    if (shouldUseLocalQwen(model, label)) {
+      try {
+        const vectors = await embedLocalQwen(uncachedItems.map((item) => item.cleanText));
+        if (vectors.length !== uncachedItems.length) {
+          throw new Error(`Local Qwen returned ${vectors.length}/${uncachedItems.length} vectors.`);
+        }
+        uncachedItems.forEach((item, index) => cache.set(item.cacheKey, maybeNormalizeVector(sanitizeEmbeddingVector(vectors[index]))));
+        for (let index = 0; index < preparedInputs.length; index++) {
+          results[index] = cache.get(preparedInputs[index]!.cacheKey) ?? [];
+        }
+        debug?.('memory.embed.batch_done', `Completed local Qwen batch for ${label}.`, {
+          model,
+          count: texts.length,
+          provider: 'local-qwen',
+        });
+        return results;
+      } catch (error) {
+        console.warn('[memory.embeddings] Local Qwen query embedding failed; falling back to OpenRouter:', error instanceof Error ? error.message : String(error));
+      }
+    }
+    const batchLimit = interactiveQuery ? 12 : OPENROUTER_EMBED_BATCH_LIMIT;
+    const chunkStarts = Array.from({ length: Math.ceil(uncachedItems.length / batchLimit) }, (_, index) => index * batchLimit);
+    await Promise.all(chunkStarts.map(async (start) => {
+      const chunk = uncachedItems.slice(start, start + batchLimit);
+      debug?.('memory.embed.batch_openrouter_request', `Starting OpenRouter batch embedding for ${label}.`, {
+        model,
+        chunkStart: start,
+        chunkSize: chunk.length,
+        totalUncached: uncachedItems.length,
+        items: chunk.slice(0, 20).map((item) => ({
+          textPreview: summarizeText(item.cleanText, 300),
+        })),
+      });
+
+      try {
+        let vectors = await withTransientRetry(`openrouter-batch:${model}:${start}`, async () => {
+          return embedOpenRouterInteractive(model, chunk.map((item) => item.cleanText), interactiveQuery && chunkStarts.length === 1);
+        }, debug);
+        if (vectors.length !== chunk.length) {
+          debug?.('memory.embed.batch_openrouter_malformed', `OpenRouter returned malformed batch embedding response for ${label}; retrying individually.`, {
+            model,
+            chunkStart: start,
+            chunkSize: chunk.length,
+            returnedVectors: vectors.length,
+          });
+          if (chunk.length === 1) {
+            throw new Error(`OpenRouter embed returned ${vectors.length} vectors for ${chunk.length} inputs.`);
+          }
+
+          const fallbackVectors: number[][] = [];
+          for (let index = 0; index < chunk.length; index++) {
+            const item = chunk[index]!;
+            const single = await withTransientRetry(`openrouter-single:${model}:${start + index}`, async () => {
+              return embedOpenRouter(model, item.cleanText);
+            }, debug);
+            if (single.length !== 1) {
+              throw new Error(`OpenRouter embed returned ${single.length} vectors for batch item ${index} after malformed ${vectors.length}/${chunk.length} batch response.`);
+            }
+            fallbackVectors.push(single[0]!);
+          }
+          vectors = fallbackVectors;
+        }
+
+        chunk.forEach((item, index) => {
+          const vector = maybeNormalizeVector(sanitizeEmbeddingVector(vectors[index]));
+          if (vector.length === 0) {
+            throw new Error(`OpenRouter embed returned an empty vector for batch item ${index}.`);
+          }
+          cache.set(item.cacheKey, vector);
+        });
+
+        debug?.('memory.embed.batch_openrouter_response', `Completed OpenRouter batch embedding for ${label}.`, {
+          model,
+          chunkStart: start,
+          chunkSize: chunk.length,
+          dimensions: chunk.length > 0 ? cache.get(chunk[0]!.cacheKey)?.length ?? 0 : 0,
+        });
+      } catch (error) {
+        debug?.('memory.embed.batch_error', `OpenRouter batch embedding failed for ${label}.`, {
+          model,
+          chunkStart: start,
+          chunkSize: chunk.length,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
+    }));
+
+    for (let index = 0; index < preparedInputs.length; index++) {
+      const vector = cache.get(preparedInputs[index]!.cacheKey) ?? [];
+      if (vector.length === 0) {
+        throw new Error(`Missing OpenRouter embedding vector for ${label}[${index}]`);
+      }
+      results[index] = vector;
+    }
+
+    debug?.('memory.embed.batch_done', `Completed embedding batch for ${label}.`, {
+      model,
+      count: texts.length,
+      provider: 'openrouter',
+    });
+    return results;
+  }
+
   for (let start = 0; start < uncachedItems.length; start += OLLAMA_EMBED_BATCH_LIMIT) {
     const chunk = uncachedItems.slice(start, start + OLLAMA_EMBED_BATCH_LIMIT);
     debug?.('memory.embed.batch_ollama_request', `Starting Ollama batch embedding for ${label}.`, {
@@ -652,7 +889,7 @@ export function vectorSubtract(to: number[] | ArrayLike<number>, from: number[] 
   }
   const out: number[] = [];
   for (let i = 0; i < to.length; i++) {
-    out.push((to[i] as number) - (from[i] as number));
+    out.push(sanitizeNumber(to[i]) - sanitizeNumber(from[i]));
   }
   return out;
 }

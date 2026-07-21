@@ -293,6 +293,7 @@ export class OpenAICodexProvider extends BaseProvider {
     const headers: Record<string, string> = {
       authorization: `Bearer ${profile.accessToken}`,
       'content-type': 'application/json',
+      originator: this.config.originator,
     };
 
     if (profile.accountId) {
@@ -330,6 +331,7 @@ export class OpenAICodexProvider extends BaseProvider {
     let reasoning = '';
     const toolCalls: ProviderToolResponse['toolCalls'] = [];
     let finishReason: ProviderToolResponse['finishReason'] = 'other';
+    let usage: ProviderToolResponse['usage'] | undefined;
 
     for await (const event of events) {
       if (event.type === 'text.delta') {
@@ -340,6 +342,7 @@ export class OpenAICodexProvider extends BaseProvider {
         toolCalls.push(event.toolCall);
       } else if (event.type === 'done') {
         finishReason = 'stop';
+        usage = event.usage ?? usage;
       }
     }
 
@@ -348,6 +351,7 @@ export class OpenAICodexProvider extends BaseProvider {
       reasoning,
       finishReason,
       toolCalls,
+      usage,
     };
   }
 

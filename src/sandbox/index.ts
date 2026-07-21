@@ -13,6 +13,7 @@ import type { ISandbox } from './interfaces.js';
 export interface SandboxCreateOptions {
     baseDir?: string;
     existingPath?: string;
+    serviceHandler?: import('./interfaces.js').SandboxServiceHandler;
 }
 
 export function createSandbox(type: string = 'local', options?: SandboxCreateOptions): ISandbox {

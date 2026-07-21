@@ -20,6 +20,12 @@ class WorkerProcessExit extends Error {
 const requireFromWorker = createRequire(import.meta.url);
 const baseGlobalKeys = new Set(Reflect.ownKeys(globalThis));
 const originalExit = process.exit.bind(process);
+const pendingServiceRequests = new Map<string, {
+    resolve: (value: unknown) => void;
+    reject: (error: Error) => void;
+}>();
+let activeRunId: string | null = null;
+let serviceRequestCounter = 0;
 
 (globalThis as any).__TELOS_ACTION_WORKER_RUNTIME__ = true;
 
@@ -28,6 +34,25 @@ function send(message: Record<string, unknown>): void {
         process.send(message);
     }
 }
+
+function requestHarnessService(type: string, payload: unknown): Promise<unknown> {
+    if (!activeRunId || typeof process.send !== 'function') {
+        return Promise.reject(new Error(`Harness service is unavailable for ${type}.`));
+    }
+    const requestId = `${activeRunId}:${++serviceRequestCounter}`;
+    return new Promise((resolve, reject) => {
+        pendingServiceRequests.set(requestId, { resolve, reject });
+        send({
+            type: 'service-request',
+            runId: activeRunId,
+            requestId,
+            serviceType: type,
+            payload,
+        });
+    });
+}
+
+(globalThis as any).__TELOS_ACTION_WORKER_REQUEST__ = requestHarnessService;
 
 function restoreEnv(previous: NodeJS.ProcessEnv): void {
     for (const key of Object.keys(process.env)) {
@@ -42,7 +67,11 @@ function restoreEnv(previous: NodeJS.ProcessEnv): void {
 
 function restoreGlobalAdditions(): void {
     for (const key of Reflect.ownKeys(globalThis)) {
-        if (baseGlobalKeys.has(key) || key === '__TELOS_ACTION_WORKER_RUNTIME__') {
+        if (
+            baseGlobalKeys.has(key)
+            || key === '__TELOS_ACTION_WORKER_RUNTIME__'
+            || key === '__TELOS_ACTION_WORKER_REQUEST__'
+        ) {
             continue;
         }
         try {
@@ -98,6 +127,7 @@ async function runAction(message: RunMessage): Promise<void> {
     }) as typeof process.exit;
 
     try {
+        activeRunId = message.id;
         restoreEnv(message.env as NodeJS.ProcessEnv);
         process.exitCode = 0;
 
@@ -140,6 +170,7 @@ async function runAction(message: RunMessage): Promise<void> {
             });
         }
     } finally {
+        activeRunId = null;
         process.stdout.write = previousStdoutWrite;
         process.stderr.write = previousStderrWrite;
         process.exit = previousExit;
@@ -148,10 +179,25 @@ async function runAction(message: RunMessage): Promise<void> {
     }
 }
 
-process.on('message', (message: RunMessage) => {
-    if (!message || message.type !== 'run') {
+process.on('message', (message: RunMessage | {
+    type: 'service-response';
+    requestId: string;
+    success: boolean;
+    result?: unknown;
+    error?: string;
+}) => {
+    if (!message) {
         return;
     }
+    if (message.type === 'service-response') {
+        const pending = pendingServiceRequests.get(message.requestId);
+        if (!pending) return;
+        pendingServiceRequests.delete(message.requestId);
+        if (message.success) pending.resolve(message.result);
+        else pending.reject(new Error(message.error || 'Harness service request failed.'));
+        return;
+    }
+    if (message.type !== 'run') return;
     runAction(message).catch((error: any) => {
         send({
             type: 'result',

@@ -1,6 +1,6 @@
 /**
  * Prompt Builder
- * 
+ *
  * Assembles the final system prompt by combining:
  * 1. Base system prompt from agent config
  * 2. Loop documentation
@@ -10,6 +10,7 @@
 import type { LoadedAgent, LoadedTool, SyntaxType, LoopType } from '../types/index.js';
 import type { ISandbox } from '../sandbox/interfaces.js';
 import { ToolLoader } from '../loaders/ToolLoader.js';
+import { areMemoryToolDocsEnabled } from './memoryToolDocs.js';
 
 export class PromptBuilder {
   private toolLoader: ToolLoader;
@@ -45,13 +46,15 @@ export class PromptBuilder {
     }
 
     // 5. Sandbox documentation
-    const sandboxDoc = sandbox.getDescription();
+    const sandboxDoc = sandbox.getDescription(agent.config.actionToolPolicy);
     if (sandboxDoc.trim()) {
       sections.push(sandboxDoc.trim());
     }
 
     // 6. Tool documentation
-    const toolDoc = this.toolLoader.getToolDocumentation(tools);
+    const toolDoc = areMemoryToolDocsEnabled(agent)
+      ? this.buildCompactToolDocumentation(tools)
+      : this.toolLoader.getToolDocumentation(tools);
     if (toolDoc.trim()) {
       sections.push(toolDoc.trim());
     }
@@ -64,6 +67,23 @@ export class PromptBuilder {
    */
   buildMinimal(agent: LoadedAgent): string {
     return agent.systemPromptContent.trim();
+  }
+
+  private buildCompactToolDocumentation(tools: LoadedTool[]): string {
+    if (tools.length === 0) {
+      return '## Tool Modules\n\nNo tool modules are available.';
+    }
+
+    const names = tools.map((tool) => `\`${tool.config.name}\``).join(', ');
+    const utilsHint = tools.some((tool) => tool.config.name === 'utils')
+      ? 'Every tool has `tool.help()`. If something is unclear, inspect help instead of guessing.'
+      : '';
+
+    return `## Tool Modules
+
+Available modules: ${names}.
+
+${utilsHint} Full docs may also be available through MEMORY HINTS/search, so do not load every tool doc up front.`;
   }
 }
 

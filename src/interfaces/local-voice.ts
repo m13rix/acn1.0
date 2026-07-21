@@ -118,10 +118,32 @@ async function resolveMicrophoneCaptureConfig(
 }
 
 type HotkeyListenerInstance = {
-  addListener(listener: (event: { state: string; name: string; ctrlKey?: boolean }) => void): void;
+  addListener(listener: (event: { state: string; name: string; ctrlKey?: boolean }) => void): void | Promise<void>;
   removeAllListeners?(): void;
   kill?(): void;
 };
+
+/**
+ * `node-global-key-listener` can report a failed Windows helper startup after
+ * setting its internal running flag. Its subsequent `kill()` then dereferences
+ * an uninitialized child process. A global hotkey is optional, so cleanup must
+ * never turn that recoverable failure into an interface-runtime failure.
+ */
+export function disposeHotkeyListener(listener: HotkeyListenerInstance | null | undefined): void {
+  if (!listener) return;
+
+  try {
+    listener.removeAllListeners?.();
+  } catch (error) {
+    warnLocalVoice('Failed to remove global hotkey listeners during cleanup', error instanceof Error ? error.message : String(error));
+  }
+
+  try {
+    listener.kill?.();
+  } catch (error) {
+    warnLocalVoice('Failed to stop global hotkey helper during cleanup', error instanceof Error ? error.message : String(error));
+  }
+}
 
 async function loadHotkeyListener(): Promise<HotkeyListenerInstance | null> {
   try {
@@ -130,7 +152,7 @@ async function loadHotkeyListener(): Promise<HotkeyListenerInstance | null> {
       const packageDir = path.dirname(packageJsonPath);
       const windowsServerPath = path.join(packageDir, 'bin', 'WinKeyServer.exe');
       if (!existsSync(windowsServerPath)) {
-        warnLocalVoice('Global hotkey disabled', `missing helper binary at ${windowsServerPath}`);
+        logLocalVoice('Global hotkey helper unavailable', `missing optional Windows helper at ${windowsServerPath}`);
         return null;
       }
     }
@@ -228,7 +250,7 @@ export class LocalVoiceInterfaceRuntime implements AgentInterfaceRuntime {
     if (this.hotkeyListener) {
       try {
         logLocalVoice('Global hotkey listener ready', DEFAULT_HOTKEY);
-        this.hotkeyListener.addListener((event) => {
+        await this.hotkeyListener.addListener((event) => {
           if (event.state !== 'DOWN') {
             return;
           }
@@ -243,6 +265,7 @@ export class LocalVoiceInterfaceRuntime implements AgentInterfaceRuntime {
           'Failed to start global hotkey listener. Programmatic local-voice calls will still work',
           error instanceof Error ? error.message : String(error),
         );
+        disposeHotkeyListener(this.hotkeyListener);
         this.hotkeyListener = null;
       }
     } else {
@@ -253,8 +276,7 @@ export class LocalVoiceInterfaceRuntime implements AgentInterfaceRuntime {
   async stop(): Promise<void> {
     logLocalVoice('Runtime stopping');
     await this.stopActiveSession();
-    this.hotkeyListener?.removeAllListeners?.();
-    this.hotkeyListener?.kill?.();
+    disposeHotkeyListener(this.hotkeyListener);
     this.hotkeyListener = null;
   }
 

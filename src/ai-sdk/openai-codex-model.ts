@@ -210,7 +210,28 @@ function mapProviderEventToV3(
     if (state.reasoningStarted) out.push({ type: 'reasoning-end', id: 'reasoning' });
     if (state.textStarted) out.push({ type: 'text-end', id: 'text' });
     for (const id of state.openToolInputs) out.push({ type: 'tool-input-end', id });
-    out.push({ type: 'finish', usage: emptyUsage(), finishReason: finishReason('stop', 'completed') });
+    out.push({
+      type: 'finish',
+      usage: event.usage
+        ? {
+            inputTokens: {
+              total: event.usage.promptTokens,
+              noCache: event.usage.cachedPromptTokens !== undefined
+                ? Math.max(0, event.usage.promptTokens - event.usage.cachedPromptTokens)
+                : undefined,
+              cacheRead: event.usage.cachedPromptTokens,
+              cacheWrite: event.usage.cacheWriteTokens,
+            },
+            outputTokens: {
+              total: event.usage.completionTokens,
+              text: event.usage.completionTokens,
+              reasoning: event.usage.reasoningTokens,
+            },
+            raw: event.usage as any,
+          }
+        : emptyUsage(),
+      finishReason: finishReason('stop', 'completed'),
+    });
   }
 
   return out;

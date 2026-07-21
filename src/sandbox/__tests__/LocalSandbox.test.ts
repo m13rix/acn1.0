@@ -57,6 +57,7 @@ test('generated action wrapper exits explicitly after tracked async tasks finish
   assert.match(output, /help\(\)/);
   assert.match(output, /const terminal = __telosLazyWaitableTool/);
   assert.match(output, /const code = __telosLazyWaitableTool/);
+  assert.match(output, /const computer = __telosLazyWaitableTool/);
   assert.match(output, /TELOS_SANDBOX_EXIT_GRACE_MS/);
   assert.match(output, /TELOS_SANDBOX_ERROR_EXIT_GRACE_MS/);
   assert.match(output, /process\.exit\(process\.exitCode \?\? 0\)/);
@@ -86,16 +87,220 @@ test('every injected tool exposes help()', async () => {
       'console.log(files.help().includes("files.read"));',
       'console.log(terminal.help().includes("terminal.run"));',
       'console.log(code.help().includes("code.outline"));',
+      'console.log(computer.help().includes("computer.snapshot"));',
       'console.log(helper.help().includes("Helpful test tool docs."));',
       'console.log(Object.keys(helper).includes("help"));',
     ].join('\n'));
 
     assert.equal(result.success, true, result.error);
-    assert.match(result.output, /true\ntrue\ntrue\ntrue\ntrue/);
+    assert.match(result.output, /true\ntrue\ntrue\ntrue\ntrue\ntrue/);
   } finally {
     await sandbox.cleanup();
     await rmBestEffort(tempRoot);
   }
+});
+
+test('code snapshot operations use bound action-worker service IPC', async () => {
+  const tempRoot = await mkdtemp(join(process.cwd(), 'sandboxes', 'test-code-service-ipc-'));
+  const requests: Array<{ type: string; payload: unknown; ephemeralPaths: string[] }> = [];
+  const sandbox = new LocalSandbox({
+    baseDir: tempRoot,
+    serviceHandler: (request) => {
+      requests.push(request);
+      if (request.type === 'code.snapshot') {
+        return { id: 'checkpoint-1', name: 'manual' };
+      }
+      if (request.type === 'code.listSnapshots') {
+        return [{ id: 'checkpoint-1', name: 'manual' }];
+      }
+      throw new Error(`Unexpected service request: ${request.type}`);
+    },
+  });
+
+  try {
+    await sandbox.initialize([]);
+    const result = await sandbox.execute([
+      'const created = await code.snapshot("manual");',
+      'const snapshots = await code.listSnapshots();',
+      'console.log(created.id, snapshots.length);',
+    ].join('\n'));
+
+    assert.equal(result.success, true, result.error);
+    assert.match(result.output, /checkpoint-1 1/);
+    assert.deepEqual(requests, [
+      { type: 'code.snapshot', payload: { name: 'manual' }, ephemeralPaths: ['exec_0.cts'] },
+      { type: 'code.listSnapshots', payload: {}, ephemeralPaths: ['exec_0.cts'] },
+    ]);
+  } finally {
+    await sandbox.cleanup();
+    await rmBestEffort(tempRoot);
+  }
+});
+
+test('message questions, text, and files publish through bound action-worker service IPC', async () => {
+  const tempRoot = await mkdtemp(join(process.cwd(), 'sandboxes', 'test-message-service-ipc-'));
+  const requests: Array<{ type: string; payload: unknown; ephemeralPaths: string[] }> = [];
+  const messagePath = join(process.cwd(), 'tools', 'message', 'index.ts');
+  const sandbox = new LocalSandbox({
+    baseDir: tempRoot,
+    serviceHandler: (request) => {
+      requests.push(request);
+      if (request.type === 'interaction.create') return { response: 'approved' };
+      if (request.type === 'message.publish') return { published: true };
+      if (request.type === 'attachment.publish') return { attachments: [] };
+      throw new Error(`Unexpected service request: ${request.type}`);
+    },
+  });
+
+  try {
+    await sandbox.initialize([{
+      config: { name: 'message', description: 'Cross-interface messaging.', module: messagePath },
+      directory: join(process.cwd(), 'tools', 'message'),
+      absolutePath: messagePath,
+    }]);
+    const result = await sandbox.execute([
+      'const answer = await message.ask("Continue?");',
+      'await message.sendText(`Answer: ${answer}`);',
+      'await message.sendFiles(["artifact.txt"]);',
+      'console.log(answer);',
+    ].join('\n'));
+
+    assert.equal(result.success, true, result.error);
+    assert.match(result.output, /approved/);
+    assert.deepEqual(requests.map((request) => request.type), [
+      'interaction.create',
+      'message.publish',
+      'attachment.publish',
+    ]);
+  } finally {
+    await sandbox.cleanup();
+    await rmBestEffort(tempRoot);
+  }
+});
+
+test('terminal operations use the shared harness terminal service through worker IPC', async () => {
+  const tempRoot = await mkdtemp(join(process.cwd(), 'sandboxes', 'test-terminal-service-ipc-'));
+  const requests: Array<{ type: string; payload: unknown; ephemeralPaths: string[] }> = [];
+  const terminalPath = join(process.cwd(), 'tools', 'terminal', 'index.ts');
+  const sandbox = new LocalSandbox({
+    baseDir: tempRoot,
+    serviceHandler: (request) => {
+      requests.push(request);
+      if (request.type === 'terminal.run') {
+        return { success: true, code: 0, output: 'run-ok', stdout: 'run-ok', stderr: '', timedOut: false };
+      }
+      if (request.type === 'terminal.start') return { terminalId: 'thread:agent:dev' };
+      if (request.type === 'terminal.read') return { output: 'read-ok' };
+      if (request.type === 'terminal.list') return [{ name: 'dev', command: 'npm run dev', startedAt: 'now', running: true }];
+      if (request.type === 'terminal.send' || request.type === 'terminal.stopAll') return undefined;
+      throw new Error(`Unexpected service request: ${request.type}`);
+    },
+  });
+
+  try {
+    await sandbox.initialize([{
+      config: { name: 'terminal', description: 'Shared terminal.', module: terminalPath },
+      directory: join(process.cwd(), 'tools', 'terminal'),
+      absolutePath: terminalPath,
+    }]);
+    const result = await sandbox.execute([
+      'console.log((await terminal.run("git status")).output);',
+      'console.log(await terminal.start("dev", "npm run dev"));',
+      'console.log(await terminal.read("dev"));',
+      'await terminal.send("dev", "r\\n");',
+      'console.log((await terminal.list())[0].name);',
+      'await terminal.stopAll();',
+    ].join('\n'));
+
+    assert.equal(result.success, true, result.error);
+    assert.match(result.output, /run-ok[\s\S]*Started terminal "dev"[\s\S]*read-ok[\s\S]*dev/u);
+    assert.deepEqual(requests.map((request) => request.type), [
+      'terminal.run',
+      'terminal.start',
+      'terminal.read',
+      'terminal.send',
+      'terminal.list',
+      'terminal.stopAll',
+    ]);
+  } finally {
+    await sandbox.cleanup();
+    await rmBestEffort(tempRoot);
+  }
+});
+
+test('subagent runs use durable child-thread service IPC in managed sessions', async () => {
+  const tempRoot = await mkdtemp(join(process.cwd(), 'sandboxes', 'test-agents-service-ipc-'));
+  const requests: Array<{ type: string; payload: unknown; ephemeralPaths: string[] }> = [];
+  const agentsPath = join(process.cwd(), 'tools', 'agents', 'index.ts');
+  const sandbox = new LocalSandbox({
+    baseDir: tempRoot,
+    serviceHandler: (request) => {
+      requests.push(request);
+      if (request.type === 'agents.run') {
+        return { jobName: 'child-job', childThreadId: 'child-thread', finalMessage: 'child-ok' };
+      }
+      throw new Error(`Unexpected service request: ${request.type}`);
+    },
+  });
+  try {
+    await sandbox.initialize([{
+      config: { name: 'agents', description: 'Delegate work.', module: agentsPath },
+      directory: join(process.cwd(), 'tools', 'agents'),
+      absolutePath: agentsPath,
+    }]);
+    const result = await sandbox.execute([
+      'const child = await agents.run("Telos-Code", "inspect");',
+      'console.log(child.finalMessage);',
+    ].join('\n'));
+    assert.equal(result.success, true, result.error);
+    assert.match(result.output, /child-ok/);
+    assert.deepEqual(requests.map((request) => request.type), ['agents.run']);
+  } finally {
+    await sandbox.cleanup();
+    await rmBestEffort(tempRoot);
+  }
+});
+
+test('injected lazy tool reflection handles non-configurable module flags', async () => {
+  const tempRoot = await mkdtemp(join(process.cwd(), 'sandboxes', 'test-tool-reflection-'));
+  const toolPath = join(tempRoot, 'helper.cjs');
+  const sandbox = new LocalSandbox({ baseDir: tempRoot });
+
+  await writeFile(toolPath, [
+    'Object.defineProperty(exports, "__esModule", { value: true, enumerable: true, configurable: false });',
+    'exports.answer = function answer() {',
+    '  return "ok";',
+    '};',
+  ].join('\n'));
+
+  try {
+    await sandbox.initialize([{
+      config: { name: 'helper', description: 'Helpful test tool docs.', module: toolPath },
+      directory: tempRoot,
+      absolutePath: toolPath,
+    }]);
+
+    const result = await sandbox.execute([
+      'console.log(Object.keys(helper).includes("__esModule"));',
+      'console.log(Object.getOwnPropertyDescriptor(helper, "__esModule").configurable);',
+      'console.log(helper.answer());',
+    ].join('\n'));
+
+    assert.equal(result.success, true, result.error);
+    assert.match(result.output, /true\ntrue\nok/);
+  } finally {
+    await sandbox.cleanup();
+    await rmBestEffort(tempRoot);
+  }
+});
+
+test('local sandbox description includes action tool guidance', () => {
+  const sandbox = new LocalSandbox();
+  const description = sandbox.getDescription();
+  assert.match(description, /## Code As Action/);
+  assert.match(description, /Use `files` for workspace inspection and edits/);
+  assert.match(description, /Use `computer` for native Windows apps/);
+  assert.match(description, /Every tool has `tool\.help\(\)`/);
 });
 
 test('action exposes files read/write/edit/search/list and code outline packages', async () => {
@@ -128,6 +333,25 @@ test('action exposes files read/write/edit/search/list and code outline packages
   }
 });
 
+test('files treats a single leading slash as workspace-relative', async () => {
+  const tempRoot = await mkdtemp(join(process.cwd(), 'sandboxes', 'test-root-relative-files-'));
+  const sandbox = new LocalSandbox({ baseDir: tempRoot });
+
+  try {
+    await sandbox.initialize([]);
+    const result = await sandbox.execute([
+      'await files.write("README.md", "workspace root");',
+      'console.log(await files.read("/README.md"));',
+    ].join('\n'));
+
+    assert.equal(result.success, true, result.error);
+    assert.match(result.output, /workspace root/);
+  } finally {
+    await sandbox.cleanup();
+    await rmBestEffort(tempRoot);
+  }
+});
+
 test('files search and raw read work with repo-style action snippets', async () => {
   const tempRoot = await mkdtemp(join(process.cwd(), 'sandboxes', 'test-files-runtime-'));
   const sandbox = new LocalSandbox({ baseDir: tempRoot });
@@ -149,6 +373,68 @@ test('files search and raw read work with repo-style action snippets', async () 
     assert.match(result.output, /1 \| EVERY tool is AUTOMATICALLY IMPORTED\./);
     assert.match(result.output, /"path":"src\/LocalSandbox\.ts"/);
     assert.match(result.output, /"preview":"EVERY tool is AUTOMATICALLY IMPORTED\."/);
+  } finally {
+    await sandbox.cleanup();
+    await rmBestEffort(tempRoot);
+  }
+});
+
+test('bare require of an already injected tool is stripped before execution', async () => {
+  const tempRoot = await mkdtemp(join(process.cwd(), 'sandboxes', 'test-duplicate-tool-require-runtime-'));
+  const sandbox = new LocalSandbox({ baseDir: tempRoot });
+
+  try {
+    await sandbox.initialize([]);
+
+    const result = await sandbox.execute([
+      "const files = require('files');",
+      "console.log(JSON.stringify(await files.list('.')));",
+    ].join('\n'));
+
+    assert.equal(result.success, true, result.error);
+    assert.match(result.output, /package\.json/);
+    assert.doesNotMatch(result.output, /^\s*\{\}\s*$/m);
+  } finally {
+    await sandbox.cleanup();
+    await rmBestEffort(tempRoot);
+  }
+});
+
+test('bare destructuring from require for an already injected tool is stripped before execution', async () => {
+  const tempRoot = await mkdtemp(join(process.cwd(), 'sandboxes', 'test-duplicate-tool-destructured-require-runtime-'));
+  const sandbox = new LocalSandbox({ baseDir: tempRoot });
+
+  try {
+    await sandbox.initialize([]);
+
+    const result = await sandbox.execute([
+      "const { files } = require;",
+      "console.log(JSON.stringify(await files.list('.')));",
+    ].join('\n'));
+
+    assert.equal(result.success, true, result.error);
+    assert.match(result.output, /package\.json/);
+    assert.doesNotMatch(result.error || '', /Cannot read properties of undefined/);
+  } finally {
+    await sandbox.cleanup();
+    await rmBestEffort(tempRoot);
+  }
+});
+
+test('result variables may naturally reuse injected tool names in initializers', async () => {
+  const tempRoot = await mkdtemp(join(process.cwd(), 'sandboxes', 'test-tool-shadowing-'));
+  const sandbox = new LocalSandbox({ baseDir: tempRoot });
+
+  try {
+    await sandbox.initialize([]);
+    const result = await sandbox.execute([
+      'const files = await files.search("package.json", { path: ".", maxResults: 1 });',
+      'const moreFiles = await files.search("LocalSandbox", { path: ".", maxResults: 1 });',
+      'console.log(Array.isArray(files), Array.isArray(moreFiles));',
+    ].join('\n'));
+
+    assert.equal(result.success, true, result.error);
+    assert.match(result.output, /true/);
   } finally {
     await sandbox.cleanup();
     await rmBestEffort(tempRoot);
@@ -373,6 +659,79 @@ test('waits for unawaited agents.call chains before exiting', async () => {
   } finally {
     await sandbox.cleanup();
     await rmBestEffort(tempRoot);
+  }
+});
+
+test('attached sandbox outside the project can execute actions without local tsx dependency', async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'telos-external-sandbox-'));
+  const sandbox = new LocalSandbox({ existingPath: tempRoot });
+
+  try {
+    await sandbox.initialize([]);
+
+    const result = await sandbox.execute([
+      'const value: string = "external cwd ok";',
+      'console.log(value);',
+    ].join('\n'));
+
+    assert.equal(result.success, true, result.error);
+    assert.match(result.output, /external cwd ok/);
+  } finally {
+    await sandbox.cleanup();
+    await rmBestEffort(tempRoot);
+  }
+});
+
+test('attached sandbox outside the project can load injected built-in tools', async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'telos-external-tools-'));
+  const sandbox = new LocalSandbox({ existingPath: tempRoot });
+
+  try {
+    await sandbox.initialize([]);
+
+    const result = await sandbox.execute([
+      'console.log("files", files.help().includes("files.read"));',
+      'console.log("terminal", terminal.help().includes("terminal.run"));',
+      'console.log("listing", JSON.stringify(await files.list(".")));',
+    ].join('\n'));
+
+    assert.equal(result.success, true, result.error);
+    assert.match(result.output, /files true/);
+    assert.match(result.output, /terminal true/);
+    assert.match(result.output, /listing/);
+  } finally {
+    await sandbox.cleanup();
+    await rmBestEffort(tempRoot);
+  }
+});
+
+test('attached sandbox outside the project can load configured tools from project paths', async () => {
+  const externalRoot = await mkdtemp(join(tmpdir(), 'telos-external-configured-tools-'));
+  const projectToolRoot = await mkdtemp(join(process.cwd(), 'sandboxes', 'test-configured-tool-path-'));
+  const toolPath = join(projectToolRoot, 'helper.cjs');
+  const sandbox = new LocalSandbox({ existingPath: externalRoot });
+
+  await writeFile(toolPath, [
+    'exports.answer = function answer() {',
+    '  return "configured tool ok";',
+    '};',
+  ].join('\n'));
+
+  try {
+    await sandbox.initialize([{
+      config: { name: 'helper', description: 'configured helper tool', module: toolPath },
+      directory: projectToolRoot,
+      absolutePath: toolPath,
+    }]);
+
+    const result = await sandbox.execute('console.log(helper.answer());');
+
+    assert.equal(result.success, true, result.error);
+    assert.match(result.output, /configured tool ok/);
+  } finally {
+    await sandbox.cleanup();
+    await rmBestEffort(externalRoot);
+    await rmBestEffort(projectToolRoot);
   }
 });
 

@@ -11,6 +11,8 @@ type WeatherOptions = {
   date?: 'today' | 'tomorrow' | string;
 };
 
+type TriggerType = 'debounce' | 'every';
+
 type CacheEntry = {
   expiresAt: number;
   value: string;
@@ -24,6 +26,35 @@ const DEFAULT_WEB_TIMEOUT_MS = 2500;
 const DEFAULT_WEATHER_TIMEOUT_MS = 2500;
 const CACHE_TTL_MS = 2 * 60 * 1000;
 const cache = new Map<string, CacheEntry>();
+
+function getRealtimeAdvisorApiUrl(): string {
+  const value = (process.env.TELOS_REALTIME_ADVISOR_API_URL || '').trim().replace(/\/+$/, '');
+  if (!value) {
+    throw new Error('context.trigger/context.log are only available inside the realtime_advisor runtime.');
+  }
+  return value;
+}
+
+async function fetchRealtimeAdvisorJson(path: string, init?: RequestInit): Promise<any> {
+  const response = await fetch(`${getRealtimeAdvisorApiUrl()}${path}`, {
+    ...init,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(init?.headers || {}),
+    },
+  });
+  const text = await response.text();
+  let body: any = {};
+  try {
+    body = text ? JSON.parse(text) : {};
+  } catch {
+    body = { raw: text };
+  }
+  if (!response.ok) {
+    throw new Error(body?.error || text || `Realtime advisor API returned HTTP ${response.status}`);
+  }
+  return body;
+}
 
 function getCached(key: string): string | null {
   const entry = cache.get(key);
@@ -344,6 +375,42 @@ export async function weather(location: string, options: WeatherOptions = {}): P
   return result;
 }
 
+export const trigger = {
+  async get(): Promise<string> {
+    const body = await fetchRealtimeAdvisorJson('/v1/context/trigger');
+    return String(body.formatted || JSON.stringify(body.trigger || body));
+  },
+
+  async set(type: TriggerType, value: number): Promise<string> {
+    const body = await fetchRealtimeAdvisorJson('/v1/context/trigger', {
+      method: 'POST',
+      body: JSON.stringify({ type, value }),
+    });
+    return String(body.formatted || JSON.stringify(body.trigger || body));
+  },
+};
+
+export const log = {
+  async add(text: string): Promise<string> {
+    const body = await fetchRealtimeAdvisorJson('/v1/context/logs', {
+      method: 'POST',
+      body: JSON.stringify({ text }),
+    });
+    const record = body.log;
+    return record?.createdAt
+      ? `Log saved at ${record.createdAt}.`
+      : 'Log saved.';
+  },
+
+  async list(maxResults?: number): Promise<string> {
+    const query = Number.isFinite(Number(maxResults))
+      ? `?maxResults=${encodeURIComponent(String(maxResults))}`
+      : '';
+    const body = await fetchRealtimeAdvisorJson(`/v1/context/logs${query}`);
+    return String(body.formatted || 'No realtime advisor logs yet.');
+  },
+};
+
 export const __internals = {
   formatSerperSnippets,
   formatWeather,
@@ -352,4 +419,5 @@ export const __internals = {
   windDirectionLabel,
   resolveWeatherDate,
   uniqueNonEmpty,
+  getRealtimeAdvisorApiUrl,
 };

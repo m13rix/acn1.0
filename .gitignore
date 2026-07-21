@@ -1,6 +1,7 @@
 # Logs
 logs
 *.log
+log.txt
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
@@ -91,6 +92,10 @@ out
 .nuxt
 dist
 
+# Native computer-use worker build artifacts
+tools/computer/native/bin/
+tools/computer/native/obj/
+
 # Gatsby files
 .cache/
 # Comment in the public line in if your project uses Gatsby and not Next.js
@@ -133,3 +138,18 @@ dist
 browser-profile/
 data/
 temp_research/
+scripts/diffusiongemma-windows/results/
+
+# Telos runtime state and transient execution artifacts
+.telos-*.jsonl
+.telos-last-agent-session.json
+sandboxes/
+telos-link-data/
+.tmp/
+__pycache__/
+*.py[cod]
+
+# Editor and operating-system metadata
+.idea/
+.DS_Store
+Thumbs.db

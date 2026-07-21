@@ -8,11 +8,13 @@
 import { spawn, type ChildProcess } from 'child_process';
 import { existsSync } from 'fs';
 import { mkdir, writeFile, readFile, rm, stat } from 'fs/promises';
-import { join, dirname, resolve } from 'path';
+import { createRequire } from 'module';
+import { join, dirname, resolve, relative, isAbsolute } from 'path';
 import { randomUUID } from 'crypto';
-import { fileURLToPath } from 'url';
-import type { AgentMemoryConfig, ExecutionResult, LoadedTool } from '../types/index.js';
-import type { ISandbox } from './interfaces.js';
+import { fileURLToPath, pathToFileURL } from 'url';
+import type { ActionBuiltinTool, AgentActionToolPolicy, AgentMemoryConfig, ExecutionResult, LoadedTool } from '../types/index.js';
+import type { ISandbox, SandboxActionExecutionPolicy, SandboxServiceHandler } from './interfaces.js';
+import { resolveProjectMemoryCategory } from '../memory_system/projectCategory.js';
 import {
     COMPLETION_SIGNAL_END,
     COMPLETION_SIGNAL_START,
@@ -23,6 +25,8 @@ import { buildPowerShellCommand, normalizeCliCommand, shouldFallbackToCmd } from
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = join(__dirname, '..', '..');
+const requireFromProjectRoot = createRequire(join(PROJECT_ROOT, 'package.json'));
+const TSX_LOADER_IMPORT = pathToFileURL(requireFromProjectRoot.resolve('tsx')).href;
 
 // Path to the built-in files tool
 const FILES_TOOL_PATH = join(PROJECT_ROOT, 'tools', 'files', 'index.ts');
@@ -30,11 +34,35 @@ const FILES_TOOL_PATH = join(PROJECT_ROOT, 'tools', 'files', 'index.ts');
 const TERMINAL_TOOL_PATH = join(PROJECT_ROOT, 'tools', 'terminal', 'index.ts');
 // Path to the built-in code tool
 const CODE_TOOL_PATH = join(PROJECT_ROOT, 'tools', 'code', 'index.ts');
+// Native Windows UI Automation tool, available to every local agent.
+const COMPUTER_TOOL_PATH = join(PROJECT_ROOT, 'tools', 'computer', 'index.ts');
 // Path to the built-in agents tool
 const AGENTS_TOOL_PATH = join(PROJECT_ROOT, 'tools', 'agents', 'index.ts');
 const ACTION_WORKER_JS_PATH = join(__dirname, 'action-worker.js');
 const ACTION_WORKER_TS_PATH = join(__dirname, 'action-worker.ts');
 const ACTION_WORKER_PATH = existsSync(ACTION_WORKER_JS_PATH) ? ACTION_WORKER_JS_PATH : ACTION_WORKER_TS_PATH;
+const DEFAULT_ACTION_WORKER_OLD_SPACE_MB = 8192;
+const DEFAULT_BUILTIN_TOOLS: ActionBuiltinTool[] = ['files', 'terminal', 'code', 'computer'];
+
+function portableRelativePath(root: string, target: string): string {
+    return relative(root, target).split('\\').join('/');
+}
+
+function resolveActionWorkerOldSpaceMb(): number {
+    const raw = process.env.TELOS_ACTION_WORKER_OLD_SPACE_MB || process.env.TELOS_NODE_MAX_OLD_SPACE_MB;
+    if (!raw || !raw.trim()) {
+        return DEFAULT_ACTION_WORKER_OLD_SPACE_MB;
+    }
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+        return DEFAULT_ACTION_WORKER_OLD_SPACE_MB;
+    }
+    return Math.floor(parsed);
+}
+
+function nodeRuntimeArgs(): string[] {
+    return [`--max-old-space-size=${resolveActionWorkerOldSpaceMb()}`, '--import', TSX_LOADER_IMPORT];
+}
 
 export class LocalSandbox implements ISandbox {
     public readonly id: string;
@@ -49,13 +77,20 @@ export class LocalSandbox implements ISandbox {
         resolve: (result: ExecutionResult) => void;
         onStderr?: (data: string) => void;
         keepAlive: NodeJS.Timeout;
+        filePath: string;
     }>();
     private actionWorkerQueue: Promise<void> = Promise.resolve();
+    private readonly serviceHandler: SandboxServiceHandler | undefined;
 
     private executionCounter: number = 0; // Counter for execution files, starts at 0
     private executedFiles: Map<string, string> = new Map(); // filename -> filePath mapping for diff support
 
-    constructor(optionsOrBaseDir?: string | { baseDir?: string; existingPath?: string }) {
+    constructor(optionsOrBaseDir?: string | {
+        baseDir?: string;
+        existingPath?: string;
+        serviceHandler?: SandboxServiceHandler;
+    }) {
+        this.serviceHandler = typeof optionsOrBaseDir === 'object' ? optionsOrBaseDir.serviceHandler : undefined;
         if (typeof optionsOrBaseDir === 'object' && optionsOrBaseDir.existingPath) {
             this.id = 'attached'; // Special ID for attached sandboxes
             this.directory = resolve(optionsOrBaseDir.existingPath);
@@ -116,18 +151,18 @@ export class LocalSandbox implements ISandbox {
         }
     }
 
-    getDescription(): string {
-        return `## Code As Action
+    getDescription(actionPolicy?: AgentActionToolPolicy): string {
+        const builtins = actionPolicy?.builtins ?? DEFAULT_BUILTIN_TOOLS;
+        const sections = [`## Code As Action
 
-You act through one provider tool: \`action\`. It runs TypeScript in the current workspace and returns console output. Variables do not persist between action calls; files and named terminal/agent jobs do.
+You act through one provider tool: \`action\`. It runs TypeScript in the current workspace and returns console output. Variables do not persist between action calls; available tool modules may preserve their own external state.
 
-Inside \`action\`, the provided packages are already in scope. Use them directly. Do not import or destructure global tools. Additional npm packages may be loaded with \`require("package")\` after installing them.
+Inside \`action\`, only the packages named below and in Tool Modules are in scope. Use them directly. Do not import or destructure injected tools.${actionPolicy?.allowImports === false ? ' Imports and require() are disabled for this agent.' : ' Additional npm packages may be loaded with `require("package")` after installing them.'}
 
-Use \`console.log(...)\` to surface observations.
+Use \`console.log(...)\` to surface observations.`];
 
-## Primary Tools
-
-Use \`files\` for workspace inspection and edits:
+        const primaryTools: string[] = [];
+        if (builtins.includes('files')) primaryTools.push(`Use \`files\` for workspace inspection and edits:
 - \`files.search(query, options?)\` - basically grep, but better. ALWAYS USE THIS to find text in files. It skips generated/runtime directories and logs by default; use includeIgnored only when intentional.
 - \`files.list(path, options?)\` lists directories.
 - \`files.read(path, options?)\` reads files. Prefer \`aroundLine/context\` or \`startLine/endLine\` for large files.
@@ -136,25 +171,47 @@ Use \`files\` for workspace inspection and edits:
 For absolute paths outside the project, pass \`allowExternal: true\` in the relevant options object.
 
 Read relevant code before editing it. Prefer \`files.edit\` over whole-file rewrites.
-
-Use \`code\` for code structure:
+`);
+        if (builtins.includes('code')) primaryTools.push(`Use \`code\` for code structure:
 - \`code.outline(path)\` returns functions, classes, and methods with line ranges.
-
-Use \`terminal\` for execution:
+- \`code.snapshot(name?)\` creates a Git-independent workspace checkpoint.
+- \`code.diff(snapshotId, { files? }?)\` compares the current workspace with a checkpoint.
+- \`code.rollback(snapshotId, { files? }?)\` restores workspace content after creating a safety checkpoint.
+- \`code.listSnapshots()\` and \`code.deleteSnapshot(snapshotId)\` manage retained checkpoints.`);
+        if (builtins.includes('terminal')) primaryTools.push(`Use \`terminal\` for execution:
 - \`terminal.run(command, options?)\` runs a finite command. Pass \`allowExternal: true\` when \`cwd\` is intentionally outside the project.
 - \`terminal.start(name, command, options?)\` starts a persistent named session.
 - \`terminal.read(name, options?)\`, \`terminal.send(name, text)\`, \`terminal.stop(name)\`, and \`terminal.list()\` manage sessions.
 
-Use named terminal sessions for servers, watchers, debuggers, and interactive programs. Do not use shell backgrounding for long-running work.
+Use named terminal sessions for servers, watchers, debuggers, and interactive programs. Do not use shell backgrounding for long-running work.`);
+        if (builtins.includes('computer')) primaryTools.push(`Use \`computer\` for native Windows apps through Microsoft UI Automation:
+- \`computer.open(appNameOrPid)\` resolves/reuses/launches an app and returns its PID.
+- \`computer.windows()\` lists top-level windows with exact handle, owner, z-order/foreground state, PID, title, and bounds.
+- \`computer.focusWindow(handle)\` selects one exact window without foreground activation by default.
+- \`computer.snapshot(pidOrHandle, options?)\` returns compact semantic text with stable IDs; barren UIA automatically gains OCR-derived clickable \`vis-*\` elements.
+- \`computer.getChanges(pidOrHandle, options?)\` returns a formatted-text delta for that exact window.
+- \`computer.click(id)\`, \`computer.setText(id, text)\`, and \`computer.scroll(id, direction, steps?)\` act through background-safe UIA/window messages first.
+- \`computer.clickAt(x, y, { window?, pid?, clicks?: 1 | 2 | 3 }?)\` handles unlabeled custom controls using current evidence, without moving the shared cursor by default.
+- \`computer.type(text, { window?, pid?, elementId? }?)\` types arbitrary text once; \`computer.key("Enter" | "Ctrl+Z", ...)\` is for named keys/chords. Never spell text with repeated key calls or terminal SendKeys.
+- \`computer.release(pid?)\` ends the keep-visible activity lease.
+Global input is an explicit \`allowForegroundFallback: true\` opt-in because Windows has no independent second cursor for arbitrary apps.`);
 
-Every tool has \`tool.help()\`. If syntax is unclear, inspect help instead of guessing.`;
+        if (primaryTools.length > 0) sections.push(`## Primary Tools\n\n${primaryTools.join('\n\n')}`);
+        sections.push('Every tool has `tool.help()`. If syntax is unclear, inspect help instead of guessing.');
+        return sections.join('\n\n');
     }
 
     /**
      * Execute TypeScript code in the sandbox
      * Supports both regular code execution and diff-based editing
      */
-    async execute(code: string, language?: string, env?: Record<string, string>, onStderr?: (data: string) => void): Promise<ExecutionResult> {
+    async execute(
+        code: string,
+        language?: string,
+        env?: Record<string, string>,
+        onStderr?: (data: string) => void,
+        actionPolicy?: SandboxActionExecutionPolicy,
+    ): Promise<ExecutionResult> {
         if (!this.initialized) {
             throw new Error('Sandbox not initialized. Call initialize() first.');
         }
@@ -182,9 +239,20 @@ Every tool has \`tool.help()\`. If syntax is unclear, inspect help instead of gu
             cleanedCode = cleanedCode.replace(/^```[a-z]*\n/i, '').replace(/\n```$/, '');
         }
 
+        if (actionPolicy?.allowImports === false) {
+            const forbiddenImport = this.findForbiddenImport(cleanedCode);
+            if (forbiddenImport) {
+                return {
+                    success: false,
+                    output: '',
+                    error: `Action capability policy denied ${forbiddenImport}. Use only the injected tool modules.`,
+                };
+            }
+        }
+
         // Regular execution - generate the execution file with tool imports
         const usePersistentWorker = process.env.TELOS_SANDBOX_PERSISTENT_ACTION_WORKER !== 'false';
-        const fileContent = this.generateExecutionFile(cleanedCode, usePersistentWorker ? 'worker' : 'process');
+        const fileContent = this.generateExecutionFile(cleanedCode, usePersistentWorker ? 'worker' : 'process', actionPolicy);
         const filename = `exec_${this.executionCounter}.cts`;
         const filePath = join(this.directory, filename);
         this.executionCounter++; // Increment counter for next execution
@@ -378,25 +446,34 @@ Every tool has \`tool.help()\`. If syntax is unclear, inspect help instead of gu
     /**
      * Generate the execution file with tool imports
      */
-    private generateExecutionFile(code: string, runtime: 'process' | 'worker' = 'process'): string {
+    private generateExecutionFile(
+        code: string,
+        runtime: 'process' | 'worker' = 'process',
+        actionPolicy?: SandboxActionExecutionPolicy,
+    ): string {
         const requireStatements: string[] = [];
-        const injectedToolNames: string[] = ['files', 'terminal', 'code'];
+        const activeTools = actionPolicy?.tools ?? this.tools;
+        const builtins = actionPolicy?.builtins ?? DEFAULT_BUILTIN_TOOLS;
+        const injectedToolNames: string[] = [...builtins];
 
-        // Always require the files tool (built-in system tool)
-        const filesToolRelativePath = this.getRelativePath(FILES_TOOL_PATH);
-        requireStatements.push(`const files = __telosLazyWaitableTool(() => require('${filesToolRelativePath}'), 'files', ${JSON.stringify(this.getBuiltInToolHelp('files'))});`);
-        const terminalToolRelativePath = this.getRelativePath(TERMINAL_TOOL_PATH);
-        requireStatements.push(`const terminal = __telosLazyWaitableTool(() => require('${terminalToolRelativePath}'), 'terminal', ${JSON.stringify(this.getBuiltInToolHelp('terminal'))});`);
-        const codeToolRelativePath = this.getRelativePath(CODE_TOOL_PATH);
-        requireStatements.push(`const code = __telosLazyWaitableTool(() => require('${codeToolRelativePath}'), 'code', ${JSON.stringify(this.getBuiltInToolHelp('code'))});`);
+        const builtinPaths: Record<ActionBuiltinTool, string> = {
+            files: FILES_TOOL_PATH,
+            terminal: TERMINAL_TOOL_PATH,
+            code: CODE_TOOL_PATH,
+            computer: COMPUTER_TOOL_PATH,
+        };
+        for (const name of builtins) {
+            const relativePath = this.getRelativePath(builtinPaths[name]);
+            requireStatements.push(`const ${name} = __telosLazyWaitableTool(() => require(${JSON.stringify(relativePath)}), '${name}', ${JSON.stringify(this.getBuiltInToolHelp(name))});`);
+        }
 
         // Add user-configured tools
-        for (const tool of this.tools) {
+        for (const tool of activeTools) {
             // Skip built-in tools if they were explicitly added in config
-            if (tool.config.name === 'files' || tool.config.name === 'terminal' || tool.config.name === 'code') continue;
+            if (tool.config.name === 'files' || tool.config.name === 'terminal' || tool.config.name === 'code' || tool.config.name === 'computer') continue;
 
             const relativePath = this.getRelativePath(tool.absolutePath);
-            requireStatements.push(`const ${tool.config.name} = __telosLazyWaitableTool(() => require('${relativePath}'), '${tool.config.name}', ${JSON.stringify(this.getConfiguredToolHelp(tool))});`);
+            requireStatements.push(`const ${tool.config.name} = __telosLazyWaitableTool(() => require(${JSON.stringify(relativePath)}), '${tool.config.name}', ${JSON.stringify(this.getConfiguredToolHelp(tool))});`);
             injectedToolNames.push(tool.config.name);
         }
 
@@ -404,9 +481,9 @@ Every tool has \`tool.help()\`. If syntax is unclear, inspect help instead of gu
         const toolGlobals = this.getToolGlobalsBootstrap(injectedToolNames);
 
         // Build the set of tool names already auto-imported so we can strip duplicates
-        const autoImportedNames = new Set<string>(['files', 'terminal', 'code']);
-        for (const tool of this.tools) {
-            if (tool.config.name !== 'files' && tool.config.name !== 'terminal' && tool.config.name !== 'code') {
+        const autoImportedNames = new Set<string>(builtins);
+        for (const tool of activeTools) {
+            if (tool.config.name !== 'files' && tool.config.name !== 'terminal' && tool.config.name !== 'code' && tool.config.name !== 'computer') {
                 autoImportedNames.add(tool.config.name);
             }
         }
@@ -414,9 +491,14 @@ Every tool has \`tool.help()\`. If syntax is unclear, inspect help instead of gu
         // Remove any require()/import lines the agent wrote for already-injected tools
         // (prevents "Cannot redeclare" errors when an agent manually imports an auto-imported tool)
         const strippedCode = this.stripDuplicateToolImports(code, autoImportedNames);
+        // An action may naturally write `const files = await files.search(...)`:
+        // the left side is the result while the right side is the injected tool.
+        // Since the action runs in an IIFE, the declaration otherwise shadows the
+        // tool for its own initializer and throws a temporal-dead-zone error.
+        const shadowSafeCode = this.rewriteInjectedToolShadowing(strippedCode, autoImportedNames);
 
         // Extract all import/require statements from agent code and convert to require()
-        const { imports: agentRequires, codeWithoutImports } = this.extractImports(strippedCode);
+        const { imports: agentRequires, codeWithoutImports } = this.extractImports(shadowSafeCode);
 
         // Tool requires stay at the top level (they're static relative requires)
         // Agent requires (npm packages) are converted to require() calls inside the IIFE
@@ -424,6 +506,9 @@ Every tool has \`tool.help()\`. If syntax is unclear, inspect help instead of gu
         // Wrap the code in an async IIFE to support top-level await
         const globalsBootstrap = this.getGlobalsBootstrap();
         const asyncToolTrackingBootstrap = this.getAsyncToolTrackingBootstrap();
+        const restrictedPrelude = actionPolicy?.allowImports === false
+            ? 'const require = undefined, process = undefined, global = undefined, globalThis = Object.freeze({}), fetch = undefined, WebSocket = undefined;'
+            : '';
 
         if (runtime === 'worker') {
             return `${globalsBootstrap}
@@ -435,6 +520,7 @@ ${toolGlobals}
 // Agent code execution
 module.exports = (async () => {
 try {
+${restrictedPrelude}
 // Package requires
 ${agentRequires}
 
@@ -471,6 +557,7 @@ ${toolGlobals}
 
 // Agent code execution
 (async () => {
+${restrictedPrelude}
 // Package requires
 ${agentRequires}
 
@@ -629,10 +716,20 @@ function __telosLazyWaitableTool(loadTool, toolName, toolHelpText) {
           value: function help() {
             return __telosBuildToolHelp(toolName, toolHelpText);
           },
+          };
+        }
+      const targetDescriptor = Reflect.getOwnPropertyDescriptor(target, prop);
+      if (targetDescriptor && targetDescriptor.configurable === false) {
+        return targetDescriptor;
+      }
+      const loadedDescriptor = Reflect.getOwnPropertyDescriptor(getLoadedTool(), prop);
+      if (loadedDescriptor) {
+        return {
+          ...loadedDescriptor,
+          configurable: true,
         };
       }
-      return Reflect.getOwnPropertyDescriptor(getLoadedTool(), prop)
-        || Reflect.getOwnPropertyDescriptor(target, prop);
+      return targetDescriptor;
     },
     apply(_target, thisArg, args) {
       const loadedTool = getLoadedTool();
@@ -673,7 +770,7 @@ async function __telosWaitForTrackedAsyncTasks() {
             .join('\n');
     }
 
-    private getBuiltInToolHelp(toolName: 'files' | 'terminal' | 'code'): string {
+    private getBuiltInToolHelp(toolName: 'files' | 'terminal' | 'code' | 'computer'): string {
         if (toolName === 'files') {
             return [
                 'Tool: files',
@@ -702,11 +799,35 @@ async function __telosWaitForTrackedAsyncTasks() {
             ].join('\n');
         }
 
-        return [
+        if (toolName === 'code') return [
             'Tool: code',
             'Use for code-aware helpers.',
             'API:',
             '- await code.outline(path)',
+            '- await code.snapshot(name?)',
+            '- await code.diff(snapshotId, { files? }?)',
+            '- await code.rollback(snapshotId, { files? }?)',
+            '- await code.listSnapshots()',
+            '- await code.deleteSnapshot(snapshotId)',
+        ].join('\n');
+
+        return [
+            'Tool: computer',
+            'Native Windows UI Automation. Uses background-safe patterns/messages by default; global input is opt-in only.',
+            'API:',
+            '- await computer.open(appNameOrPid, { waitTimeoutMs?, keepVisibleMs? }?)',
+            '- await computer.windows({ includeHidden?, includeUntitled?, maxResults? }?)',
+            '- await computer.snapshot(pidOrWindowHandle, { interactiveOnly?, visibleOnly?, rawView?, maxDepth?, maxElements?, visualFallback? }?)',
+            '- await computer.getChanges(pidOrWindowHandle, sameOptions?)',
+            '- await computer.focusWindow(windowHandle, { activate?, allowForegroundFallback? }?)',
+            '- await computer.click(elementId, { allowForegroundFallback? }?)',
+            '- await computer.clickAt(screenX, screenY, { window?, pid?, clicks?: 1 | 2 | 3, allowForegroundFallback? }?)',
+            '- await computer.setText(elementId, text, { allowForegroundFallback? }?)',
+            '- await computer.key("Enter" | "Ctrl+Z", { window?, pid?, elementId?, foreground?, allowForegroundFallback? }?)',
+            '- await computer.type(text, { window?, pid?, elementId?, replace?, foreground?, allowForegroundFallback? }?)',
+            '- await computer.scroll(elementId, "up" | "down", steps?, { allowForegroundFallback? }?)',
+            '- await computer.release(pid?)',
+            'snapshot() and getChanges() return formatted strings, not objects: do not access tree.children; print or split(/\\r?\\n/) and filter the lines.',
         ].join('\n');
     }
 
@@ -835,19 +956,21 @@ async function __telosWaitForTrackedAsyncTasks() {
                 }
             }
 
-            // Match: const { toolName } = require('...');
-            const destructuredRequireMatch = trimmed.match(/^(?:const|let|var)\s+\{([^}]+)\}\s*=\s*require\s*\(\s*['"]([^'"]+)['"]\s*\)\s*;?\s*$/);
+            // Match: const { toolName } = require; or const { toolName } = require('...');
+            const destructuredRequireMatch = trimmed.match(/^(?:const|let|var)\s+\{([^}]+)\}\s*=\s*require(?:\s*\(\s*['"]([^'"]+)['"]\s*\))?\s*;?\s*$/);
             if (destructuredRequireMatch) {
-                const names = (destructuredRequireMatch[1] || '')
-                    .split(',')
-                    .map((name) => name.trim())
-                    .filter(Boolean);
-                const remaining = names.filter((name) => !autoImportedNames.has(name));
-                const removed = names.filter((name) => autoImportedNames.has(name));
+                const bindings = this.parseDestructuredImportBindings(destructuredRequireMatch[1] || '');
+                const remaining = bindings.filter((binding) => !autoImportedNames.has(binding.imported));
+                const removed = bindings.filter((binding) => autoImportedNames.has(binding.imported));
                 if (removed.length > 0) {
-                    result.push(`// [auto-fix] removed duplicate destructured require for already-injected tool(s): ${removed.join(', ')}`);
+                    for (const binding of removed) {
+                        if (binding.local !== binding.imported) {
+                            aliasRewrites.set(binding.local, binding.imported);
+                        }
+                    }
+                    result.push(`// [auto-fix] removed duplicate destructured require for already-injected tool(s): ${removed.map((binding) => binding.imported).join(', ')}`);
                     if (remaining.length > 0) {
-                        result.push(line.replace(/\{[^}]+\}/, `{ ${remaining.join(', ')} }`));
+                        result.push(line.replace(/\{[^}]+\}/, `{ ${remaining.map((binding) => binding.raw).join(', ')} }`));
                     }
                     continue;
                 }
@@ -872,16 +995,18 @@ async function __telosWaitForTrackedAsyncTasks() {
             // Match: import { toolName } from '...';
             const namedImportMatch = trimmed.match(/^import\s+\{([^}]+)\}\s+from\s+['"]([^'"]+)['"]\s*;?\s*$/);
             if (namedImportMatch) {
-                const names = (namedImportMatch[1] || '')
-                    .split(',')
-                    .map((name) => name.trim())
-                    .filter(Boolean);
-                const remaining = names.filter((name) => !autoImportedNames.has(name));
-                const removed = names.filter((name) => autoImportedNames.has(name));
+                const bindings = this.parseDestructuredImportBindings(namedImportMatch[1] || '');
+                const remaining = bindings.filter((binding) => !autoImportedNames.has(binding.imported));
+                const removed = bindings.filter((binding) => autoImportedNames.has(binding.imported));
                 if (removed.length > 0) {
-                    result.push(`// [auto-fix] removed duplicate named import for already-injected tool(s): ${removed.join(', ')}`);
+                    for (const binding of removed) {
+                        if (binding.local !== binding.imported) {
+                            aliasRewrites.set(binding.local, binding.imported);
+                        }
+                    }
+                    result.push(`// [auto-fix] removed duplicate named import for already-injected tool(s): ${removed.map((binding) => binding.imported).join(', ')}`);
                     if (remaining.length > 0) {
-                        result.push(line.replace(/\{[^}]+\}/, `{ ${remaining.join(', ')} }`));
+                        result.push(line.replace(/\{[^}]+\}/, `{ ${remaining.map((binding) => binding.raw).join(', ')} }`));
                     }
                     continue;
                 }
@@ -897,6 +1022,126 @@ async function __telosWaitForTrackedAsyncTasks() {
         }
 
         return normalized;
+    }
+
+    private findForbiddenImport(code: string): string | null {
+        if (/^\s*import(?:\s|\{)/m.test(code) || /\bimport\s*\(/.test(code)) return 'import';
+        if (/\brequire\s*\(/.test(code)) return 'require()';
+        return null;
+    }
+
+    /**
+     * Preserve the intuitive `const files = await files.search(...)` shape.
+     * Only rewrite a binding when its initializer actually references the
+     * injected tool; ordinary local variables named `files` remain untouched.
+     */
+    private rewriteInjectedToolShadowing(code: string, autoImportedNames: Set<string>): string {
+        const lines = (code || '').split('\n');
+        const activeRenames = new Map<string, string>();
+        const usedNames = new Set<string>((code.match(/[A-Za-z_$][\w$]*/g) || []));
+        const output: string[] = [];
+
+        for (const line of lines) {
+            let rewritten = line;
+            for (const [original, replacement] of activeRenames) {
+                rewritten = this.replaceCodeIdentifiers(rewritten, original, replacement);
+            }
+
+            const declaration = rewritten.match(/^(\s*)(?:const|let|var)\s+(files|terminal|code|computer)\s*=([\s\S]*)$/);
+            const original = declaration?.[2];
+            if (original && autoImportedNames.has(original)) {
+                const initializer = declaration[3] || '';
+                if (new RegExp(`\\b${this.escapeRegExp(original)}\\s*\\.`).test(initializer)) {
+                    let replacement = `${original}Result`;
+                    let suffix = 2;
+                    while (usedNames.has(replacement)) replacement = `${original}Result${suffix++}`;
+                    usedNames.add(replacement);
+                    activeRenames.set(original, replacement);
+                    rewritten = rewritten.replace(
+                        new RegExp(`^(\\s*(?:const|let|var)\\s+)${this.escapeRegExp(original)}\\b`),
+                        `$1${replacement}`,
+                    );
+                }
+            }
+            output.push(rewritten);
+        }
+
+        return output.join('\n');
+    }
+
+    private replaceCodeIdentifiers(code: string, original: string, replacement: string): string {
+        let output = '';
+        let index = 0;
+        let state: 'code' | 'single' | 'double' | 'template' | 'lineComment' | 'blockComment' = 'code';
+        while (index < code.length) {
+            const character = code[index] || '';
+            const next = code[index + 1] || '';
+            if (state === 'code') {
+                if (character === '/' && next === '/') { output += '//'; index += 2; state = 'lineComment'; continue; }
+                if (character === '/' && next === '*') { output += '/*'; index += 2; state = 'blockComment'; continue; }
+                if (character === "'") { output += character; index++; state = 'single'; continue; }
+                if (character === '"') { output += character; index++; state = 'double'; continue; }
+                if (character === '`') { output += character; index++; state = 'template'; continue; }
+                if ((character === '_' || character === '$' || /[A-Za-z]/.test(character))
+                    && code.slice(index, index + original.length) === original
+                    && !/[\w$]/.test(code[index - 1] || '')
+                    && !/[\w$]/.test(code[index + original.length] || '')) {
+                    const suffix = code.slice(index + original.length);
+                    if (this.isInjectedToolMember(original, suffix)) {
+                        output += original;
+                        index += original.length;
+                        continue;
+                    }
+                    output += replacement;
+                    index += original.length;
+                    continue;
+                }
+                output += character;
+                index++;
+                continue;
+            }
+            output += character;
+            index++;
+            if ((state === 'single' || state === 'double' || state === 'template') && character === '\\') {
+                if (index < code.length) { output += code[index]; index++; }
+            } else if (state === 'single' && character === "'") state = 'code';
+            else if (state === 'double' && character === '"') state = 'code';
+            else if (state === 'template' && character === '`') state = 'code';
+            else if (state === 'lineComment' && character === '\n') state = 'code';
+            else if (state === 'blockComment' && character === '*' && code[index] === '/') { output += '/'; index++; state = 'code'; }
+        }
+        return output;
+    }
+
+    private isInjectedToolMember(toolName: string, suffix: string): boolean {
+        const member = suffix.match(/^\.\s*([A-Za-z_$][\w$]*)/)?.[1];
+        if (!member) return false;
+        const members: Record<string, Set<string>> = {
+            files: new Set(['search', 'read', 'list', 'write', 'edit', 'help']),
+            terminal: new Set(['run', 'start', 'read', 'send', 'stop', 'list', 'help']),
+            code: new Set(['outline', 'help']),
+            computer: new Set(['open', 'windows', 'snapshot', 'getChanges', 'click', 'setText', 'scroll', 'release', 'help']),
+        };
+        return members[toolName]?.has(member) === true;
+    }
+
+    private parseDestructuredImportBindings(rawBindings: string): Array<{ raw: string; imported: string; local: string }> {
+        return rawBindings
+            .split(',')
+            .map((raw) => raw.trim())
+            .filter(Boolean)
+            .flatMap((raw) => {
+                const withoutDefault = raw.replace(/\s*=\s*.*$/, '').trim();
+                const colonAlias = withoutDefault.match(/^(\w+)\s*:\s*(\w+)$/);
+                if (colonAlias?.[1] && colonAlias?.[2]) {
+                    return [{ raw, imported: colonAlias[1], local: colonAlias[2] }];
+                }
+                const importAlias = withoutDefault.match(/^(\w+)\s+as\s+(\w+)$/);
+                if (importAlias?.[1] && importAlias?.[2]) {
+                    return [{ raw, imported: importAlias[1], local: importAlias[2] }];
+                }
+                return withoutDefault ? [{ raw, imported: withoutDefault, local: withoutDefault }] : [];
+            });
     }
 
     private getLineStartsInCode(code: string): boolean[] {
@@ -1024,35 +1269,14 @@ async function __telosWaitForTrackedAsyncTasks() {
      * Get relative path from sandbox to a file
      */
     private getRelativePath(absolutePath: string): string {
-        // Convert to relative path with forward slashes
-        const fromDir = this.directory;
-        const toFile = absolutePath;
-
-        // Simple relative path calculation
-        // Count how many directories up from sandbox
-        const sandboxParts = fromDir.split(/[/\\]/);
-        const toolParts = toFile.split(/[/\\]/);
-
-        // Find common prefix
-        let commonLength = 0;
-        for (let i = 0; i < Math.min(sandboxParts.length, toolParts.length); i++) {
-            if (sandboxParts[i] === toolParts[i]) {
-                commonLength = i + 1;
-            } else {
-                break;
-            }
-        }
-
-        // Build relative path
-        const upCount = sandboxParts.length - commonLength;
-        const upPath = '../'.repeat(upCount);
-        const downPath = toolParts.slice(commonLength).join('/');
-
-        // Keep .ts extension â€” tsx handles TypeScript requires natively
-        const requirePath = upPath + downPath;
+        const requirePath = relative(this.directory, absolutePath).replace(/\\/g, '/');
 
         if (!requirePath) {
             return './';
+        }
+
+        if (isAbsolute(requirePath) || /^[A-Za-z]:\//.test(requirePath)) {
+            return resolve(absolutePath).replace(/\\/g, '/');
         }
 
         if (requirePath.startsWith('../') || requirePath.startsWith('./') || requirePath.startsWith('/')) {
@@ -1225,7 +1449,7 @@ declare global {
                 env.PATH = process.env.PATH;
             }
 
-            const proc = spawn(process.execPath, ['--import', 'tsx', filePath], {
+            const proc = spawn(process.execPath, [...nodeRuntimeArgs(), filePath], {
                 cwd: this.directory,
                 shell: false,
                 env: env as NodeJS.ProcessEnv, // Cast to satisfy type if needed
@@ -1303,6 +1527,7 @@ declare global {
             env.SANDBOX_DIR = this.directory;
             env.PROJECT_ROOT = this.directory;
             env.TELOS_PROJECT_ROOT = PROJECT_ROOT || process.cwd();
+            env.TELOS_HARNESS_SERVICES = this.serviceHandler ? '1' : '0';
             if (process.env.PATH) {
                 env.PATH = process.env.PATH;
             }
@@ -1311,7 +1536,7 @@ declare global {
             const keepAlive = setInterval(() => {
                 // Keeps the parent event loop alive while this unrefed worker request is pending.
             }, 1000);
-            this.actionWorkerPending.set(id, { resolve, onStderr, keepAlive });
+            this.actionWorkerPending.set(id, { resolve, onStderr, keepAlive, filePath });
             this.refActionWorker(worker);
             worker.send?.({ type: 'run', id, filePath, env }, (error) => {
                 if (!error) {
@@ -1337,7 +1562,7 @@ declare global {
             return this.actionWorker;
         }
 
-        const worker = spawn(process.execPath, ['--import', 'tsx', ACTION_WORKER_PATH], {
+        const worker = spawn(process.execPath, [...nodeRuntimeArgs(), ACTION_WORKER_PATH], {
             cwd: this.directory,
             env: {
                 ...process.env,
@@ -1359,6 +1584,43 @@ declare global {
 
         worker.on('message', (message: any) => {
             if (!message || typeof message !== 'object') {
+                return;
+            }
+            if (message.type === 'service-request') {
+                const runId = String(message.runId || '');
+                const requestId = String(message.requestId || '');
+                const activeRequest = this.actionWorkerPending.get(runId);
+                if (!requestId || !activeRequest) {
+                    worker.send?.({
+                        type: 'service-response',
+                        requestId,
+                        success: false,
+                        error: 'The action context is no longer active.',
+                    });
+                    return;
+                }
+                if (!this.serviceHandler) {
+                    worker.send?.({
+                        type: 'service-response',
+                        requestId,
+                        success: false,
+                        error: `Harness service is unavailable for ${String(message.serviceType || 'unknown request')}.`,
+                    });
+                    return;
+                }
+                Promise.resolve(this.serviceHandler({
+                    type: String(message.serviceType || ''),
+                    payload: message.payload,
+                    ephemeralPaths: [portableRelativePath(this.directory, activeRequest.filePath)],
+                })).then(
+                    (result) => worker.send?.({ type: 'service-response', requestId, success: true, result }),
+                    (error) => worker.send?.({
+                        type: 'service-response',
+                        requestId,
+                        success: false,
+                        error: error instanceof Error ? error.message : String(error),
+                    }),
+                );
                 return;
             }
             const id = String(message.id || '');
@@ -1456,6 +1718,7 @@ declare global {
         if (mercuryModel) env.MEMORY_MERCURY_MODEL = mercuryModel;
         if (typeof mercuryTemperature === 'number') env.MEMORY_MERCURY_TEMPERATURE = String(mercuryTemperature);
         if (typeof mercuryMaxTokens === 'number') env.MEMORY_MERCURY_MAX_TOKENS = String(mercuryMaxTokens);
+        if (cfg.embeddingProvider) env.MEMORY_EMBEDDING_PROVIDER = cfg.embeddingProvider;
         if (cfg.embeddingModel) env.MEMORY_EMBEDDING_MODEL = cfg.embeddingModel;
         if (typeof linkCandidatePoolMax === 'number') env.MEMORY_LINK_CANDIDATE_POOL_MAX = String(linkCandidatePoolMax);
         if (typeof cfg.maxAutoLinksPerFact === 'number') env.MEMORY_MAX_AUTO_LINKS_PER_FACT = String(cfg.maxAutoLinksPerFact);
@@ -1470,6 +1733,28 @@ declare global {
         if (typeof cfg.searchMaxDepth === 'number') env.MEMORY_SEARCH_MAX_DEPTH = String(cfg.searchMaxDepth);
         if (typeof cfg.searchBeamWidth === 'number') env.MEMORY_SEARCH_BEAM_WIDTH = String(cfg.searchBeamWidth);
         if (typeof cfg.searchMaxChains === 'number') env.MEMORY_SEARCH_MAX_CHAINS = String(cfg.searchMaxChains);
+        const projectCategory = resolveProjectMemoryCategory(cfg.projectCategory, {
+            projectRoot: PROJECT_ROOT || process.cwd(),
+        });
+        if (projectCategory) env.TELOS_MEMORY_PROJECT_CATEGORY = projectCategory;
+        if (cfg.categories && cfg.categories.length > 0) {
+            env.TELOS_MEMORY_CATEGORIES = JSON.stringify(cfg.categories.map((cat) => cat.name));
+            const multipliers: Record<string, number> = {};
+            for (const cat of cfg.categories) {
+                if (typeof cat.multiplier === 'number') {
+                    multipliers[cat.name] = cat.multiplier;
+                }
+            }
+            if (Object.keys(multipliers).length > 0) {
+                env.TELOS_MEMORY_CATEGORY_MULTIPLIERS = JSON.stringify(multipliers);
+            }
+        }
+        if (typeof cfg.includeUncategorized === 'boolean') {
+            env.TELOS_MEMORY_INCLUDE_UNCATEGORIZED = String(cfg.includeUncategorized);
+        }
+        if (typeof cfg.fallbackCategory === 'string' && cfg.fallbackCategory.trim()) {
+            env.TELOS_MEMORY_FALLBACK_CATEGORY = cfg.fallbackCategory.trim();
+        }
         if (typeof cfg.queue?.spacingSeconds === 'number') env.MEMORY_QUEUE_SPACING_SECONDS = String(cfg.queue.spacingSeconds);
         if (cfg.notesSync?.enabled === false) env.MEMORY_NOTES_SYNC_ENABLED = 'false';
         if (typeof cfg.notesSync?.stableDelayMinutes === 'number') {

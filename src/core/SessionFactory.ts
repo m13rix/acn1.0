@@ -7,14 +7,16 @@ import { createTextRuntimePlaceholderProvider } from '../providers/ai-sdk-text.j
 
 export function getAugmentedToolNames(agent: LoadedAgent, extraToolNames: string[] = []): string[] {
   const toolNames = [...(agent.config.tools || [])];
-  if (!toolNames.includes('files')) toolNames.push('files');
-  if (agent.config.memory?.enabled !== false && !toolNames.includes('memory')) {
-    toolNames.push('memory');
-  }
+  if (agent.config.actionToolPolicy?.allowImplicitTools !== false) {
+    if (!toolNames.includes('files')) toolNames.push('files');
+    if (agent.config.memory?.enabled !== false && !toolNames.includes('memory')) {
+      toolNames.push('memory');
+    }
 
-  for (const extraToolName of extraToolNames) {
-    if (!toolNames.includes(extraToolName)) {
-      toolNames.push(extraToolName);
+    for (const extraToolName of extraToolNames) {
+      if (!toolNames.includes(extraToolName)) {
+        toolNames.push(extraToolName);
+      }
     }
   }
 

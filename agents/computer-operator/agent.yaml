@@ -1,0 +1,26 @@
+name: computer-operator
+description: Windows-native operator for UI Automation tree inspection, background-safe app interaction, local files, and cross-application desktop workflows.
+
+model: deepseek-v4-flash
+provider: opencode
+systemPrompt: prompts/system.md
+
+modelSwitching:
+  mode: whitelist
+  whitelist:
+    - opencode
+  selector:
+    model: mercury-2
+    provider: inception
+
+tools: []
+
+memory:
+  enabled: false
+
+loop: provider-tools
+syntax: markdown
+sandbox: local
+injectAgentsList: false
+requireFinish: false
+preserveReasoning: true

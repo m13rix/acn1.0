@@ -1,0 +1,32 @@
+name: telos
+description: |
+  Portal tool for controlling and reading data from the Telos ecosystem.
+
+  Smartphone functions:
+
+  - `telos.smartphone.automation("prompt", 'low'): Promise<SmartphoneAutomationResult>`
+    Generates Tasker XML for the requested phone automation, sends it to the paired phone, and returns immediately after the request is accepted by the realtime advisor server. Use `low` for everyday Tasker automations and `high` for complex or tracking/data-saving automations. Example: `telos.smartphone.automation("make a task that sets an alarm for today at 4:10 titled "Время собираться на репетицию к 4:30"", 'low')`
+
+  - `telos.smartphone.readData(): Promise<string>`
+    Requests every saved data from on the paired phone. The phone waits for pending Tasker automation imports to clear before reading, so this can be chained after `automation(...)`.
+
+  Music functions:
+
+  - `telos.music.start("mood instruction"): Promise<MusicStartResult>`
+    Sends a mood/listening instruction to the paired phone. Telos Music Android app opens and starts the recommendation flow using its saved credentials. Returns as soon as the request is accepted for delivery.
+
+  - `telos.music.history({ limit?: number, timeoutMs?: number }): Promise<string>`
+    Requests Telos Music listening history from the Android app.
+
+  Advisor functions:
+
+  - `telos.advisor.instructions.get(): Promise<string>`
+    Reads the additional situation/instruction block that is injected into the realtime advisor system prompt.
+
+  - `telos.advisor.instructions.set("instructions"): Promise<string>`
+    Replaces the additional situation/instruction block injected into the realtime advisor system prompt. The update applies to live advisor sessions immediately.
+
+  - `telos.advisor.call("instruction"): Promise<string>`
+    Calls the realtime advisor as an automatic trigger with the current live transcript context and current additional instructions, waits for the advisor to finish, and returns its response.
+
+module: index.ts

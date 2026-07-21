@@ -62,6 +62,7 @@ test('buildCodexRequest disables storage for chatgpt codex backend', () => {
   assert.equal(request.parallel_tool_calls, true);
   assert.deepEqual(request.include, ['reasoning.encrypted_content']);
   assert.equal('max_output_tokens' in request, false);
+  assert.match(String(request.prompt_cache_key), /^telos-codex:[a-f0-9]{48}$/);
 });
 
 test('buildCodexRequest omits unsupported prompt cache retention', () => {
@@ -81,6 +82,62 @@ test('buildCodexRequest omits unsupported prompt cache retention', () => {
 
   assert.equal(request.prompt_cache_key, 'session-cache-key');
   assert.equal('prompt_cache_retention' in request, false);
+});
+
+test('buildCodexRequest creates stable default prompt cache keys', () => {
+  const messages = [
+    { role: 'system', content: 'Use tools carefully.' },
+    { role: 'user', content: 'Hello' },
+  ];
+  const first = buildCodexRequest(messages, { model: 'openai-codex/gpt-5-codex', stream: true });
+  const second = buildCodexRequest([
+    ...messages,
+    { role: 'assistant', content: 'Hi' },
+  ], { model: 'openai-codex/gpt-5-codex', stream: true });
+
+  assert.equal(first.prompt_cache_key, second.prompt_cache_key);
+});
+
+test('mapCodexSseEvent carries usage from completion events', () => {
+  const state = createCodexStreamAccumulator();
+  const events = mapCodexSseEvent('response.completed', {
+    response: {
+      usage: {
+        input_tokens: 100,
+        output_tokens: 20,
+        total_tokens: 120,
+        input_tokens_details: {
+          cached_tokens: 75,
+          cache_write_tokens: 25,
+        },
+        output_tokens_details: {
+          reasoning_tokens: 12,
+        },
+      },
+    },
+  }, state);
+
+  assert.equal(events[1]?.type, 'done');
+  assert.deepEqual(events[1]?.usage, {
+    promptTokens: 100,
+    completionTokens: 20,
+    totalTokens: 120,
+    cachedPromptTokens: 75,
+    cacheWriteTokens: 25,
+    reasoningTokens: 12,
+    raw: {
+      input_tokens: 100,
+      output_tokens: 20,
+      total_tokens: 120,
+      input_tokens_details: {
+        cached_tokens: 75,
+        cache_write_tokens: 25,
+      },
+      output_tokens_details: {
+        reasoning_tokens: 12,
+      },
+    },
+  });
 });
 
 test('buildCodexRequest normalizes minimal reasoning to low', () => {

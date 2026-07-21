@@ -41,6 +41,7 @@ export interface AdaptiveSessionRecord {
   agentName: string;
   startedAt: string;
   goal: string;
+  embeddingProvider: 'google' | 'ollama' | 'openrouter';
   embeddingModel: string;
   goalEmbeddingStatus: 'pending' | 'ready' | 'error';
   goalEmbedding?: number[];
@@ -200,6 +201,7 @@ export class AdaptiveStepContextService {
   private static instance: AdaptiveStepContextService | null = null;
   private readonly sessions = new Map<string, AdaptiveSessionRecord>();
   private readonly embeddingPromises = new Set<Promise<void>>();
+  private readonly goalEmbeddingsInFlight = new Set<string>();
 
   static getInstance(): AdaptiveStepContextService {
     if (!this.instance) {
@@ -212,17 +214,7 @@ export class AdaptiveStepContextService {
     if (!isEnabled(session.agent)) return;
 
     const record = this.getOrCreateSession(session);
-    if (record.goal && !record.goalEmbedding && record.goalEmbeddingStatus === 'pending') {
-      this.queueEmbedding(async () => {
-        try {
-          record.goalEmbedding = await embedText(record.goal, record.embeddingModel, undefined, 'adaptive.goal');
-          record.goalEmbeddingStatus = 'ready';
-        } catch (error) {
-          record.goalEmbeddingStatus = 'error';
-          record.goalEmbeddingError = error instanceof Error ? error.message : String(error);
-        }
-      });
-    }
+    this.ensureGoalEmbedding(record, firstUserMessage(session));
 
     if (isDebugEnabled(session.agent)) {
       const { ensureAdaptiveStepContextServer } = await import('./server.js');
@@ -235,10 +227,11 @@ export class AdaptiveStepContextService {
   }
 
   recordStep(input: PendingStepInput): void {
-    const { session, messages, stepNumber } = input;
+    const { session, messages } = input;
     if (!isEnabled(session.agent)) return;
 
     const sessionRecord = this.getOrCreateSession(session);
+    this.ensureGoalEmbedding(sessionRecord, firstUserMessage(session));
     const assistantMessages = messages.filter(message => message.role === 'assistant');
     const toolMessages = messages.filter(message => message.role === 'tool');
     const assistant = assistantMessages[assistantMessages.length - 1];
@@ -258,7 +251,10 @@ export class AdaptiveStepContextService {
 
     const previous = sessionRecord.steps[sessionRecord.steps.length - 1];
     const beforePrevious = sessionRecord.steps[sessionRecord.steps.length - 2];
-    const index = typeof stepNumber === 'number' ? stepNumber : sessionRecord.steps.length;
+    // Provider runtimes number tool-loop steps from zero for every user turn.
+    // This service owns a durable session timeline, so its identifiers must be
+    // monotonic across turns instead of reusing the runtime-local counter.
+    const index = sessionRecord.steps.length;
     const record: AdaptiveStepRecord = {
       id: `${session.id}:${index}:${Date.now().toString(36)}`,
       sessionId: session.id,
@@ -290,17 +286,17 @@ export class AdaptiveStepContextService {
       try {
         const tasks: Array<Promise<void>> = [];
         if (reasoning) {
-          tasks.push(embedText(reasoning, sessionRecord.embeddingModel, undefined, 'adaptive.reasoning').then(vector => {
+          tasks.push(embedText(reasoning, sessionRecord.embeddingModel, undefined, 'adaptive.reasoning', sessionRecord.embeddingProvider).then(vector => {
             record.embeddings.reasoning = vector;
           }));
         }
         if (output) {
-          tasks.push(embedText(output, sessionRecord.embeddingModel, undefined, 'adaptive.output').then(vector => {
+          tasks.push(embedText(output, sessionRecord.embeddingModel, undefined, 'adaptive.output', sessionRecord.embeddingProvider).then(vector => {
             record.embeddings.output = vector;
           }));
         }
         if (observation) {
-          tasks.push(embedText(observation, sessionRecord.embeddingModel, undefined, 'adaptive.observation').then(vector => {
+          tasks.push(embedText(observation, sessionRecord.embeddingModel, undefined, 'adaptive.observation', sessionRecord.embeddingProvider).then(vector => {
             record.embeddings.observation = vector;
           }));
         }
@@ -316,28 +312,11 @@ export class AdaptiveStepContextService {
   }
 
   compactMessagesForPrompt(session: Session, messages: Message[]): Message[] {
-    if (!isPruningEnabled(session.agent)) {
-      return messages.map(message => this.cloneMessage(message));
-    }
-
-    const sessionRecord = this.sessions.get(session.id);
-    if (!sessionRecord || sessionRecord.steps.length < 2) {
-      return messages.map(message => this.cloneMessage(message));
-    }
-
-    const threshold = session.agent.config.adaptiveStepContext?.pruning?.heatThreshold ?? DEFAULT_PRUNING_HEAT_THRESHOLD;
-    const heatByStep = this.scoreHeatByStep(sessionRecord);
-
-    return messages.map(message => {
-      if (message.content.includes('<ACTIVE_INSTRUCTION_ALGORITHM_STEP>')) {
-        return this.cloneMessage(message);
-      }
-      const stepIndex = message.adaptiveStepIndex;
-      if (typeof stepIndex !== 'number') return this.cloneMessage(message);
-      const heat = heatByStep.get(stepIndex);
-      if (heat === undefined || heat >= threshold) return this.cloneMessage(message);
-      return this.compactColdMessage(message, stepIndex, heat);
-    });
+    // Adaptive context is currently observational. Keep recording/embedding
+    // steps for the timeline and future redesign, but never replace or remove
+    // a message from the model's context based on a heat score.
+    void session;
+    return messages.map(message => this.cloneMessage(message));
   }
 
   viewStep(sessionId: string, stepNumber: number): string {
@@ -439,17 +418,46 @@ export class AdaptiveStepContextService {
     if (existing) return existing;
 
     const embeddingModel = session.agent.config.memory?.embeddingModel || DEFAULT_MEMORY_CONFIG.embeddingModel;
+    const embeddingProvider = session.agent.config.memory?.embeddingProvider || DEFAULT_MEMORY_CONFIG.embeddingProvider;
     const record: AdaptiveSessionRecord = {
       id: session.id,
       agentName: session.agent.config.name,
       startedAt: new Date().toISOString(),
       goal: firstUserMessage(session),
+      embeddingProvider,
       embeddingModel,
       goalEmbeddingStatus: firstUserMessage(session) ? 'pending' : 'ready',
       steps: [],
     };
     this.sessions.set(session.id, record);
     return record;
+  }
+
+  /**
+   * Sessions initialize before their first user message is appended. Fill the
+   * goal when the first completed step observes that message, then embed it in
+   * the background rather than blocking the agent loop.
+   */
+  private ensureGoalEmbedding(record: AdaptiveSessionRecord, goal: string): void {
+    if (!record.goal && goal) {
+      record.goal = goal;
+      record.goalEmbeddingStatus = 'pending';
+      this.persistSession(record);
+    }
+    if (!record.goal || record.goalEmbedding || record.goalEmbeddingStatus !== 'pending'
+      || this.goalEmbeddingsInFlight.has(record.id)) return;
+    this.goalEmbeddingsInFlight.add(record.id);
+    this.queueEmbedding(async () => {
+      try {
+        record.goalEmbedding = await embedText(record.goal, record.embeddingModel, undefined, 'adaptive.goal', record.embeddingProvider);
+        record.goalEmbeddingStatus = 'ready';
+      } catch (error) {
+        record.goalEmbeddingStatus = 'error';
+        record.goalEmbeddingError = error instanceof Error ? error.message : String(error);
+      } finally {
+        this.goalEmbeddingsInFlight.delete(record.id);
+      }
+    });
   }
 
   private queueEmbedding(task: () => Promise<void>): void {

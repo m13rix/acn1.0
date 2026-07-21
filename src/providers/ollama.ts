@@ -353,7 +353,7 @@ export class OllamaProvider extends BaseProvider {
         if (config.reasoning === 'off') {
             think = false;
         } else if (config.model.toLowerCase().includes('gpt-oss')) {
-            think = config.reasoning ?? 'medium';
+            think = config.reasoning === 'xhigh' ? 'high' : (config.reasoning ?? 'medium');
         }
 
         const request: any = {

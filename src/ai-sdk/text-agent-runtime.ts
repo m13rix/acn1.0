@@ -32,6 +32,10 @@ import type { Message, ProviderConfig, ProviderToolCall, ProviderToolDefinition 
 
 const DEFAULT_MAX_ITERATIONS = 500;
 const MAX_NO_PROGRESS_TURNS = 3;
+const LOCAL_VLLM_DEFAULT_CONTEXT_TOKENS = 50000;
+const LOCAL_VLLM_DEFAULT_OUTPUT_RESERVE_TOKENS = 4096;
+const LOCAL_VLLM_DEFAULT_FILE_CHAR_LIMIT = 16000;
+const LOCAL_VLLM_DEFAULT_OBSERVATION_CHAR_LIMIT = 20000;
 
 export interface AiSdkTextAgentRuntimeContext {
   session: Session;
@@ -45,6 +49,13 @@ interface RuntimeState {
   iteration: number;
   noProgressTurns: number;
   finishMessage?: string;
+  providerActionTurns: number;
+}
+
+const LOCAL_FINISH_FORCE_ACTION_TURNS = 6;
+
+function usesDirectToolLoopRuntime(provider: string | undefined): boolean {
+  return provider === 'kimi-code' || provider === 'opencode';
 }
 
 function lastUserMessage(session: Session): string {
@@ -63,7 +74,7 @@ function checkpoint(
   options: ExecutorOptions,
   reason: string
 ): Promise<void> {
-  if (!options.onCheckpoint) {
+  if (!options.onCheckpoint || options.checkpointFilter?.(reason) === false) {
     return Promise.resolve();
   }
 
@@ -132,8 +143,140 @@ function buildToolSchema(definition: ProviderToolDefinition): ReturnType<typeof 
   }) as any);
 }
 
-function buildAiSdkTools(context: AiSdkTextAgentRuntimeContext, state: RuntimeState): ToolSet {
-  const toolRequest = buildProviderToolRequest(context.options.requireFinish ?? true);
+function isLocalVllmProvider(providerName: string | undefined): boolean {
+  return String(providerName || '').trim().toLowerCase() === 'vllm';
+}
+
+function isLocalNativeFinishProvider(providerName: string | undefined): boolean {
+  return isLocalVllmProvider(providerName);
+}
+
+function estimatePromptTokens(text: string): number {
+  return Math.ceil(String(text || '').length / 3.5);
+}
+
+function estimateMessageTokens(message: Message): number {
+  return estimatePromptTokens(message.content || '') + estimatePromptTokens(message.filename || '') + 8;
+}
+
+function readPositiveIntEnv(name: string): number | undefined {
+  const raw = process.env[name];
+  if (!raw) return undefined;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function truncateMiddle(text: string, maxChars: number, label: string): string {
+  if (text.length <= maxChars) return text;
+  const half = Math.max(1000, Math.floor((maxChars - 240) / 2));
+  const omitted = text.length - (half * 2);
+  return [
+    text.slice(0, half),
+    `\n\n[LOCAL CONTEXT BUDGET: omitted ${omitted} chars from the middle of ${label}. Re-read this file with a focused range if exact omitted code matters.]\n\n`,
+    text.slice(-half),
+  ].join('');
+}
+
+function budgetLocalVllmMessages(telosMessages: Message[], config: ProviderConfig): Message[] {
+  const provider = config.provider || 'openrouter';
+  if (!isLocalVllmProvider(provider)) {
+    return telosMessages;
+  }
+
+  const contextTokens = readPositiveIntEnv('LOCAL_VLLM_CONTEXT_TOKENS') || LOCAL_VLLM_DEFAULT_CONTEXT_TOKENS;
+  const outputReserveTokens = readPositiveIntEnv('LOCAL_VLLM_OUTPUT_RESERVE_TOKENS')
+    || config.maxTokens
+    || LOCAL_VLLM_DEFAULT_OUTPUT_RESERVE_TOKENS;
+  const budgetTokens = Math.max(4096, contextTokens - outputReserveTokens);
+  const fileCharLimit = readPositiveIntEnv('LOCAL_VLLM_FILE_CHAR_LIMIT') || LOCAL_VLLM_DEFAULT_FILE_CHAR_LIMIT;
+  const observationCharLimit = readPositiveIntEnv('LOCAL_VLLM_OBSERVATION_CHAR_LIMIT') || LOCAL_VLLM_DEFAULT_OBSERVATION_CHAR_LIMIT;
+
+  const systemMessages = telosMessages.filter(message => message.role === 'system');
+  const rawFileMessages = telosMessages.filter(message => message.role === 'file');
+  const fileMessages = telosMessages
+    .filter(message => message.role === 'file')
+    .map(message => {
+      const next = {
+        ...message,
+        content: truncateMiddle(message.content || '', fileCharLimit, message.filename || 'file context'),
+      };
+      return next;
+    });
+  const rawHistoryMessages = telosMessages.filter(message => message.role !== 'system' && message.role !== 'file');
+  const historyMessages = rawHistoryMessages.map(message => {
+    if (message.role !== 'tool' || (message.content || '').length <= observationCharLimit) {
+      return message;
+    }
+    return {
+      ...message,
+      content: truncateMiddle(message.content || '', observationCharLimit, `${message.toolName || 'tool'} observation`),
+    };
+  });
+
+  let remaining = budgetTokens - systemMessages.reduce((sum, message) => sum + estimateMessageTokens(message), 0);
+  const keptHistory: Message[] = [];
+  const keptFiles: Message[] = [];
+  let omittedHistory = 0;
+  let omittedFiles = 0;
+  const truncatedFiles = fileMessages.filter((message, index) => message.content !== rawFileMessages[index]?.content).length;
+  const truncatedObservations = historyMessages.filter((message, index) => message.content !== rawHistoryMessages[index]?.content).length;
+
+  for (let index = historyMessages.length - 1; index >= 0; index -= 1) {
+    const message = historyMessages[index]!;
+    const cost = estimateMessageTokens(message);
+    const isMostRecentHistory = keptHistory.length === 0;
+    if (cost <= remaining || isMostRecentHistory) {
+      keptHistory.push(message);
+      remaining -= cost;
+    } else {
+      omittedHistory += 1;
+    }
+  }
+  keptHistory.reverse();
+
+  for (let index = fileMessages.length - 1; index >= 0; index -= 1) {
+    const message = fileMessages[index]!;
+    const cost = estimateMessageTokens(message);
+    if (cost <= remaining) {
+      keptFiles.push(message);
+      remaining -= cost;
+    } else {
+      omittedFiles += 1;
+    }
+  }
+  keptFiles.reverse();
+
+  if (omittedHistory === 0 && omittedFiles === 0 && truncatedFiles === 0 && truncatedObservations === 0) {
+    return telosMessages;
+  }
+
+  const notice: Message = {
+    role: 'user',
+    content: [
+      'LOCAL CONTEXT BUDGET:',
+      `This local vLLM request was compacted to fit about ${budgetTokens} input tokens plus ${outputReserveTokens} reserved output tokens.`,
+      omittedHistory > 0 ? `Omitted older conversation messages: ${omittedHistory}.` : '',
+      omittedFiles > 0 ? `Omitted persistent file context entries: ${omittedFiles}.` : '',
+      truncatedFiles > 0 ? `Truncated large file context entries: ${truncatedFiles}.` : '',
+      truncatedObservations > 0 ? `Truncated large tool observations: ${truncatedObservations}.` : '',
+      'Use focused files.read/files.search calls to retrieve omitted exact code when needed.',
+    ].filter(Boolean).join('\n'),
+  };
+
+  return [
+    ...systemMessages,
+    notice,
+    ...keptHistory,
+    ...keptFiles,
+  ];
+}
+
+function buildAiSdkTools(context: AiSdkTextAgentRuntimeContext, state: RuntimeState, providerName?: string): ToolSet {
+  const useNativeFinish = isLocalNativeFinishProvider(providerName) && (context.options.requireFinish ?? true);
+  const toolRequest = buildProviderToolRequest(context.options.requireFinish ?? true, {
+    includeCompletionTool: useNativeFinish,
+    strict: useNativeFinish,
+  });
   const tools: ToolSet = {};
 
   // Per-step cache to deduplicate identical tool calls within a single model response.
@@ -200,13 +343,19 @@ function buildAiSdkTools(context: AiSdkTextAgentRuntimeContext, state: RuntimeSt
   return tools;
 }
 
-async function getGenerationMessages(session: Session): Promise<{ system: string; messages: ModelMessage[]; telosMessages: Message[] }> {
-  await getAdaptiveStepContextService().waitForPendingEmbeddings();
-  const telosMessages = session.getAllMessages();
+async function getGenerationMessages(session: Session, config?: ProviderConfig): Promise<{ system: string; messages: ModelMessage[]; telosMessages: Message[] }> {
+  // Adaptive embeddings are opportunistic context-improvement work. A tool step
+  // schedules them in the background; awaiting all of them here turns every tool
+  // result into an embedding-provider round trip before the next model request.
+  // Prompt compaction already uses the completed embeddings that are available.
+  const rawTelosMessages = session.getAllMessages();
+  const telosMessages = config ? budgetLocalVllmMessages(rawTelosMessages, config) : rawTelosMessages;
   const { system, messages } = splitSystemMessages(telosMessages);
   return {
     system,
-    messages: telosMessagesToModelMessages(messages),
+    messages: telosMessagesToModelMessages(messages, {
+      preserveReasoning: session.agent.config.preserveReasoning === true,
+    }),
     telosMessages,
   };
 }
@@ -298,7 +447,8 @@ function createAgent(context: AiSdkTextAgentRuntimeContext, state: RuntimeState,
   const providerName = config.provider || context.session.agent.config.provider || 'openrouter';
   const { model, providerOptions } = resolveTextLanguageModel(providerName, config);
   const settings = mapTextModelSettings(config);
-  const tools = buildAiSdkTools(context, state);
+  const tools = buildAiSdkTools(context, state, providerName);
+  const localNativeFinish = isLocalNativeFinishProvider(providerName) && (context.options.requireFinish ?? true);
   const maxIterations = context.options.maxIterations ?? DEFAULT_MAX_ITERATIONS;
   const instructionStepMode = getInstructionAlgorithmService().isEnabled(context.session.agent);
   const remainingSteps = instructionStepMode
@@ -311,7 +461,7 @@ function createAgent(context: AiSdkTextAgentRuntimeContext, state: RuntimeState,
     await context.processFileMessages();
     await context.processMemoryMessages();
 
-    const latest = await getGenerationMessages(context.session);
+    const latest = await getGenerationMessages(context.session, config);
     lastRequestTelosMessages = latest.telosMessages;
     context.options.callbacks?.onBeforeProviderCall?.(
       latest.telosMessages,
@@ -328,15 +478,38 @@ function createAgent(context: AiSdkTextAgentRuntimeContext, state: RuntimeState,
     });
     await checkpoint(context.session, context.options, 'ai-sdk-before-provider-call');
 
-    return {
+    const stepConfig: Record<string, unknown> = {
       system: latest.system || undefined,
       messages: latest.messages,
     };
+
+    if (localNativeFinish) {
+      if (
+        state.providerActionTurns > 0
+        && (state.noProgressTurns > 0 || state.providerActionTurns >= LOCAL_FINISH_FORCE_ACTION_TURNS)
+      ) {
+        stepConfig.activeTools = [PRIMARY_COMPLETION_FUNCTION];
+        stepConfig.toolChoice = { type: 'tool', toolName: PRIMARY_COMPLETION_FUNCTION };
+      } else if (state.providerActionTurns > 0) {
+        stepConfig.activeTools = ['action', PRIMARY_COMPLETION_FUNCTION];
+        stepConfig.toolChoice = 'auto';
+      } else {
+        stepConfig.activeTools = ['action'];
+        stepConfig.toolChoice = 'auto';
+      }
+    }
+
+    return stepConfig;
   };
 
   const onStepFinish = async (step: StepResult<ToolSet>) => {
     const globalStepNumber = state.iteration;
     state.iteration += 1;
+    for (const part of step.content || []) {
+      if (part.type === 'tool-call' && String((part as any).toolName || '').trim() === 'action') {
+        state.providerActionTurns += 1;
+      }
+    }
     await recordCostLedgerEntry({
       session: context.session,
       config,
@@ -369,6 +542,7 @@ function createAgent(context: AiSdkTextAgentRuntimeContext, state: RuntimeState,
     settings,
     providerOptions: providerOptions as ProviderOptions | undefined,
     remainingSteps,
+    localNativeFinish,
     prepareStep,
     onStepFinish,
   };
@@ -417,8 +591,9 @@ async function resolveInstructionProviderConfig(
 async function runStreamingAgent(agent: ToolLoopAgent<any, ToolSet, any>, messages: ModelMessage[], context: AiSdkTextAgentRuntimeContext) {
   const directConfig = (agent as any).__telosDirectConfig;
   const provider = context.session.agent.config.provider;
+  const emitFinalOutput = context.session.agent.config.suppressFinalOutput !== true;
 
-  if (provider === 'kimi-code' && directConfig) {
+  if (usesDirectToolLoopRuntime(provider) && directConfig) {
     const result = streamText({
       model: directConfig.model,
       tools: directConfig.tools,
@@ -432,6 +607,7 @@ async function runStreamingAgent(agent: ToolLoopAgent<any, ToolSet, any>, messag
       messages,
       prepareStep: directConfig.prepareStep,
       onStepFinish: directConfig.onStepFinish,
+      abortSignal: context.options.signal,
     });
 
     let text = '';
@@ -445,10 +621,12 @@ async function runStreamingAgent(agent: ToolLoopAgent<any, ToolSet, any>, messag
         context.options.callbacks?.onReasoningDone?.(reasoning);
       } else if (part.type === 'text-delta') {
         text += part.text;
-        context.options.callbacks?.onTextDelta?.(part.text, text);
-        context.options.callbacks?.onStreamChunk?.(part.text, text);
+        if (emitFinalOutput) {
+          context.options.callbacks?.onTextDelta?.(part.text, text);
+          context.options.callbacks?.onStreamChunk?.(part.text, text);
+        }
       } else if (part.type === 'text-end') {
-        context.options.callbacks?.onTextDone?.(text);
+        if (emitFinalOutput) context.options.callbacks?.onTextDone?.(text);
       } else if (part.type === 'error') {
         throw part.error instanceof Error ? part.error : new Error(String(part.error));
       }
@@ -461,7 +639,7 @@ async function runStreamingAgent(agent: ToolLoopAgent<any, ToolSet, any>, messag
     };
   }
 
-  const result = await agent.stream({ messages } as any);
+  const result = await agent.stream({ messages, abortSignal: context.options.signal } as any);
   let text = '';
   let reasoning = '';
 
@@ -473,10 +651,12 @@ async function runStreamingAgent(agent: ToolLoopAgent<any, ToolSet, any>, messag
       context.options.callbacks?.onReasoningDone?.(reasoning);
     } else if (part.type === 'text-delta') {
       text += part.text;
-      context.options.callbacks?.onTextDelta?.(part.text, text);
-      context.options.callbacks?.onStreamChunk?.(part.text, text);
+      if (emitFinalOutput) {
+        context.options.callbacks?.onTextDelta?.(part.text, text);
+        context.options.callbacks?.onStreamChunk?.(part.text, text);
+      }
     } else if (part.type === 'text-end') {
-      context.options.callbacks?.onTextDone?.(text);
+      if (emitFinalOutput) context.options.callbacks?.onTextDone?.(text);
     } else if (part.type === 'error') {
       throw part.error instanceof Error ? part.error : new Error(String(part.error));
     }
@@ -492,8 +672,9 @@ async function runStreamingAgent(agent: ToolLoopAgent<any, ToolSet, any>, messag
 async function runNonStreamingAgent(agent: ToolLoopAgent<any, ToolSet, any>, messages: ModelMessage[], context: AiSdkTextAgentRuntimeContext) {
   const directConfig = (agent as any).__telosDirectConfig;
   const provider = context.session.agent.config.provider;
+  const emitFinalOutput = context.session.agent.config.suppressFinalOutput !== true;
 
-  if (provider === 'kimi-code' && directConfig) {
+  if (usesDirectToolLoopRuntime(provider) && directConfig) {
     const result = await generateText({
       model: directConfig.model,
       tools: directConfig.tools,
@@ -507,12 +688,13 @@ async function runNonStreamingAgent(agent: ToolLoopAgent<any, ToolSet, any>, mes
       messages,
       prepareStep: directConfig.prepareStep,
       onStepFinish: directConfig.onStepFinish,
+      abortSignal: context.options.signal,
     });
 
     if (result.reasoningText) {
       context.options.callbacks?.onReasoningDone?.(result.reasoningText);
     }
-    context.options.callbacks?.onTextDone?.(result.text || '');
+    if (emitFinalOutput) context.options.callbacks?.onTextDone?.(result.text || '');
 
     return {
       text: result.text || '',
@@ -521,11 +703,11 @@ async function runNonStreamingAgent(agent: ToolLoopAgent<any, ToolSet, any>, mes
     };
   }
 
-  const result = await agent.generate({ messages } as any);
+  const result = await agent.generate({ messages, abortSignal: context.options.signal } as any);
   if (result.reasoningText) {
     context.options.callbacks?.onReasoningDone?.(result.reasoningText);
   }
-  context.options.callbacks?.onTextDone?.(result.text || '');
+  if (emitFinalOutput) context.options.callbacks?.onTextDone?.(result.text || '');
   return {
     text: result.text || '',
     reasoningText: result.reasoningText,
@@ -535,6 +717,7 @@ async function runNonStreamingAgent(agent: ToolLoopAgent<any, ToolSet, any>, mes
 
 export async function runAiSdkTextAgent(context: AiSdkTextAgentRuntimeContext): Promise<string> {
   const { session, options } = context;
+  const emitFinalOutput = session.agent.config.suppressFinalOutput !== true;
   const maxIterations = options.maxIterations ?? DEFAULT_MAX_ITERATIONS;
   const state: RuntimeState = {
     iteration: session.getExecutionState()?.mode === 'provider-tools'
@@ -543,13 +726,14 @@ export async function runAiSdkTextAgent(context: AiSdkTextAgentRuntimeContext): 
     noProgressTurns: session.getExecutionState()?.mode === 'provider-tools'
       ? session.getExecutionState()?.noProgressTurns ?? 0
       : 0,
+    providerActionTurns: 0,
   };
   let lastGeneratedText = '';
 
   while (state.iteration < maxIterations) {
     const baseConfig = providerConfigForSession(session, options.stream);
     const config = await resolveInstructionProviderConfig(session, options, baseConfig);
-    const latest = await getGenerationMessages(session);
+    const latest = await getGenerationMessages(session, config);
     const agent = createAgent(context, state, config);
 
     const result = options.stream
@@ -569,16 +753,16 @@ export async function runAiSdkTextAgent(context: AiSdkTextAgentRuntimeContext): 
     if (state.finishMessage) {
       session.clearExecutionState();
       await checkpoint(session, options, 'ai-sdk-finish-message');
-      options.callbacks?.onResponse?.(state.finishMessage);
-      return state.finishMessage;
+      if (emitFinalOutput) options.callbacks?.onResponse?.(state.finishMessage);
+      return emitFinalOutput ? state.finishMessage : '';
     }
 
     if (!(options.requireFinish ?? true)) {
       const message = result.text || '(no content generated)';
       session.clearExecutionState();
       await checkpoint(session, options, 'ai-sdk-natural-complete');
-      options.callbacks?.onResponse?.(message);
-      return message;
+      if (emitFinalOutput) options.callbacks?.onResponse?.(message);
+      return emitFinalOutput ? message : '';
     }
 
     state.noProgressTurns += 1;
@@ -587,8 +771,8 @@ export async function runAiSdkTextAgent(context: AiSdkTextAgentRuntimeContext): 
       session.addAssistantMessage(message);
       session.clearExecutionState();
       await checkpoint(session, options, 'ai-sdk-automatic-stop');
-      options.callbacks?.onResponse?.(message);
-      return message;
+      if (emitFinalOutput) options.callbacks?.onResponse?.(message);
+      return emitFinalOutput ? message : '';
     }
 
     const warningMessage = buildCompletionWarning();
@@ -608,8 +792,8 @@ export async function runAiSdkTextAgent(context: AiSdkTextAgentRuntimeContext): 
   const message = '[Max iterations reached. Please continue with a new message if needed.]';
   session.clearExecutionState();
   await checkpoint(session, options, 'ai-sdk-max-iterations');
-  options.callbacks?.onResponse?.(message);
-  return message;
+  if (emitFinalOutput) options.callbacks?.onResponse?.(message);
+  return emitFinalOutput ? message : '';
 }
 
 export type AiSdkTextRuntimeSnapshot = SessionSnapshot;

@@ -1,43 +1,54 @@
 name: search
 description: |
-  Web search, deep research, plus image search.
+  Provider-neutral web discovery, page reading, site crawling, mapping, image/news search, and autonomous research. Tavily handles retrieval; Exa handles the optional autonomous-research path. Every method accepts an agent-friendly object; common methods also accept a positional string. Run `console.log(search.help())` before first use when exact syntax matters.
 
-  `search.answer(...)` is the main way to search.
-  Use it by default when you want the most useful grounded result, because it returns a synthesized answer plus sources.
+  Recommended evidence workflow:
+  1. `search.search({ query, output: "full", scrape: "summary", includeDomains?, limit? })` discovers and summarizes candidate pages.
+  2. `search.scrape({ url, formats: ["markdown"] })` reads a decisive known page exactly.
+  3. `search.crawl({ url, prompt, limit })` follows a documentation/site family and waits for completion.
+  4. The calling agent compares claims with the returned source content. A synthesized answer is not proof by itself.
 
-  search.answer(query, options?): { answer, sources? }
-  - Main search path
-  - options: { topic?, searchDepth?, maxResults?, output? }
-  - topic: 'general' | 'news' | 'finance'
-  - searchDepth: 'basic' | 'advanced' | 'fast' | 'ultra-fast' (default: 'advanced', recommended)
-  - output:
-    - 'answer' -> only the answer
-    - 'answerAndUrls' -> answer plus source URLs (default)
-    - 'answerAndSources' -> answer plus full source objects
+  Main APIs:
+  - `await search.search(queryOrRequest, options?)`
+    Request: `{ query, limit?|maxResults?|numResults?, output?: "urls"|"full", scrape?: "none"|"summary"|"markdown", sources?: ["web"|"images"|"news"], categories?: ["github"|"research"|"pdf"], includeDomains?, excludeDomains?, location?, country?, tbs? }`
+    Returns URL strings by default. Returns `SearchResult[]` when `output:"full"`, `includeContent:true`, or scraping is requested.
 
-  search.search(query, options?): string[] | SearchResult[]
-  - Normal search without synthesized answer
-  - options: { topic?, searchDepth?, maxResults?, output? }
-  - output:
-    - 'urls' -> only URLs (default)
-    - 'full' -> normal Tavily result objects with title, url, content, score, publishedDate?, favicon? (no rawContent)
+  - `await search.web(request)`
+    Full provider search envelope: `{ query, web, images, news, warning?, id?, creditsUsed? }`. Use when combining source types.
 
-  search.crawl(url, prompt): { baseUrl, results[] }
-  - Most useful and usually the slowest search function
-  - Use when the model has a starting URL and a focused request
-  - Crawls the page and relevant subpages automatically
-  - No optional arguments; defaults are built in
-  - Returns: { baseUrl, results: [{ url, rawContent, favicon? }] }
-  - Large raw page bodies may be intelligently truncated to keep observations usable
+  - `await search.scrape(urlOrRequest, options?)`
+    Request: `{ url, formats?: ["markdown"|"summary"|...], onlyMainContent?, onlyCleanContent?, waitFor?, actions?, parsers?, location? }`.
+    Cheapest and most reliable path when the exact URL is known.
+    Extracted page text is available as `content`, `rawContent`, and `markdown` (the three fields are aliases).
 
-  search.imageSearch(query, options?): ImageSearchResult[] - the only way to SEARCH FOR IMAGES
-  - Search for images using Tavily (`includeImages: true`)
-  - options: { limit?, count? } - maximum number of images to return (default: 5); count is an alias for limit
-  - Returns: [{ originalUrl }, ...]
+  - `await search.crawl(urlOrRequest, promptOrOptions?)`
+    Request: `{ url, prompt?, limit?, maxDiscoveryDepth?, includePaths?, excludePaths?, crawlEntireDomain?, allowSubdomains?, formats?, timeoutMs? }`.
+    Runs the provider crawl and returns `{ baseUrl, id, status, results[] }`.
 
-  search.research(topic, options?): { output, status, costDollars? }
-  - Deep research
-  - options: { stream? } - streams progress (default: true)
-  Returns .output -> the result of the research
+  - `await search.map(urlOrRequest, options?)`
+    Discover URLs before choosing which ones to scrape. Returns `{ baseUrl, links, creditsUsed? }`.
+
+  - `await search.agent(promptOrRequest, options?)` / `search.gather(...)`
+    Autonomous Exa research. Request: `{ prompt|objective|query, instructions?, urls?, schema?, model?: "spark-1-mini"|"spark-1-pro", maxCredits?, strictConstrainToURLs?, timeoutMs? }`.
+    `spark-1-mini` maps to Exa's faster research tier; supplied URLs are added as an evidence constraint in the research instruction.
+
+  - `await search.answer(queryOrRequest, options?)`
+    Convenience path: Tavily returns a lower-cost synthesized answer and sources. It preserves the same result shape, but does not claim fabricated claim-level evidence; inspect returned sources and scrape decisive pages for consequential facts.
+
+  - `await search.imageSearch(queryOrRequest, options?)`
+    Tavily image search. Returns `{ originalUrl, title?, sourceUrl?, width?, height? }[]`.
+
+  - `await search.research(promptOrRequest, options?)`
+    Compatibility alias for deep autonomous Exa research. Returns `{ output, data, status, creditsUsed, jobId }`.
+
+  Recovery APIs:
+  - `await search.diagnose({ question, rationale?, jobId?, context? })` returns provider-recovery guidance while keeping the established method shape.
+  - `await search.docs(question)` returns contract guidance; `search.help()` is the primary source of current syntax.
+
+  Rules:
+  - `TAVILY_API_KEY` is required for retrieval; `EXA_API_KEY` is required only for `agent`/`research`. Keys are never passed as method arguments or logged.
+  - Known URL -> `scrape`; unknown sources -> `search`; site family -> `map`/`crawl`; autonomous structured gathering -> `agent`.
+  - Prefer official/primary domains for operational facts. Search snippets and model summaries are leads, not source proof.
+  - If a page requires the user's logged-in browser, CAPTCHA, or account interaction, escalate to `browser-operator` instead of provider search.
 
 module: index.ts

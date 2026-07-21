@@ -1,0 +1,66 @@
+name: Executor
+description: General-purpose outcome owner that reconstructs context, designs workflows, orchestrates local and specialist agents, acts across the Telos ecosystem, and verifies completion.
+
+model: glm-5.2
+provider: opencode
+systemPrompt: prompts/system.md
+subagentPrompt: prompts/subagent.md
+runPath: ./
+
+modelSwitching:
+  mode: whitelist
+  whitelist:
+    - glm-5.2
+  selector:
+    model: mercury-2
+    provider: inception
+
+tools:
+  - search
+  - message
+  - memory
+  - agents
+  - heartbeat
+  - googleCalendar
+  - homework
+  - utils
+  - mediaGen
+  - telos
+
+memoryToolDocs: true
+
+memory:
+  enabled: true
+  embeddingProvider: openrouter
+  embeddingModel: qwen/qwen3-embedding-8b
+
+  memoryToolDocs: true
+
+  autoHints:
+    enabled: true
+    toolResponses:
+      enabled: false
+    userPhraseWeighting: "embedding"
+
+  categories:
+    - name: core_prompt_v1
+    - name: telos_constitution
+  projectCategory: true
+
+  includeUncategorized: true
+  fallbackCategory: core
+
+  searchMaxChains: 8
+
+adaptiveStepContext:
+  enabled: true
+  pruning:
+    enabled: true
+    heatThreshold: 0.6
+  debug:
+    enabled: true
+    port: 3067
+    openBrowser: true
+
+injectAgentsList: true
+requireFinish: false

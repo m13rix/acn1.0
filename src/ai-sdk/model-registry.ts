@@ -40,6 +40,11 @@ function ollamaOpenAiBaseUrl(): string {
   return host.endsWith('/v1') ? host : `${host}/v1`;
 }
 
+function vllmOpenAiBaseUrl(): string {
+  const host = (process.env.VLLM_BASE_URL || 'http://localhost:8000/v1').replace(/\/+$/, '');
+  return host.endsWith('/v1') ? host : `${host}/v1`;
+}
+
 function providerOptionKey(provider: string): string {
   if (provider === 'kimi-code') return 'anthropic';
   return provider.replace(/-([a-z])/g, (_match, char: string) => char.toUpperCase());
@@ -52,6 +57,7 @@ function mapReasoningEffort(reasoning: ProviderConfig['reasoning']): 'none' | 'l
     case 'low':
       return 'low';
     case 'high':
+    case 'xhigh':
       return 'high';
     case 'medium':
     default:
@@ -61,19 +67,20 @@ function mapReasoningEffort(reasoning: ProviderConfig['reasoning']): 'none' | 'l
 
 function mapGoogleThinkingConfig(model: string, reasoning: ProviderConfig['reasoning']): Record<string, unknown> | undefined {
   const level = reasoning ?? 'medium';
+  const effectiveLevel = level === 'xhigh' ? 'high' : level;
   const normalizedModel = model.toLowerCase();
   if (normalizedModel.includes('gemini-3')) {
-    if (normalizedModel.includes('gemini-3-pro') && (level === 'off' || level === 'medium')) {
+    if (normalizedModel.includes('gemini-3-pro') && (effectiveLevel === 'off' || effectiveLevel === 'medium')) {
       return { thinkingLevel: 'high' };
     }
-    return { thinkingLevel: level === 'off' ? 'minimal' : level };
+    return { thinkingLevel: effectiveLevel === 'off' ? 'minimal' : effectiveLevel };
   }
 
-  if (level === 'off') {
+  if (effectiveLevel === 'off') {
     return { thinkingBudget: normalizedModel.includes('gemini-2.5-pro') ? 128 : 0 };
   }
-  if (level === 'low') return { thinkingBudget: 2048 };
-  if (level === 'high') return { thinkingBudget: 24576 };
+  if (effectiveLevel === 'low') return { thinkingBudget: 2048 };
+  if (effectiveLevel === 'high') return { thinkingBudget: 24576 };
   return { thinkingBudget: -1 };
 }
 
@@ -105,13 +112,23 @@ function mergeProviderOptions(
       nested['thinkingConfig'] = thinkingConfig;
     }
   } else if (provider === 'inception') {
-    nested['reasoning_effort'] = config.reasoning === 'off' || !config.reasoning ? 'instant' : config.reasoning;
+    nested['reasoning_effort'] =
+      config.reasoning === 'off' || !config.reasoning
+        ? 'instant'
+        : config.reasoning === 'xhigh'
+          ? 'high'
+          : config.reasoning;
   } else if (provider === 'kimi-code') {
     if (config.reasoning && config.reasoning !== 'off') {
-      const budgetTokens = config.reasoning === 'low' ? 1024 : config.reasoning === 'high' ? 4096 : 2048;
+      const budgetTokens =
+        config.reasoning === 'low' ? 1024 : config.reasoning === 'high' || config.reasoning === 'xhigh' ? 4096 : 2048;
       nested['thinking'] = { type: 'enabled', budgetTokens };
     } else {
       nested['thinking'] = { type: 'disabled' };
+    }
+  } else if (provider === 'vllm') {
+    if (typeof config.top_k === 'number') {
+      nested['top_k'] = config.top_k;
     }
   }
 
@@ -153,6 +170,14 @@ export function resolveTextLanguageModel(
       includeUsage: true,
     });
     model = ollama.chatModel(modelId);
+  } else if (provider === 'vllm') {
+    const vllm = createOpenAICompatible({
+      name: 'vllm',
+      baseURL: vllmOpenAiBaseUrl(),
+      apiKey: apiKeyOverride || process.env.VLLM_API_KEY || 'EMPTY',
+      includeUsage: true,
+    });
+    model = vllm.chatModel(modelId);
   } else if (provider === 'inception') {
     const inception = createOpenAICompatible({
       name: 'inception',
@@ -169,6 +194,14 @@ export function resolveTextLanguageModel(
     model = kimiCode.chat(modelId);
   } else if (provider === 'openai-codex') {
     model = createOpenAICodexLanguageModel(modelId);
+  } else if (provider === 'opencode') {
+    const opencode = createOpenAICompatible({
+      name: 'opencode',
+      baseURL: process.env.OPENCODE_BASE_URL || 'https://opencode.ai/zen/go/v1',
+      apiKey: apiKeyOverride || requireEnv('OPENCODE_API_KEY', 'OPENCODE_API_KEY is required for the OpenCode provider.'),
+      includeUsage: true,
+    });
+    model = opencode.chatModel(modelId);
   } else {
     throw new Error(`Unknown text provider: ${providerName}`);
   }

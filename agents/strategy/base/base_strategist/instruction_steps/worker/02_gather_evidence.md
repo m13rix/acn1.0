@@ -40,46 +40,52 @@ The web is your source for **domain expertise and real-world evidence**. Use it 
 - creative approaches, case studies, and unconventional solutions;
 - current information that memory cannot contain.
 
-**Use `search.answer()` for focused questions:**
+Start by reading the current `search.*` contract:
 
 ```typescript
-// Get a grounded answer with source URLs
-const methods = await search.answer(
-  "most effective evidence-based methods for [specific problem domain]",
-  { searchDepth: "advanced", output: "answerAndUrls" }
-);
-
-// Find real-world case studies and precedents
-const cases = await search.answer(
-  "case studies of people successfully solving [specific challenge] under [specific constraints]",
-  { searchDepth: "advanced", output: "answerAndSources" }
-);
-
-// Research specific techniques or frameworks
-const frameworks = await search.answer(
-  "[domain] best frameworks for [specific sub-problem] 2024 2025",
-  { output: "answerAndUrls" }
-);
+console.log(search.help());
 ```
 
-**Use `search.search()` when you need raw URLs to crawl deeper:**
+Discover sources, then read the pages that decide the claim:
 
 ```typescript
-// Find detailed guides and research
-const urls = await search.search(
-  "research paper practical guide [specific method] effectiveness",
-  { maxResults: 5, searchDepth: "advanced", output: "full" }
-);
+const candidates = await search.search({
+  query: "most effective evidence-based methods for [specific problem domain]",
+  output: "full",
+  scrape: "summary",
+  categories: ["research"],
+  limit: 8
+});
+
+const decisive = await search.scrape({
+  url: candidates[0].url,
+  formats: ["markdown"],
+  onlyMainContent: true
+});
 ```
 
-**Use `search.research()` for deep multi-source investigation:**
+Use `search.map()`/`search.crawl()` when evidence spans a site or documentation family:
 
 ```typescript
-// Deep research on a complex topic — Exa will search and synthesize multiple sources
-const deep = await search.research(
-  "Comprehensive analysis of [specific approach] for [specific situation]: effectiveness rates, common pitfalls, optimal implementation strategies, and comparison with alternatives"
-);
+const deepPages = await search.crawl({
+  url: "https://official.example/docs",
+  prompt: "Find evidence relevant to [specific method] effectiveness and limitations",
+  limit: 20
+});
 ```
+
+Use `search.agent(...)` for autonomous structured gathering, then inspect its evidence:
+
+```typescript
+const deep = await search.agent({
+  prompt: "Comprehensive analysis of [specific approach] for [specific situation]",
+  instructions: "Return sources, counterevidence, implementation risks, and unresolved facts.",
+  model: "spark-1-mini",
+  maxCredits: 100
+});
+```
+
+Search summaries and Agent prose are not proof. Build a claim-to-source matrix from scraped primary/official pages before ranking routes.
 
 **When to search the web:**
 - ALWAYS search when the problem involves a professional domain (health, finance, law, engineering, psychology, business, etc.);
@@ -92,13 +98,16 @@ const deep = await search.research(
 
 ```typescript
 // ❌ Generic — useless
-await search.answer("how to get better at studying");
+await search.search("how to get better at studying");
 
 // ✅ Personalized — useful
-await search.answer(
-  "effective study methods for someone with ADHD and limited evening energy who needs to learn [specific subject] in [timeframe]",
-  { searchDepth: "advanced", output: "answerAndSources" }
-);
+await search.search({
+  query: "effective study methods for someone with ADHD and limited evening energy who needs to learn [specific subject] in [timeframe]",
+  output: "full",
+  scrape: "summary",
+  categories: ["research"],
+  limit: 8
+});
 ```
 
 ---

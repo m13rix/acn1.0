@@ -3,14 +3,20 @@ import { createServer } from 'http';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import open from 'open';
+import { config } from 'dotenv';
 import { appendMemoryDebugEvent, createMemoryDebugTrace, finalizeMemoryDebugTrace, type MemoryDebugTrace } from '../../memory_system/debug.js';
 import { getMemoryRuntime } from '../../memory_system/runtime.js';
 import { DEFAULT_MEMORY_CONFIG, type CandidateSelectionOptions, type MemoryRuntimeConfig, type SearchOptions } from '../../memory_system/types.js';
+import { ensureMainProcessHeapLimit } from '../../runtime/nodeHeap.js';
+
+config();
+ensureMainProcessHeapLimit(import.meta.url);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const CLIENT_DIR = join(__dirname, '../client');
 const PORT = Number(process.env.MEMORY_VIZ_PORT || 3000);
+const SHOULD_OPEN_BROWSER = !/^(?:0|false|no)$/i.test(process.env.MEMORY_VIZ_OPEN_BROWSER || '');
 const DEBUG_SESSION_TTL_MS = 30 * 60 * 1000;
 
 interface DebugSessionState {
@@ -52,6 +58,13 @@ function readConfigFromEnv(): Partial<MemoryRuntimeConfig> {
     mercuryModel: process.env.MEMORY_MERCURY_MODEL || DEFAULT_MEMORY_CONFIG.mercuryModel,
     mercuryTemperature: parseNumber(process.env.MEMORY_MERCURY_TEMPERATURE),
     mercuryMaxTokens: parseNumber(process.env.MEMORY_MERCURY_MAX_TOKENS),
+    embeddingProvider: process.env.MEMORY_EMBEDDING_PROVIDER === 'openrouter'
+      ? 'openrouter'
+      : process.env.MEMORY_EMBEDDING_PROVIDER === 'google'
+        ? 'google'
+        : process.env.MEMORY_EMBEDDING_PROVIDER === 'ollama'
+          ? 'ollama'
+          : DEFAULT_MEMORY_CONFIG.embeddingProvider,
     embeddingModel: process.env.MEMORY_EMBEDDING_MODEL || DEFAULT_MEMORY_CONFIG.embeddingModel,
     linkCandidatePoolMax: parseNumber(process.env.MEMORY_LINK_CANDIDATE_POOL_MAX),
     maxAutoLinksPerFact: parseNumber(process.env.MEMORY_MAX_AUTO_LINKS_PER_FACT),
@@ -164,7 +177,10 @@ async function startServer() {
   const runtime = await getMemoryRuntime(readConfigFromEnv());
   const memory = runtime.service;
   try {
-    console.log(`Connected to Memory Service (${memory.getRuntimeConfig().table})`);
+    const memoryConfig = memory.getRuntimeConfig();
+    console.log(
+      `Connected to Memory Service (${memoryConfig.table}; embeddings: ${memoryConfig.embeddingProvider}:${memoryConfig.embeddingModel})`,
+    );
   } catch (err) {
     console.error('Failed to connect to Memory Service:', err);
     process.exit(1);
@@ -432,7 +448,9 @@ async function startServer() {
   server.listen(PORT, async () => {
     const url = `http://localhost:${PORT}`;
     console.log(`Memory Visualizer running at ${url}`);
-    await open(url);
+    if (SHOULD_OPEN_BROWSER) {
+      await open(url);
+    }
   });
 }
 

@@ -90,6 +90,14 @@ const DEFAULT_TELEGRAM_RETRY_DELAY_MS = 1500;
 const DEFAULT_TELEGRAM_RETRY_ATTEMPTS = 3;
 const TELEGRAM_TEXT_CHUNK_LIMIT = 3000;
 
+type HarnessRequest = (type: string, payload: unknown) => Promise<unknown>;
+
+function getHarnessRequest(): HarnessRequest | undefined {
+  return (globalThis as typeof globalThis & {
+    __TELOS_ACTION_WORKER_REQUEST__?: HarnessRequest;
+  }).__TELOS_ACTION_WORKER_REQUEST__;
+}
+
 function getDiscoveredInternalApiUrl(): string {
   const rawPort = process.env.TELOS_INTERNAL_API_PORT;
   const parsedPort = rawPort ? Number.parseInt(rawPort, 10) : NaN;
@@ -497,11 +505,12 @@ export async function sendVoice(text: string, voiceName: string = 'Orus'): Promi
   const { explicitApiUrl, apiUrl, recipient } = getMessageApiContext();
   const routeId = recipient.routeId || recipient.chatId || getOwner();
   const agentName = process.env.TELOS_AGENT_NAME;
+  const harnessRequest = process.env.TELOS_HARNESS_SERVICES === '1' ? getHarnessRequest() : undefined;
 
   console.log(`[Message-Debug] Route ID: ${routeId} (Env route: ${getBridgeRouteId()}, Chat: ${getBridgeChatId()}, Owner: ${getOwner()})`);
   console.log(`[Message-Debug] API URL: ${apiUrl}`);
 
-  if (!routeId) {
+  if (!routeId && !harnessRequest) {
     console.error('[Message] Cannot send voice: No owner and no Chat ID found.');
     return;
   }
@@ -563,6 +572,17 @@ export async function sendVoice(text: string, voiceName: string = 'Orus'): Promi
       throw new Error(`[Message-Debug] OGG File failed to create at ${oggPath}`);
     }
 
+    if (harnessRequest) {
+      await harnessRequest('voice.publish', {
+        path: oggPath,
+        name: `voice-${Date.now()}.ogg`,
+        text,
+        voiceName,
+      });
+      console.log('[Message] Voice attachment published.');
+      return;
+    }
+
     // Send via API if available
     let sentViaApi = false;
 
@@ -609,7 +629,115 @@ export async function sendVoice(text: string, voiceName: string = 'Orus'): Promi
  * Sends a question to the user and waits for a response.
  * Supports running via TelegramService API (multi-user) or standalone (legacy).
  */
-export async function ask(question: string): Promise<string> {
+export interface AskChoiceGroup {
+  id?: string;
+  label?: string;
+  question?: string;
+  choices?: Array<string | { label?: string; value?: string; description?: string }>;
+}
+
+export interface AskChoice {
+  /** Stable, machine-readable value returned when this button is pressed. */
+  id: string;
+  /** Human-readable Telegram button label. */
+  label: string;
+  description?: string;
+}
+
+export interface AskMenuOptions {
+  /** Optional stable identifier for analytics, logs, and future UI clients. */
+  id?: string;
+  options: AskChoice[];
+}
+
+export interface AskInput {
+  question: string;
+  /** Legacy readable option groups, or a first-class button menu. */
+  options?: Array<string | AskChoiceGroup> | AskMenuOptions;
+}
+
+function normalizeAskMenu(value: unknown): AskMenuOptions | undefined {
+  if (!value || typeof value !== 'object' || !Array.isArray((value as AskMenuOptions).options)) return undefined;
+  const id = typeof (value as AskMenuOptions).id === 'string' ? (value as AskMenuOptions).id.trim() : undefined;
+  const options = (value as AskMenuOptions).options
+    .map((option) => ({
+      id: String(option?.id || '').trim(),
+      label: String(option?.label || '').trim(),
+      description: typeof option?.description === 'string' ? option.description.trim() || undefined : undefined,
+    }))
+    .filter((option) => option.id && option.label)
+    .slice(0, 12);
+  return options.length ? { ...(id ? { id } : {}), options } : undefined;
+}
+
+function normalizeAskRequest(input: string | AskInput, menuOptions?: AskMenuOptions): { question: string; menu?: AskMenuOptions; text: string } {
+  if (typeof input === 'string') {
+    const question = input.trim();
+    if (!question) throw new Error('message.ask requires a non-empty question.');
+    const menu = normalizeAskMenu(menuOptions);
+    return { question, menu, text: menu ? `${question}\n\nChoose an option below, or reply in your own words.` : question };
+  }
+
+  const question = String(input?.question || '').trim();
+  if (!question) throw new Error('message.ask requires a non-empty question.');
+  const menu = normalizeAskMenu(menuOptions) || normalizeAskMenu(input.options);
+  if (menu) return { question, menu, text: `${question}\n\nChoose an option below, or reply in your own words.` };
+  const groups = Array.isArray(input.options) ? input.options : [];
+  if (groups.length === 0) return { question, text: question };
+
+  const lines = [question];
+  groups.forEach((group, index) => {
+    if (typeof group === 'string') {
+      lines.push(`${index + 1}. ${group}`);
+      return;
+    }
+
+    const label = String(group.label || group.question || group.id || `Choice ${index + 1}`).trim();
+    lines.push('', `${index + 1}. ${label}`);
+    for (const choice of group.choices || []) {
+      if (typeof choice === 'string') {
+        lines.push(`   - ${choice}`);
+        continue;
+      }
+      const choiceLabel = String(choice.label || choice.value || '').trim();
+      const description = String(choice.description || '').trim();
+      if (choiceLabel) lines.push(`   - ${choiceLabel}${description ? ` — ${description}` : ''}`);
+    }
+  });
+
+  return { question, text: lines.join('\n') };
+}
+
+export function formatAskInput(input: string | AskInput, menuOptions?: AskMenuOptions): string {
+  return normalizeAskRequest(input, menuOptions).text;
+}
+
+export async function ask(input: string | AskInput, menuOptions?: AskMenuOptions): Promise<string> {
+  const request = normalizeAskRequest(input, menuOptions);
+  const { question, menu } = request;
+  const questionForDelivery = menu ? question : request.text;
+  const harnessRequest = getHarnessRequest();
+  if (harnessRequest) {
+    const timeoutMs = readOptionalTimeoutEnv('TELOS_MESSAGE_ASK_TIMEOUT_MS');
+    const answer = await harnessRequest('interaction.create', {
+      request: {
+        questions: [
+          {
+            id: menu?.id || 'response',
+            type: menu ? 'single-select' : 'free-text',
+            question,
+            ...(menu ? { options: menu.options } : {}),
+          },
+        ],
+      },
+      ...(timeoutMs ? { timeoutMs } : {}),
+    });
+    const answers = answer && typeof answer === 'object' ? answer as Record<string, unknown> : {};
+    const response = answers.response ?? answers[menu?.id || 'response'];
+    if (typeof response === 'string') return response;
+    if (Array.isArray(response)) return response.map(String).join(', ');
+    return JSON.stringify(answers);
+  }
   // 1. Check if running in a managed context with API access
   const { explicitApiUrl, apiUrl, recipient } = getMessageApiContext();
   const agentName = process.env.TELOS_AGENT_NAME;
@@ -637,7 +765,7 @@ export async function ask(question: string): Promise<string> {
       const payload = await fetchJsonWithRetry(`${apiUrl}/api/ask`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...recipient, question, agentName })
+        body: JSON.stringify({ ...recipient, question: questionForDelivery, options: menu, agentName })
       }, {
         label: 'ask',
         timeoutMs: askRequestTimeoutMs ?? Number.POSITIVE_INFINITY,
@@ -695,6 +823,28 @@ export async function ask(question: string): Promise<string> {
   console.log('[Message] Initializing Telegram bot (Legacy Mode)...');
   const bot = new Telegraf(BOT_TOKEN);
   let ownerId = getOwner();
+  const menuToken = menu ? Math.random().toString(36).slice(2, 12) : undefined;
+
+  const sendLegacyQuestion = async (chatId: string): Promise<void> => {
+    if (!menu || !menuToken) {
+      await sendTelegramTextChunks(bot, chatId, `❓ Question: ${question}`, 'ask.sendQuestion');
+      return;
+    }
+    const descriptions = menu.options
+      .filter((option) => option.description)
+      .map((option) => `• ${option.label} — ${option.description}`);
+    await telegramCallWithRetry('ask.sendMenu', () => bot.telegram.sendMessage(chatId, markdownToTelegramHtml([
+      `❓ ${question}`,
+      ...descriptions,
+      '',
+      'Tap an option below, or reply in your own words.',
+    ].join('\n')), {
+      parse_mode: 'HTML',
+      reply_markup: Markup.inlineKeyboard(menu.options.map((option, index) => [
+        Markup.button.callback(option.label.slice(0, 64), `ask:${menuToken}:${index}`),
+      ])).reply_markup,
+    }));
+  };
 
   // We wrap the logic in a promise to wait for the user's response
   return new Promise((resolve, reject) => {
@@ -732,7 +882,7 @@ export async function ask(question: string): Promise<string> {
           ownerId = chatId;
           saveOwner(ownerId);
           await ctx.reply('✅ Ownership verified! You are now connected.');
-          await sendTelegramTextChunks(bot, ownerId, `❓ Question: ${question}`, 'ask.sendQuestion');
+          await sendLegacyQuestion(ownerId);
         } else {
           await ctx.reply('❌ Incorrect password. Please try again.');
         }
@@ -747,6 +897,20 @@ export async function ask(question: string): Promise<string> {
 
       // Valid response from owner
       finish(text);
+    });
+
+    bot.on('callback_query', async (ctx) => {
+      const chatId = ctx.chat?.id.toString();
+      const data = 'data' in ctx.callbackQuery ? ctx.callbackQuery.data : undefined;
+      const match = typeof data === 'string' ? /^ask:([a-z0-9]+):(\d+)$/.exec(data) : null;
+      const option = match?.[1] === menuToken ? menu?.options[Number(match[2])] : undefined;
+      if (!chatId || chatId !== ownerId || !option) {
+        await ctx.answerCbQuery('This question is no longer active.').catch(() => undefined);
+        return;
+      }
+      await ctx.answerCbQuery(`Selected: ${option.label}`).catch(() => undefined);
+      await ctx.editMessageReplyMarkup({ inline_keyboard: [] } as any).catch(() => undefined);
+      finish(option.id);
     });
 
     // Handle voice messages
@@ -780,7 +944,7 @@ export async function ask(question: string): Promise<string> {
 
     // If owner exists, send the question immediately
     if (ownerId) {
-      sendTelegramTextChunks(bot, ownerId, `❓ Question: ${question}`, 'ask.sendQuestion')
+      sendLegacyQuestion(ownerId)
         .catch(err => {
           console.error('[Message] Failed to send message:', err);
         });
@@ -794,6 +958,14 @@ export async function ask(question: string): Promise<string> {
  * Sends files to the user.
  */
 export async function sendFiles(files: string[]): Promise<void> {
+  const harnessRequest = process.env.TELOS_HARNESS_SERVICES === '1' ? getHarnessRequest() : undefined;
+  if (harnessRequest) {
+    const sandboxDir = getAgentSandbox()?.directory || process.cwd();
+    await harnessRequest('attachment.publish', {
+      paths: files.map((file) => path.resolve(sandboxDir, file)),
+    });
+    return;
+  }
   const { explicitApiUrl, apiUrl, recipient } = getMessageApiContext();
   const agentName = process.env.TELOS_AGENT_NAME;
 
@@ -845,6 +1017,12 @@ export async function sendFiles(files: string[]): Promise<void> {
  */
 export async function sendText(text: string): Promise<void> {
   appendAgentTextLog(process.env.TELOS_TEXT_LOG_PATH, 'sent_text', text);
+
+  const harnessRequest = getHarnessRequest();
+  if (harnessRequest) {
+    await harnessRequest('message.publish', { text });
+    return;
+  }
 
   const { explicitApiUrl, apiUrl, recipient } = getMessageApiContext();
   const agentName = process.env.TELOS_AGENT_NAME;

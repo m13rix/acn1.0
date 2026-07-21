@@ -967,6 +967,7 @@ export class HeartbeatService extends EventEmitter {
         this.log(`Executing binding '${binding.id}' for event '${event.sensor}.${event.event}'.`);
         await sandbox.initialize(tools, binding.memoryConfig);
         const runtimeEvent = {
+          ...(isPlainObject(event.payload) ? event.payload : {}),
           ...event,
           bindingId: binding.id,
         };

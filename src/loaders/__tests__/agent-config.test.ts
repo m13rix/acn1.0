@@ -63,7 +63,7 @@ test('AgentLoader skips invalid launchDefault values', async () => {
   });
 });
 
-test('AgentLoader accepts preserveSession and requireFinishHeartbeat flags', async () => {
+test('AgentLoader accepts preserveSession, preserveReasoning, and requireFinishHeartbeat flags', async () => {
   await withTempDir(async (root) => {
     const agentDir = join(root, 'agents', 'persisted');
     await mkdir(join(agentDir, 'prompts'), { recursive: true });
@@ -75,6 +75,7 @@ test('AgentLoader accepts preserveSession and requireFinishHeartbeat flags', asy
       'loop: provider-tools',
       'syntax: markdown',
       'preserveSession: true',
+      'preserveReasoning: true',
       'requireFinish: true',
       'requireFinishHeartbeat: false',
     ].join('\n'));
@@ -85,6 +86,30 @@ test('AgentLoader accepts preserveSession and requireFinishHeartbeat flags', asy
 
     assert.ok(loaded);
     assert.equal(loaded?.config.preserveSession, true);
+    assert.equal(loaded?.config.preserveReasoning, true);
     assert.equal(loaded?.config.requireFinishHeartbeat, false);
+  });
+});
+
+test('AgentLoader validates strict action capability policy', async () => {
+  await withTempDir(async (root) => {
+    const agentDir = join(root, 'agents', 'strict-root');
+    await mkdir(join(agentDir, 'prompts'), { recursive: true });
+    await writeFile(join(agentDir, 'agent.yaml'), [
+      'name: strict-root',
+      'model: test-model',
+      'systemPrompt: prompts/system.md',
+      'tools: [agents, decision]',
+      'actionToolPolicy:',
+      '  allowImplicitTools: false',
+      '  builtins: []',
+      '  allowImports: false',
+    ].join('\n'));
+    await writeFile(join(agentDir, 'prompts', 'system.md'), 'system');
+
+    const loaded = await new AgentLoader(join(root, 'agents')).loadByName('strict-root');
+    assert.ok(loaded);
+    assert.deepEqual(loaded.config.actionToolPolicy?.builtins, []);
+    assert.equal(loaded.config.actionToolPolicy?.allowImplicitTools, false);
   });
 });

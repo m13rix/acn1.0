@@ -4,10 +4,13 @@ description: |
   
   Available functions:
   
-  - `message.ask(question: string): Promise<string>`
-    Sends a question to the user (bot owner) and waits for a text or voice response.
+  - `message.ask(question: string | { question: string, options?: Array<string | { id?, label?, choices? }> }, menuOptions?: { id?, options: [{ id, label, description? }] }): Promise<string>`
+    Sends a question to the user and waits for a text, voice, or Telegram-button response.
     Voice responses are automatically transcribed.
     Example: `const answer = await message.ask("What is your plan for today?");`
+    Structured option groups are formatted into a readable numbered question; they are not rejected or silently discarded.
+    For an interactive Telegram menu, pass the optional second argument: `await message.ask("How does internet enter the apartment?", { id: "incoming_link", options: [{ id: "wall_ethernet", label: "Ethernet from wall" }, { id: "ont_box", label: "ONT with Ethernet out" }] })`.
+    Each button resolves the call with that option's `id`; the user can always type a custom answer instead.
 
   - `message.sendText(text: string): Promise<void>`
     Sends a simple text message to the user without waiting for a response.

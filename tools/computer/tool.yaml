@@ -1,0 +1,62 @@
+name: computer
+description: |
+  Native Windows computer-use through Microsoft UI Automation. This package is
+  automatically available in every local Code-As-Action sandbox.
+
+  - `computer.open(app: string | number, options?): Promise<number>`
+    Resolves and opens an installed app name, or attaches to a PID. Reuses an
+    existing window, restores it without activation, keeps it visible while the
+    agent is active, and returns the UIA process ID.
+  - `computer.windows(options?): Promise<ComputerWindow[]>`
+    Lists top-level visible and hidden windows with an exact handle, owner,
+    z-order/foreground state, PID, title, process, and bounds.
+  - `computer.focusWindow(handle: string, options?): Promise<ComputerWindow>`
+    Selects one exact window without OS foreground activation by default.
+  - `computer.snapshot(target: number | string, options?): Promise<string>`
+    Accepts a PID or exact handle and returns compact semantic text. Defaults:
+    `{ interactiveOnly: false, visibleOnly: false, maxDepth: 15 }`.
+    Uses UIA Control View by default; set `rawView: true` only for provider
+    debugging when controls appear to be missing. `visualFallback: "auto"`
+    adds OCR-derived clickable `vis-*` elements when UIA is barren.
+    This is formatted text, not a JSON/object tree: print it or filter its
+    lines with `snapshot.split(/\r?\n/)`; do not access `.children`.
+  - `computer.getChanges(target: number | string, options?): Promise<string>`
+    Returns only elements added, removed, moved, or changed since the previous
+    snapshot/getChanges call for that exact window.
+    It is a text delta, not a replacement full tree.
+  - `computer.click(elementId: string, options?): Promise<ComputerActionResult>`
+    Uses background-safe UIA patterns first, then targeted window messages.
+    Global input is never used unless `allowForegroundFallback: true`.
+  - `computer.clickAt(x: number, y: number, options?): Promise<ComputerActionResult>`
+    Clicks an exact screen coordinate inside `{ window: handle }`; pass
+    `{ clicks: 2 }` for a double-click. This is for custom-rendered surfaces
+    with trustworthy current evidence but no accessible/OCR
+    child element. It posts targeted mouse messages without moving the user's
+    pointer by default; global input remains an explicit fallback only.
+  - `computer.setText(elementId: string, text: string, options?): Promise<ComputerActionResult>`
+    Replaces editable text through ValuePattern/WM_SETTEXT without taking the
+    user's keyboard. Foreground input is an explicit opt-in fallback only.
+  - `computer.key(keys: string, options?): Promise<ComputerActionResult>`
+    Sends a named key or chord such as `Enter`, `Ctrl+Z`, or `Shift+Enter` to
+    the current managed app without using the shared keyboard. It reuses the
+    latest context, or accepts `{ window }` / `{ pid }` / `{ elementId }`.
+    Targeted window messages are the default; `allowForegroundFallback: true`
+    is the only path that may use global keyboard input.
+    Supports common keys, punctuation names, numpad/media keys, and raw
+    virtual-key codes in the form `VK:0xNN`.
+  - `computer.type(text: string, options?): Promise<ComputerActionResult>`
+    Types arbitrary Unicode text in one call, targeting an exact window or
+    element. This replaces repeated per-character `key()` calls.
+  - `computer.scroll(elementId: string, direction: "up" | "down", steps?: number, options?): Promise<ComputerActionResult>`
+    Scrolls the nearest UIA scroll container or posts targeted wheel messages at
+    the element's center without moving the user's cursor.
+  - `computer.release(pid?: number): Promise<void>`
+    Ends the keep-visible interaction lease for one app or all managed apps.
+  - `computer.help(): string`
+    Returns the complete runtime API and behavioral notes.
+
+  Element IDs come from `snapshot`/`getChanges` and remain valid while the UI
+  element exists. Refresh the snapshot after navigation or substantial UI changes.
+  A successful action means its automation mechanism was accepted; verify the
+  requested application state before reporting that the action completed.
+module: index.ts

@@ -100,7 +100,13 @@ function resolveAccessPath(inputPath: string, baseDir = sandboxRoot(), options?:
     }
 
     const root = path.resolve(baseDir);
-    const target = path.isAbsolute(inputPath)
+    // Tool paths are workspace-relative. `/README.md` is a convenient spelling
+    // of `./README.md`, not the drive/root filesystem path. Keep UNC paths and
+    // normal platform-absolute paths available only through allowExternal.
+    const sandboxRootRelative = /^\/(?!\/)/u.test(inputPath);
+    const target = sandboxRootRelative
+        ? path.resolve(root, `.${inputPath}`)
+        : path.isAbsolute(inputPath)
         ? path.resolve(inputPath)
         : path.resolve(root, inputPath);
     if (!options?.allowExternal && !isInsidePath(root, target)) {

@@ -1,8 +1,13 @@
 name: heartbeat
 description: |
-  Persistent event bindings and structured sensors.
+  Persistent event bindings and structured sensors. Use heartbeat when an
+  agent needs to act later, repeatedly, or in response to a sensor event without
+  waiting for a new user message.
+
   API:
   - heartbeat.bind(eventRef, handler, options?) -> BindingRecord
+  - heartbeat.bindPlanningSession(eventRef, { decisionId, instruction, id?, temporary?, metadata? })
+    -> { binding, verification }
   - heartbeat.bindings.list(query?) -> BindingRecord[]
   - heartbeat.bindings.get(id, query?) -> BindingRecord | null
   - heartbeat.bindings.unbind(id) -> { ok: true }
@@ -11,3 +16,106 @@ description: |
   - heartbeat.sensors.<sensor>.events.<event>(...args) -> HeartbeatEventRef
   - heartbeat.sensors.<sensor>.ask(prompt, schema, imagePath?) -> structured JSON
   - heartbeat.sensors.create(prompt) -> scaffold a new V2 sensor
+
+  Agent guide:
+  1. Inspect before binding:
+     const sensors = await heartbeat.sensors.list();
+     const bindings = await heartbeat.bindings.list();
+     console.log({ sensors, bindings });
+     Bindings persist across sessions. Avoid duplicate reminders/checks.
+
+  2. Sensors own their detailed event docs. Use heartbeat.sensors.list() and
+     descriptors to learn supported events, args, and payload shapes. This tool
+     doc should not be treated as exhaustive sensor documentation.
+
+  3. Bind one eventRef to one plain async handler:
+     await heartbeat.bind(
+       heartbeat.sensors.clock.events.at("09:00"),
+       async (event, ctx) => {
+         await agents.callSelf("heartbeat: morning check-in. Review state and decide what needs attention.");
+       },
+       { id: "morning_checkin", metadata: { purpose: "daily self check" } }
+     );
+
+  4. Handlers are persisted as source code. They must be plain functions or
+     async functions, and should be self-contained. Do not close over outer
+     variables; put literal values inside the handler or stable context in
+     metadata.
+
+  5. Handler inputs:
+     - event.sensor, event.event, event.args, event.payload, event.occurredAt
+     - event.bindingId
+     - ctx.binding
+     - ctx.unbind(id?) to remove a completed temporary binding
+     - ctx.rebind(patch) to update the current binding
+
+  6. Use event args/payload provided by the sensor instead of re-fetching. Read
+     the sensor descriptor first; some events have args, while others put all
+     data in payload. Example with notes.newNote, whose args are currently []
+     and whose Obsidian note data is in payload:
+     await heartbeat.bind(
+       heartbeat.sensors.notes.events.newNote(),
+       async (event, ctx) => {
+         const eventArgs = event.args; // [] for notes.newNote at the time of writing
+         const note = event.payload || {};
+         const name = String(note.name || "");
+         const title = String(note.title || "");
+         const relativePath = String(note.relativePath || "");
+         const contents = String(note.contents || "");
+
+         const result = await utils.llm(
+           `Classify this Obsidian note.\nArgs: ${JSON.stringify(eventArgs)}\nName: ${name}\nTitle: ${title}\nRelative path: ${relativePath}\nContents: ${contents}`,
+           {
+             type: "object",
+             additionalProperties: false,
+             properties: {
+               isHomework: { type: "boolean" },
+               reason: { type: "string" }
+             },
+             required: ["isHomework", "reason"]
+           }
+         );
+
+         if (result.isHomework) {
+           await agents.callSelf(`heartbeat: homework-like Obsidian note arrived. Path: ${relativePath}. Title: ${title}. Contents: ${contents}`);
+         }
+       },
+       { metadata: { purpose: "react to homework-like notes" } }
+     );
+
+  7. For non-deterministic checks, always use utils.llm with a strict JSON
+     schema. This includes classifying note contents, interpreting message.ask
+     responses, yes/no/done/defer decisions, field extraction from messy text,
+     or any fuzzy natural-language decision. Avoid regex/keyword checks here.
+
+     Example:
+     const answer = await message.ask("Did you finish it?");
+     const parsed = await utils.llm(
+       `Did the user say the task is complete?\nUser answer: ${answer}`,
+       {
+         type: "object",
+         additionalProperties: false,
+         properties: {
+           complete: { type: "boolean" },
+           confidence: { type: "number" }
+         },
+         required: ["complete", "confidence"]
+       }
+     );
+     if (parsed.complete && parsed.confidence >= 0.7) await ctx.unbind();
+
+  8. Prefer small handlers. For deeper reasoning or multi-step work, call the
+     owning agent with agents.callSelf(...) and include relevant event data.
+
+     Exception: a Telos planning session must use `heartbeat.bindPlanningSession(...)`.
+     It persists a handler that invokes the exact root agent `Telos` with planning-mode context
+     and the decision id. This avoids the owner-agent trap where an Executor-created binding using
+     agents.callSelf() would awaken Executor instead of root Telos. Temporary sessions self-remove
+     only after a successful root invocation.
+
+  9. Temporary follow-ups should clean themselves up with ctx.unbind() when
+     complete. Durable automations should use stable ids and clear metadata.
+
+  Mental model:
+  sensor event -> persisted handler -> sandbox with owner agent tools ->
+  optional message/callSelf/memory/action -> cleanup or continue
