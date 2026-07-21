@@ -651,6 +651,10 @@ export class TelosCodeLinkEndpoint {
           reasoning: command.reasoning,
           parentThreadId: command.parentThreadId,
           title: command.title,
+          // A literal workspace baseline can take longer than the desktop command window
+          // on large projects. Return the durable thread first; ThreadService prevents a
+          // turn from executing until that baseline has completed.
+          deferBaseline: true,
         }) };
         break;
       case 'thread.rename':

@@ -162,6 +162,62 @@ test('creates authoritative before and after workspace checkpoints for a root tu
   }
 });
 
+test('returns a Telos Code thread before its baseline checkpoint, while holding execution safely', async () => {
+  const directory = join(tmpdir(), `telos-thread-deferred-baseline-${uuidv7()}`);
+  await mkdir(directory, { recursive: true });
+  const store = await ThreadStore.open({ databasePath: join(directory, 'threads.db') });
+  let releaseBaseline!: () => void;
+  const baselineReleased = new Promise<void>((resolve) => { releaseBaseline = resolve; });
+  let baselineStarted!: () => void;
+  const baselineStartedPromise = new Promise<void>((resolve) => { baselineStarted = resolve; });
+  let snapshots = 0;
+  let executed = false;
+  const snapshotService = {
+    async snapshot() {
+      snapshots += 1;
+      if (snapshots === 1) {
+        baselineStarted();
+        await baselineReleased;
+      }
+      return { id: `checkpoint-${snapshots}` };
+    },
+  } as unknown as WorkspaceSnapshotService;
+  const adapter: ThreadExecutionAdapter = {
+    async execute(input) {
+      executed = true;
+      input.callbacks.onTextDone?.('done');
+      return {
+        response: 'done',
+        snapshot: { messages: [], contextFiles: [], surfacedMemoryFactIds: [], injectedMemoryHints: [] },
+      };
+    },
+  };
+  const service = new ThreadService(store, { executionAdapter: adapter, workspaceSnapshots: snapshotService });
+  try {
+    const project = store.createProject({ path: directory });
+    const creation = service.createThread({
+      projectId: project.id,
+      agentName: 'Telos-Code',
+      providerId: 'opencode',
+      modelId: 'deepseek-v4-flash',
+      reasoning: 'medium',
+      deferBaseline: true,
+    });
+    await baselineStartedPromise;
+    const thread = await creation;
+    const turn = service.enqueueTurn({ threadId: thread.id, text: 'wait for safety baseline' });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(executed, false);
+
+    releaseBaseline();
+    assert.equal((await turn.completed).status, 'completed');
+    assert.equal(executed, true);
+  } finally {
+    store.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('persists action-worker questions and accepts only the first interface answer', async () => {
   const adapter: ThreadExecutionAdapter = {
     async execute(input) {

@@ -97,6 +97,10 @@ export class ThreadService {
   private readonly subscribers = new Map<string, Set<ThreadEventSubscriber>>();
   private readonly managedChildJobs = new Map<string, ManagedChildJob>();
   private readonly sharedChildrenByWorkspace = new Map<string, Set<Promise<void>>>();
+  // A Telos Code thread must be visible before its first full workspace snapshot finishes.
+  // The snapshot remains a hard execution boundary, so no agent can change the workspace
+  // before the baseline that makes rewind safe has completed.
+  private readonly pendingBaselineCheckpoints = new Map<string, Promise<void>>();
   private readonly workspaceSnapshots: WorkspaceSnapshotService | undefined;
   readonly terminals: TerminalService;
   readonly git: GitService;
@@ -161,6 +165,7 @@ export class ThreadService {
     reasoning: ReasoningEffort;
     parentThreadId?: string | null;
     title?: string;
+    deferBaseline?: boolean;
   }): Promise<HarnessThread> {
     const project = this.store.getProject(input.projectId);
     if (!project) throw new Error(`Project not found: ${input.projectId}`);
@@ -198,6 +203,10 @@ export class ThreadService {
       title: input.title,
     });
     if (this.workspaceSnapshots) {
+      if (input.deferBaseline) {
+        this.deferBaselineCheckpoint(thread);
+        return thread;
+      }
       try {
         await this.createAutomaticCheckpoint(thread, null, 'Thread baseline');
       } catch (error) {
@@ -570,6 +579,8 @@ export class ThreadService {
     const previous = this.store.getExecutorSnapshot(job.thread.id);
 
     try {
+      await this.waitForBaselineCheckpoint(job.thread);
+      if (abortController.signal.aborted) throw abortController.signal.reason;
       await this.createAutomaticCheckpoint(job.thread, job.turn.id, 'Before turn');
       const result = await this.executionAdapter.execute({
         thread: job.thread,
@@ -1127,6 +1138,45 @@ export class ThreadService {
       name,
       final: true,
     });
+  }
+
+  private deferBaselineCheckpoint(thread: HarnessThread): void {
+    this.emit(thread.id, 'activity', {
+      turnId: null,
+      activityType: 'checkpoint',
+      state: 'creating-baseline',
+      name: 'Thread baseline',
+      final: true,
+    });
+    const pending = this.createAutomaticCheckpoint(thread, null, 'Thread baseline');
+    this.pendingBaselineCheckpoints.set(thread.id, pending);
+    void pending.catch((error) => {
+      this.emit(thread.id, 'activity', {
+        turnId: null,
+        activityType: 'checkpoint',
+        state: 'failed',
+        name: 'Thread baseline',
+        error: error instanceof Error ? error.message : String(error),
+        final: true,
+      });
+    }).finally(() => {
+      if (this.pendingBaselineCheckpoints.get(thread.id) === pending) {
+        this.pendingBaselineCheckpoints.delete(thread.id);
+      }
+    });
+  }
+
+  private async waitForBaselineCheckpoint(thread: HarnessThread): Promise<void> {
+    const pending = this.pendingBaselineCheckpoints.get(thread.id);
+    if (!pending) return;
+    this.emit(thread.id, 'activity', {
+      turnId: null,
+      activityType: 'checkpoint',
+      state: 'waiting-for-baseline',
+      name: 'Thread baseline',
+      final: true,
+    });
+    await pending;
   }
 
   private emit(threadId: string, type: string, payload: Record<string, unknown>): StoredThreadEvent {
