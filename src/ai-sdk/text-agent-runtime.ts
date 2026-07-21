@@ -74,7 +74,7 @@ function checkpoint(
   options: ExecutorOptions,
   reason: string
 ): Promise<void> {
-  if (!options.onCheckpoint) {
+  if (!options.onCheckpoint || options.checkpointFilter?.(reason) === false) {
     return Promise.resolve();
   }
 
@@ -344,7 +344,10 @@ function buildAiSdkTools(context: AiSdkTextAgentRuntimeContext, state: RuntimeSt
 }
 
 async function getGenerationMessages(session: Session, config?: ProviderConfig): Promise<{ system: string; messages: ModelMessage[]; telosMessages: Message[] }> {
-  await getAdaptiveStepContextService().waitForPendingEmbeddings();
+  // Adaptive embeddings are opportunistic context-improvement work. A tool step
+  // schedules them in the background; awaiting all of them here turns every tool
+  // result into an embedding-provider round trip before the next model request.
+  // Prompt compaction already uses the completed embeddings that are available.
   const rawTelosMessages = session.getAllMessages();
   const telosMessages = config ? budgetLocalVllmMessages(rawTelosMessages, config) : rawTelosMessages;
   const { system, messages } = splitSystemMessages(telosMessages);

@@ -86,6 +86,18 @@ interface ManagedChildJob {
   error?: string;
 }
 
+const THREAD_TERMINAL_CHECKPOINTS = new Set([
+  'ai-sdk-finish-message',
+  'ai-sdk-natural-complete',
+  'ai-sdk-automatic-stop',
+  'ai-sdk-max-iterations',
+  'ai-sdk-text-complete',
+]);
+
+function isThreadTerminalCheckpoint(reason: string): boolean {
+  return THREAD_TERMINAL_CHECKPOINTS.has(reason);
+}
+
 export type ThreadEventSubscriber = (event: StoredThreadEvent) => void;
 
 export class ThreadService {
@@ -629,7 +641,9 @@ export class ThreadService {
               final: true,
             }),
           onError: () => undefined,
-          onCheckpoint: async (snapshot, reason) => {
+          // These are session-state writes, not workspace snapshots. Do not add
+          // an async boundary after every tool result.
+          onCheckpoint: (snapshot, reason) => {
             this.store.saveExecutorSnapshot(job.thread.id, snapshot, job.turn.id);
             this.emit(job.thread.id, 'activity', {
               turnId: job.turn.id,
@@ -1281,6 +1295,12 @@ export class HarnessThreadExecutionAdapter implements ThreadExecutionAdapter {
         callbacks,
         requireFinish: agent.config.requireFinish,
         signal: input.signal,
+        // A thread is already durably checkpointed at turn completion. Cloning and
+        // synchronously writing the complete (and often large) session before every
+        // provider call and after every tool step stalls the agent loop noticeably.
+        // Keep terminal recovery points only; ThreadService persists the final snapshot
+        // immediately after execute() returns.
+        checkpointFilter: isThreadTerminalCheckpoint,
         onCheckpoint: (snapshot, metadata) => input.callbacks.onCheckpoint(snapshot, metadata.reason),
       });
       const response = await executor.execute(input.turn.inputText);

@@ -73,7 +73,7 @@ export class ProviderToolsLoop extends BaseLoop {
     const maxIterations = options.maxIterations ?? DEFAULT_MAX_ITERATIONS;
     const callbacks = options.callbacks ?? {};
     const checkpoint = async (reason: string): Promise<void> => {
-      if (!options.onCheckpoint) {
+      if (!options.onCheckpoint || options.checkpointFilter?.(reason) === false) {
         return;
       }
       await options.onCheckpoint(session.exportSnapshot(), { reason });

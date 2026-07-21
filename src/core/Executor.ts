@@ -59,6 +59,11 @@ export interface ExecutorOptions {
   callbacks?: ExecutorCallbacks;
   requireFinish?: boolean;
   onCheckpoint?: (snapshot: SessionSnapshot, metadata: ExecutorCheckpointMetadata) => void | Promise<void>;
+  /**
+   * Lets a durable host choose which internal recovery points warrant cloning the
+   * entire session. This is evaluated before exportSnapshot(), not afterwards.
+   */
+  checkpointFilter?: (reason: string) => boolean;
   signal?: AbortSignal;
 }
 
@@ -80,6 +85,7 @@ export class Executor {
       callbacks: options.callbacks ?? {},
       requireFinish: options.requireFinish ?? true,
       onCheckpoint: options.onCheckpoint,
+      checkpointFilter: options.checkpointFilter,
       signal: options.signal,
     };
   }
@@ -126,7 +132,7 @@ export class Executor {
   }
 
   private async checkpoint(reason: string): Promise<void> {
-    if (!this.options.onCheckpoint) {
+    if (!this.options.onCheckpoint || this.options.checkpointFilter?.(reason) === false) {
       return;
     }
 
